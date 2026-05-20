@@ -252,12 +252,15 @@ public final class MainActivity extends Activity {
 
     private void updateModeOptions() {
         boolean isVideo = selectedMediaType() == MediaType.VIDEO;
-        String[] labels = isVideo ? VideoQuality.labels() : AudioFormat.labels();
+        String[] labels = isVideo
+                ? VideoQuality.labels()
+                : new String[]{AudioFormat.M4A.label(), AudioFormat.ORIGINAL.label()};
         ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, labels);
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         optionSpinner.setAdapter(adapter);
         subtitlesCheck.setVisibility(isVideo ? View.VISIBLE : View.GONE);
-        multiAudioCheck.setVisibility(isVideo ? View.VISIBLE : View.GONE);
+        multiAudioCheck.setChecked(false);
+        multiAudioCheck.setVisibility(View.GONE);
     }
 
     private void chooseOutputFolder() {

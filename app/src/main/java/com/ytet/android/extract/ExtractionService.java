@@ -28,7 +28,7 @@ public final class ExtractionService extends Service {
     private static final int NOTIFICATION_ID = 4207;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
-    private final ExtractorEngine engine = new YtDlpProcessEngine();
+    private final ExtractorEngine engine = new YtDlpPythonEngine();
 
     @Override
     public void onCreate() {

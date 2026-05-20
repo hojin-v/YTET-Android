@@ -35,6 +35,11 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
@@ -112,11 +117,11 @@ jobs:
             git tag -f nightly "$GITHUB_SHA"
             git push origin refs/tags/nightly --force
             title="YTET Android Nightly"
-            notes="Automated Android debug build from $GITHUB_SHA. Runtime binaries are project-managed assets; see README before distribution."
+            notes="Automated Android debug build from $GITHUB_SHA. Includes embedded Python yt-dlp runtime; see README before distribution."
             prerelease_flag="--prerelease"
           else
             title="YTET Android $tag"
-            notes="Automated YTET Android debug build for $tag. Runtime binaries are project-managed assets; see README before distribution."
+            notes="Automated YTET Android debug build for $tag. Includes embedded Python yt-dlp runtime; see README before distribution."
             prerelease_flag=""
           fi
 
