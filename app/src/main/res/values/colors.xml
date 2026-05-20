@@ -1,0 +1,9 @@
+<resources>
+    <color name="ytet_background">#F7F8FA</color>
+    <color name="ytet_panel">#FFFFFF</color>
+    <color name="ytet_text">#171A1F</color>
+    <color name="ytet_muted">#626A75</color>
+    <color name="ytet_accent">#D92626</color>
+    <color name="ytet_accent_dark">#A91F1F</color>
+</resources>
+

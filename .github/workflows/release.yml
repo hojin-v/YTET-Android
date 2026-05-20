@@ -1,0 +1,124 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release tag to create or update, for example v0.1.0"
+        required: true
+        default: "v0.1.0"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-android:
+    name: Build Android release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install Android SDK packages
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Resolve release version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            version="${{ inputs.version }}"
+          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
+            version="${{ github.ref_name }}"
+          else
+            version="nightly"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Verify project structure
+        run: |
+          chmod +x scripts/verify_static.sh
+          scripts/verify_static.sh
+
+      - name: Build YTET Android
+        run: ./gradlew --no-daemon clean :app:assembleDebug --warning-mode all
+
+      - name: Package release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk "dist/YTET-Android-${version}-debug.apk"
+          cp README.md docs/PORTING.md dist/
+          (cd dist && jar --create --file "YTET-Android-${version}-android-debug.zip" "YTET-Android-${version}-debug.apk" README.md PORTING.md)
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: YTET-Android-${{ steps.version.outputs.version }}-android-debug
+          path: |
+            dist/YTET-Android-${{ steps.version.outputs.version }}-debug.apk
+            dist/YTET-Android-${{ steps.version.outputs.version }}-android-debug.zip
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag="$RELEASE_VERSION"
+          apk="dist/YTET-Android-${tag}-debug.apk"
+          zip="dist/YTET-Android-${tag}-android-debug.zip"
+
+          if [[ "$tag" == "nightly" ]]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -f nightly "$GITHUB_SHA"
+            git push origin refs/tags/nightly --force
+            title="YTET Android Nightly"
+            notes="Automated Android debug build from $GITHUB_SHA. Runtime binaries are project-managed assets; see README before distribution."
+            prerelease_flag="--prerelease"
+          else
+            title="YTET Android $tag"
+            notes="Automated YTET Android debug build for $tag. Runtime binaries are project-managed assets; see README before distribution."
+            prerelease_flag=""
+          fi
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$apk" "$zip" --clobber
+            if [[ -n "$prerelease_flag" ]]; then
+              gh release edit "$tag" --title "$title" --notes "$notes" "$prerelease_flag"
+            else
+              gh release edit "$tag" --title "$title" --notes "$notes"
+            fi
+          else
+            if [[ -n "$prerelease_flag" ]]; then
+              gh release create "$tag" "$apk" "$zip" --title "$title" --notes "$notes" "$prerelease_flag"
+            else
+              gh release create "$tag" "$apk" "$zip" --title "$title" --notes "$notes"
+            fi
+          fi

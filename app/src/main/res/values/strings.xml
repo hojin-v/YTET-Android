@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">YTET Android</string>
+    <string name="notification_channel_name">추출 작업</string>
+</resources>
+
