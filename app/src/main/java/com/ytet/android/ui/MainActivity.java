@@ -77,7 +77,7 @@ public final class MainActivity extends Activity {
                 statusText.setText("오류");
                 resultText.setText(error);
             } else {
-                statusText.setText((stage == null ? "진행 중" : stage) + " · " + (message == null ? "" : message));
+                statusText.setText(progressStatus(stage, message));
                 if (result != null) {
                     resultText.setText(result);
                 }
@@ -88,6 +88,14 @@ public final class MainActivity extends Activity {
             }
         }
     };
+
+    private String progressStatus(String stage, String message) {
+        String safeStage = stage == null || stage.trim().isEmpty() ? "진행 중" : stage.trim();
+        if (message == null || message.trim().isEmpty()) {
+            return safeStage;
+        }
+        return safeStage + " · " + message.trim();
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {

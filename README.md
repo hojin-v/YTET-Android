@@ -118,6 +118,8 @@ subtitle: channel - title.ko.srt
 subtitle: channel - title.en.srt
 ```
 
+Android 결과 화면은 저장소로 복사된 파일과 요청 조건만 표시합니다. Windows 앱처럼 화질/코덱/오디오/자막 스트림을 재검증해 표시하는 단계는 아직 포팅하지 않았으며, 확인되지 않은 값은 기본값처럼 표시하지 않습니다.
+
 ## How It Works
 
 ```mermaid

@@ -35,4 +35,9 @@ if grep -R "io.github.junkfood02.youtubedl-android\\|com.yausername.youtubedl_an
   exit 1
 fi
 
+if grep -R "filtered.addAll(allFiles)" "$root/app/src/main/java" >/dev/null; then
+  echo "unsafe output-file fallback found" >&2
+  exit 1
+fi
+
 echo "Static Android project checks passed."
