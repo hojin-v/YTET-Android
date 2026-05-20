@@ -26,7 +26,7 @@ class YtetLogger:
         self._append(message)
 
     def _append(self, message):
-        text = str(message or "").strip()
+        text = strip_ansi(str(message or "").strip())
         if text:
             self.messages.append(text)
             del self.messages[:-8]

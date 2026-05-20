@@ -13,6 +13,13 @@ required=(
   "$root/app/src/main/java/com/ytet/android/extract/YtDlpPythonEngine.java"
   "$root/app/src/main/java/com/ytet/android/extract/ExtractionOutputs.java"
   "$root/app/src/main/python/ytet_ydl.py"
+  "$root/app/src/test/java/com/ytet/android/core/YoutubeUrlValidatorTest.java"
+  "$root/app/src/test/java/com/ytet/android/core/ExtractionRequestTest.java"
+  "$root/app/src/test/java/com/ytet/android/core/FormatMappingTest.java"
+  "$root/app/src/test/java/com/ytet/android/extract/ExtractionOutputsTest.java"
+  "$root/app/src/test/java/com/ytet/android/extract/StorageWriterTest.java"
+  "$root/scripts/test_python_engine.sh"
+  "$root/scripts/verify_apk_runtime.sh"
   "$root/app/src/main/java/com/ytet/android/core/YoutubeUrlValidator.java"
   "$root/legacy/windows-python/src/youtube_audio_extractor/extractor.py"
 )
@@ -27,12 +34,17 @@ done
 grep -q 'com.android.application' "$root/build.gradle"
 grep -q 'com.chaquo.python' "$root/build.gradle"
 grep -q 'compileSdk = 36' "$root/app/build.gradle"
+grep -q 'testImplementation "junit:junit:4.13.2"' "$root/app/build.gradle"
 grep -q 'yt-dlp==2026.3.17' "$root/app/build.gradle"
 grep -q 'android.permission.FOREGROUND_SERVICE' "$root/app/src/main/AndroidManifest.xml"
+grep -q 'android:allowBackup="false"' "$root/app/src/main/AndroidManifest.xml"
 grep -q 'ACTION_OPEN_DOCUMENT_TREE' "$root/app/src/main/java/com/ytet/android/ui/MainActivity.java"
 grep -q 'new YtDlpPythonEngine()' "$root/app/src/main/java/com/ytet/android/extract/ExtractionService.java"
 grep -q 'Python.start' "$root/app/src/main/java/com/ytet/android/extract/YtDlpPythonEngine.java"
 grep -q 'YoutubeDL' "$root/app/src/main/python/ytet_ydl.py"
+grep -q 'doesNotFallbackToArbitraryFiles' "$root/app/src/test/java/com/ytet/android/extract/ExtractionOutputsTest.java"
+grep -q 'guessesAndroidFriendlyMimeTypesForKnownOutputs' "$root/app/src/test/java/com/ytet/android/extract/StorageWriterTest.java"
+grep -q 'yt_dlp-2026\\.3\\.17\\.dist-info' "$root/scripts/verify_apk_runtime.sh"
 
 if grep -R "io.github.junkfood02.youtubedl-android\\|com.yausername.youtubedl_android\\|YoutubeDlAndroidEngine" "$root/app/src" "$root/app/build.gradle" "$root/build.gradle" "$root/settings.gradle" >/dev/null; then
   echo "unexpected youtubedl-android dependency or engine reference found" >&2

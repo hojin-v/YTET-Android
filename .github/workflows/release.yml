@@ -78,8 +78,21 @@ jobs:
           chmod +x scripts/verify_static.sh
           scripts/verify_static.sh
 
+      - name: Run Python engine unit tests
+        run: |
+          chmod +x scripts/test_python_engine.sh
+          scripts/test_python_engine.sh
+
+      - name: Run JVM unit tests
+        run: ./gradlew --no-daemon :app:testDebugUnitTest --warning-mode all
+
       - name: Build YTET Android
         run: ./gradlew --no-daemon clean :app:assembleDebug --warning-mode all
+
+      - name: Verify APK runtime packaging
+        run: |
+          chmod +x scripts/verify_apk_runtime.sh
+          scripts/verify_apk_runtime.sh
 
       - name: Package release assets
         shell: bash
