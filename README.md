@@ -172,6 +172,28 @@ Every release build uploads:
 - `YTET-Android-버전-debug.apk`
 - `YTET-Android-버전-android-debug.zip`
 
+## Source Environment
+
+공식 소스 빌드 경로는 Android용입니다. GitHub에서 소스 코드를 받은 뒤 Android Studio 또는 Gradle로 APK를 빌드하고, 생성된 APK를 Android 기기에 설치하세요.
+
+릴리즈 파일, CI, 빌드 스크립트는 Android SDK 환경을 기준으로 제공됩니다. Windows/macOS/Linux에서 Gradle 빌드를 실행할 수는 있지만, 앱 실행과 추출 검증은 Android 기기 또는 에뮬레이터가 필요합니다.
+
+```bash
+./gradlew :app:assembleDebug
+```
+
+CLI 빌드에는 다음 항목이 준비되어 있어야 합니다.
+
+| Item | Role |
+| --- | --- |
+| JDK 17 | Android Gradle Plugin 실행 |
+| Android SDK Platform 36 | 앱 컴파일 대상 SDK |
+| Android Build Tools 36.0.0 | APK 패키징 |
+| Python 3.12 | Chaquopy `buildPython` 실행 |
+| Network access | Chaquopy와 `yt-dlp` Python 패키지 다운로드 |
+
+소스 빌드는 ABI별 `yt-dlp` 실행 파일을 `assets/runtime` 아래에 직접 추가하는 방식을 사용하지 않습니다. `yt-dlp`는 `app/build.gradle`의 Chaquopy 설정에 따라 APK 안의 Python 런타임과 함께 패키징됩니다.
+
 ## Caution
 
 - 권한이 있는 콘텐츠에만 사용하세요.
