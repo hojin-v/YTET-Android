@@ -47,7 +47,6 @@ public final class MainActivity extends Activity {
     private RadioButton videoRadio;
     private Spinner optionSpinner;
     private CheckBox subtitlesCheck;
-    private CheckBox multiAudioCheck;
     private Button chooseFolderButton;
     private Button extractButton;
     private TextView folderText;
@@ -204,11 +203,7 @@ public final class MainActivity extends Activity {
 
         subtitlesCheck = new CheckBox(this);
         subtitlesCheck.setText("한국어/영어 등록 자막 포함");
-        root.addView(subtitlesCheck, marginBottom(4));
-
-        multiAudioCheck = new CheckBox(this);
-        multiAudioCheck.setText("다중 오디오 포함");
-        root.addView(multiAudioCheck, marginBottom(18));
+        root.addView(subtitlesCheck, marginBottom(18));
 
         root.addView(label("저장 폴더"), marginBottom(8));
         chooseFolderButton = new Button(this);
@@ -259,8 +254,6 @@ public final class MainActivity extends Activity {
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         optionSpinner.setAdapter(adapter);
         subtitlesCheck.setVisibility(isVideo ? View.VISIBLE : View.GONE);
-        multiAudioCheck.setChecked(false);
-        multiAudioCheck.setVisibility(View.GONE);
     }
 
     private void chooseOutputFolder() {
@@ -287,8 +280,7 @@ public final class MainActivity extends Activity {
                     outputTreeUri,
                     mediaType,
                     option,
-                    mediaType == MediaType.VIDEO && subtitlesCheck.isChecked(),
-                    mediaType == MediaType.VIDEO && multiAudioCheck.isChecked()
+                    mediaType == MediaType.VIDEO && subtitlesCheck.isChecked()
             );
         } catch (IllegalArgumentException exception) {
             toast(exception.getMessage());
@@ -329,7 +321,6 @@ public final class MainActivity extends Activity {
         videoRadio.setEnabled(!busy);
         optionSpinner.setEnabled(!busy);
         subtitlesCheck.setEnabled(!busy);
-        multiAudioCheck.setEnabled(!busy);
         chooseFolderButton.setEnabled(!busy);
         extractButton.setEnabled(!busy);
     }

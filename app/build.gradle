@@ -11,11 +11,11 @@ android {
         applicationId = "com.ytet.android"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "0.1.1-android"
+        versionCode = 3
+        versionName = "0.1.2-android"
 
         ndk {
-            abiFilters "arm64-v8a", "x86_64"
+            abiFilters "arm64-v8a"
         }
     }
 
@@ -27,6 +27,7 @@ android {
 }
 
 dependencies {
+    implementation "com.mrljdx:ffmpeg-kit-full:6.1.4"
     testImplementation "junit:junit:4.13.2"
 }
 
@@ -36,6 +37,8 @@ chaquopy {
         buildPython "python3.12"
         pip {
             install("yt-dlp==2026.3.17")
+            install("yt-dlp-ejs==0.8.0")
+            install("mutagen==1.47.0")
         }
     }
 }

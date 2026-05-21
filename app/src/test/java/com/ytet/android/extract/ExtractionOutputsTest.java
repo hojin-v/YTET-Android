@@ -29,6 +29,12 @@ public final class ExtractionOutputsTest {
         write(workspace, "audio.m4a");
         write(workspace, "download.part");
         write(workspace, "metadata.info.json");
+        write(workspace, "mux.json");
+        write(workspace, "cover.jpg");
+        write(workspace, "video-track.mp4");
+        write(workspace, "audio-track.m4a");
+        write(workspace, "video-track.webm");
+        write(workspace, "audio-track.webm");
         File nested = new File(workspace, "nested");
         assertTrue(nested.mkdirs());
         write(nested, "subtitle.ko.srt");
@@ -76,8 +82,7 @@ public final class ExtractionOutputsTest {
                 "content://tree/output",
                 MediaType.VIDEO,
                 VideoQuality.P720.value(),
-                true,
-                false
+                true
         );
         StorageWriter.CopiedFile copiedFile = new StorageWriter.CopiedFile(
                 "channel - title.mp4",
@@ -92,7 +97,6 @@ public final class ExtractionOutputsTest {
         assertTrue(summary.contains("검증: Android 저장소에 복사된 파일 확인"));
         assertTrue(summary.contains("요청: 영상 / 720p MP4"));
         assertTrue(summary.contains("자막 요청: 예"));
-        assertTrue(summary.contains("다중 오디오 요청: 아니오"));
         assertTrue(summary.contains("파일: channel - title.mp4 (1.5 KB)"));
         assertTrue(summary.contains("위치: content://tree/output/video"));
     }

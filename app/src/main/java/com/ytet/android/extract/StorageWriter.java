@@ -65,6 +65,9 @@ public final class StorageWriter {
             if ("mkv".equals(extension)) {
                 return "video/x-matroska";
             }
+            if ("webm".equals(extension)) {
+                return "video/webm";
+            }
             if ("srt".equals(extension)) {
                 return "application/x-subrip";
             }
@@ -106,4 +109,3 @@ public final class StorageWriter {
         }
     }
 }
-

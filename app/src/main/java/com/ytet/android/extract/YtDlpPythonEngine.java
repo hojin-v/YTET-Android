@@ -2,6 +2,7 @@ package com.ytet.android.extract;
 
 import android.content.Context;
 import android.net.Uri;
+import android.os.Build;
 
 import com.chaquo.python.PyException;
 import com.chaquo.python.PyObject;
@@ -47,9 +48,11 @@ public final class YtDlpPythonEngine implements ExtractorEngine {
                     request.mediaType().value(),
                     request.option(),
                     request.includeSubtitles(),
-                    request.includeMultiAudio(),
-                    progressListener
+                    progressListener,
+                    Build.VERSION.SDK_INT
             );
+
+            MediaTrackMuxer.mergeWorkspace(workspace, progressListener);
 
             progressListener.onProgress(92, "저장", "결과 파일 정리 중");
             List<File> outputFiles = ExtractionOutputs.collectOutputFiles(workspace);

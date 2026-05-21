@@ -8,29 +8,25 @@ public final class ExtractionRequest {
     public static final String EXTRA_MEDIA_TYPE = "com.ytet.android.extra.MEDIA_TYPE";
     public static final String EXTRA_OPTION = "com.ytet.android.extra.OPTION";
     public static final String EXTRA_INCLUDE_SUBTITLES = "com.ytet.android.extra.INCLUDE_SUBTITLES";
-    public static final String EXTRA_INCLUDE_MULTI_AUDIO = "com.ytet.android.extra.INCLUDE_MULTI_AUDIO";
 
     private final String url;
     private final String outputTreeUri;
     private final MediaType mediaType;
     private final String option;
     private final boolean includeSubtitles;
-    private final boolean includeMultiAudio;
 
     public ExtractionRequest(
             String url,
             String outputTreeUri,
             MediaType mediaType,
             String option,
-            boolean includeSubtitles,
-            boolean includeMultiAudio
+            boolean includeSubtitles
     ) {
         this.url = YoutubeUrlValidator.validate(url);
         this.outputTreeUri = outputTreeUri;
         this.mediaType = mediaType == null ? MediaType.AUDIO : mediaType;
         this.option = option == null || option.trim().isEmpty() ? defaultOption(this.mediaType) : option;
         this.includeSubtitles = includeSubtitles;
-        this.includeMultiAudio = includeMultiAudio;
     }
 
     public String url() {
@@ -53,17 +49,12 @@ public final class ExtractionRequest {
         return includeSubtitles;
     }
 
-    public boolean includeMultiAudio() {
-        return includeMultiAudio;
-    }
-
     public void writeTo(Intent intent) {
         intent.putExtra(EXTRA_URL, url);
         intent.putExtra(EXTRA_OUTPUT_TREE_URI, outputTreeUri);
         intent.putExtra(EXTRA_MEDIA_TYPE, mediaType.value());
         intent.putExtra(EXTRA_OPTION, option);
         intent.putExtra(EXTRA_INCLUDE_SUBTITLES, includeSubtitles);
-        intent.putExtra(EXTRA_INCLUDE_MULTI_AUDIO, includeMultiAudio);
     }
 
     public static ExtractionRequest fromIntent(Intent intent) {
@@ -81,8 +72,7 @@ public final class ExtractionRequest {
                 outputTreeUri,
                 mediaType,
                 intent.getStringExtra(EXTRA_OPTION),
-                intent.getBooleanExtra(EXTRA_INCLUDE_SUBTITLES, false),
-                intent.getBooleanExtra(EXTRA_INCLUDE_MULTI_AUDIO, false)
+                intent.getBooleanExtra(EXTRA_INCLUDE_SUBTITLES, false)
         );
     }
 
@@ -90,4 +80,3 @@ public final class ExtractionRequest {
         return mediaType == MediaType.VIDEO ? VideoQuality.BEST.value() : AudioFormat.M4A.value();
     }
 }
-

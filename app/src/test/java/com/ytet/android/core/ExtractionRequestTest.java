@@ -15,14 +15,12 @@ public final class ExtractionRequestTest {
                 "content://tree/output",
                 null,
                 "",
-                true,
                 true
         );
 
         assertEquals(MediaType.AUDIO, request.mediaType());
         assertEquals(AudioFormat.M4A.value(), request.option());
         assertTrue(request.includeSubtitles());
-        assertTrue(request.includeMultiAudio());
     }
 
     @Test
@@ -32,14 +30,12 @@ public final class ExtractionRequestTest {
                 "content://tree/output",
                 MediaType.VIDEO,
                 null,
-                false,
                 false
         );
 
         assertEquals(MediaType.VIDEO, request.mediaType());
         assertEquals(VideoQuality.BEST.value(), request.option());
         assertFalse(request.includeSubtitles());
-        assertFalse(request.includeMultiAudio());
     }
 
     @Test
@@ -49,8 +45,7 @@ public final class ExtractionRequestTest {
                 "content://tree/output",
                 MediaType.VIDEO,
                 VideoQuality.P720.value(),
-                true,
-                false
+                true
         );
 
         assertEquals(VideoQuality.P720.value(), request.option());
@@ -61,7 +56,7 @@ public final class ExtractionRequestTest {
     public void rejectsInvalidUrlBeforeWorkStarts() {
         assertThrows(
                 IllegalArgumentException.class,
-                () -> new ExtractionRequest("https://example.com/a", "content://tree/output", MediaType.AUDIO, "m4a", false, false)
+                () -> new ExtractionRequest("https://example.com/a", "content://tree/output", MediaType.AUDIO, "m4a", false)
         );
     }
 }

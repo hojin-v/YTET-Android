@@ -130,11 +130,11 @@ jobs:
             git tag -f nightly "$GITHUB_SHA"
             git push origin refs/tags/nightly --force
             title="YTET Android Nightly"
-            notes="Automated Android debug build from $GITHUB_SHA. Includes embedded Python yt-dlp runtime; see README before distribution."
+            notes="Automated Android debug build from $GITHUB_SHA. Includes embedded Python yt-dlp runtime and arm64 FFmpegKit remuxing; see README before distribution."
             prerelease_flag="--prerelease"
           else
             title="YTET Android $tag"
-            notes="Automated YTET Android debug build for $tag. Includes embedded Python yt-dlp runtime; see README before distribution."
+            notes="Automated YTET Android debug build for $tag. Includes embedded Python yt-dlp runtime and arm64 FFmpegKit remuxing; see README before distribution."
             prerelease_flag=""
           fi
 

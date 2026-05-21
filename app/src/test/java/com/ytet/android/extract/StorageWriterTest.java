@@ -12,6 +12,7 @@ public final class StorageWriterTest {
     public void guessesAndroidFriendlyMimeTypesForKnownOutputs() throws Exception {
         assertEquals("audio/mp4", mimeType("song.m4a"));
         assertEquals("video/x-matroska", mimeType("movie.mkv"));
+        assertEquals("video/webm", mimeType("movie.webm"));
         assertEquals("application/x-subrip", mimeType("caption.ko.srt"));
         assertEquals("application/octet-stream", mimeType("download"));
     }

@@ -51,7 +51,6 @@ final class ExtractionOutputs {
         builder.append("요청: ").append(requestLabel(request)).append('\n');
         if (request.mediaType() == MediaType.VIDEO) {
             builder.append("자막 요청: ").append(yesNo(request.includeSubtitles())).append('\n');
-            builder.append("다중 오디오 요청: ").append(yesNo(request.includeMultiAudio())).append('\n');
         }
         for (StorageWriter.CopiedFile file : copiedFiles) {
             builder.append("파일: ")
@@ -81,7 +80,11 @@ final class ExtractionOutputs {
     private static boolean isTransientOutput(String name) {
         return name.endsWith(".part")
                 || name.endsWith(".ytdl")
-                || name.endsWith(".tmp");
+                || name.endsWith(".tmp")
+                || "mux.json".equals(name)
+                || name.startsWith("cover.")
+                || name.startsWith("video-track.")
+                || name.startsWith("audio-track.");
     }
 
     private static boolean isExpectedOutput(String name) {
