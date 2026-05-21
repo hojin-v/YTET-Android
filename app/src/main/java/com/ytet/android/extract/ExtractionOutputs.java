@@ -84,7 +84,9 @@ final class ExtractionOutputs {
                 || "mux.json".equals(name)
                 || name.startsWith("cover.")
                 || name.startsWith("video-track.")
-                || name.startsWith("audio-track.");
+                || name.startsWith("audio-track.")
+                || name.endsWith(".srt")
+                || name.endsWith(".vtt");
     }
 
     private static boolean isExpectedOutput(String name) {
@@ -97,9 +99,7 @@ final class ExtractionOutputs {
                 || name.endsWith(".wav")
                 || name.endsWith(".webm")
                 || name.endsWith(".mp4")
-                || name.endsWith(".mkv")
-                || name.endsWith(".srt")
-                || name.endsWith(".vtt");
+                || name.endsWith(".mkv");
     }
 
     private static String describeFiles(List<File> files) {

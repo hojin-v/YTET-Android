@@ -11,6 +11,10 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Locale;
 
 final class MediaTrackMuxer {
     private MediaTrackMuxer() {
@@ -23,11 +27,15 @@ final class MediaTrackMuxer {
         }
 
         MuxPlan plan = readPlan(workspace, manifest);
-        progressListener.onProgress(88, "병합", "고화질 영상과 오디오 트랙 병합 중");
-        mux(plan.video, plan.audio, plan.output);
+        List<File> subtitles = findSubtitleFiles(workspace);
+        progressListener.onProgress(88, "병합", mergeMessage(subtitles));
+        mux(plan.video, plan.audio, subtitles, plan.output);
 
         deleteIfExists(plan.video);
         deleteIfExists(plan.audio);
+        for (File subtitle : subtitles) {
+            deleteIfExists(subtitle);
+        }
         deleteIfExists(manifest);
     }
 
@@ -36,12 +44,12 @@ final class MediaTrackMuxer {
             String text = new String(Files.readAllBytes(manifest.toPath()), StandardCharsets.UTF_8);
             JSONObject json = new JSONObject(text);
             File video = new File(workspace, json.getString("video"));
-            File audio = new File(workspace, json.getString("audio"));
+            File audio = json.has("audio") ? new File(workspace, json.getString("audio")) : null;
             File output = new File(workspace, json.getString("output"));
             if (!video.isFile()) {
                 throw new ExtractionException("병합할 영상 트랙을 찾지 못했습니다: " + video.getName());
             }
-            if (!audio.isFile()) {
+            if (audio != null && !audio.isFile()) {
                 throw new ExtractionException("병합할 오디오 트랙을 찾지 못했습니다: " + audio.getName());
             }
             return new MuxPlan(video, audio, output);
@@ -50,18 +58,15 @@ final class MediaTrackMuxer {
         }
     }
 
-    private static void mux(File video, File audio, File output) throws ExtractionException {
-        String[] arguments = new String[]{
-                "-y",
-                "-hide_banner",
-                "-i", video.getAbsolutePath(),
-                "-i", audio.getAbsolutePath(),
-                "-map", "0:v:0",
-                "-map", "1:a:0",
-                "-c", "copy",
-                "-map_metadata", "-1",
-                output.getAbsolutePath()
-        };
+    private static String mergeMessage(List<File> subtitles) {
+        if (subtitles.isEmpty()) {
+            return "고화질 영상과 오디오 트랙 병합 중";
+        }
+        return "영상, 오디오, 자막 트랙 병합 중";
+    }
+
+    private static void mux(File video, File audio, List<File> subtitles, File output) throws ExtractionException {
+        String[] arguments = buildArguments(video, audio, output, subtitles);
 
         FFmpegSession session = FFmpegKit.executeWithArguments(arguments);
         ReturnCode returnCode = session.getReturnCode();
@@ -69,6 +74,66 @@ final class MediaTrackMuxer {
             deleteIfExists(output);
             throw new ExtractionException("고화질 영상 병합에 실패했습니다.\n" + failureMessage(session));
         }
+    }
+
+    static String[] buildArguments(File video, File audio, File output, List<File> subtitles) {
+        List<String> arguments = new ArrayList<>();
+        arguments.add("-y");
+        arguments.add("-hide_banner");
+        arguments.add("-i");
+        arguments.add(video.getAbsolutePath());
+        if (audio != null) {
+            arguments.add("-i");
+            arguments.add(audio.getAbsolutePath());
+        }
+        for (File subtitle : subtitles) {
+            arguments.add("-i");
+            arguments.add(subtitle.getAbsolutePath());
+        }
+
+        arguments.add("-map");
+        arguments.add("0:v:0");
+        arguments.add("-map");
+        arguments.add(audio == null ? "0:a?" : "1:a:0");
+        int subtitleInputOffset = audio == null ? 1 : 2;
+        for (int index = 0; index < subtitles.size(); index++) {
+            arguments.add("-map");
+            arguments.add((subtitleInputOffset + index) + ":0");
+        }
+
+        arguments.add("-c:v");
+        arguments.add("copy");
+        arguments.add("-c:a");
+        arguments.add("copy");
+        if (!subtitles.isEmpty()) {
+            arguments.add("-c:s");
+            arguments.add(subtitleCodec(output));
+        }
+        arguments.add("-map_metadata");
+        arguments.add("-1");
+
+        for (int index = 0; index < subtitles.size(); index++) {
+            File subtitle = subtitles.get(index);
+            arguments.add("-metadata:s:s:" + index);
+            arguments.add("language=" + subtitleLanguage(subtitle));
+            arguments.add("-metadata:s:s:" + index);
+            arguments.add("title=" + subtitleTitle(subtitle));
+        }
+        if (!subtitles.isEmpty()) {
+            arguments.add("-disposition:s:0");
+            arguments.add("default");
+        }
+
+        arguments.add(output.getAbsolutePath());
+        return arguments.toArray(new String[0]);
+    }
+
+    private static String subtitleCodec(File output) {
+        String name = output.getName().toLowerCase(Locale.ROOT);
+        if (name.endsWith(".mp4") || name.endsWith(".m4v") || name.endsWith(".mov")) {
+            return "mov_text";
+        }
+        return "srt";
     }
 
     private static String failureMessage(FFmpegSession session) {
@@ -96,6 +161,66 @@ final class MediaTrackMuxer {
         if (file != null && file.exists()) {
             file.delete();
         }
+    }
+
+    private static List<File> findSubtitleFiles(File workspace) {
+        List<File> files = new ArrayList<>();
+        collectSubtitleFiles(workspace, files);
+        files.sort(Comparator.comparingInt(MediaTrackMuxer::subtitleRank).thenComparing(File::getName));
+        return files;
+    }
+
+    private static void collectSubtitleFiles(File file, List<File> out) {
+        if (file == null || !file.exists()) {
+            return;
+        }
+        if (file.isDirectory()) {
+            File[] children = file.listFiles();
+            if (children == null) {
+                return;
+            }
+            for (File child : children) {
+                collectSubtitleFiles(child, out);
+            }
+            return;
+        }
+        String name = file.getName().toLowerCase(Locale.ROOT);
+        if (name.endsWith(".srt") || name.endsWith(".vtt")) {
+            out.add(file);
+        }
+    }
+
+    private static int subtitleRank(File file) {
+        String name = file.getName().toLowerCase(Locale.ROOT);
+        if (name.contains(".ko.") || name.contains(".ko-kr.")) {
+            return 0;
+        }
+        if (name.contains(".en.") || name.contains(".en-")) {
+            return 1;
+        }
+        return 2;
+    }
+
+    private static String subtitleLanguage(File file) {
+        String name = file.getName().toLowerCase(Locale.ROOT);
+        if (name.contains(".ko.") || name.contains(".ko-kr.")) {
+            return "kor";
+        }
+        if (name.contains(".en.") || name.contains(".en-")) {
+            return "eng";
+        }
+        return "und";
+    }
+
+    private static String subtitleTitle(File file) {
+        String name = file.getName().toLowerCase(Locale.ROOT);
+        if (name.contains(".ko.") || name.contains(".ko-kr.")) {
+            return "Korean";
+        }
+        if (name.contains(".en.") || name.contains(".en-")) {
+            return "English";
+        }
+        return "Subtitle";
     }
 
     private static final class MuxPlan {

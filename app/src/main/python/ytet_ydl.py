@@ -126,14 +126,18 @@ def extract_video(
             download_one(url, workspace, plan["video"]["format_id"], "video-track.%(ext)s", logger, progress_listener)
             notify(progress_listener, 52, "다운로드", "오디오 트랙 다운로드 중")
             download_one(url, workspace, plan["audio"]["format_id"], "audio-track.%(ext)s", logger, progress_listener)
-            write_mux_manifest(workspace, info, plan)
         else:
             notify(progress_listener, 12, "다운로드", "단일 파일 영상 다운로드 중")
-            download_one(url, workspace, plan["format"], final_outtmpl(info), logger, progress_listener)
+            outtmpl = "video-track.%(ext)s" if include_subtitles else final_outtmpl(info)
+            download_one(url, workspace, plan["format"], outtmpl, logger, progress_listener)
 
         if include_subtitles:
             notify(progress_listener, 84, "자막", "자막 다운로드 중")
             download_subtitles(url, workspace, info, logger, progress_listener)
+        if plan["mode"] == "mux":
+            write_mux_manifest(workspace, info, plan)
+        elif include_subtitles:
+            write_single_video_manifest(workspace, info)
     except YtetExtractionError:
         raise
     except DownloadError as error:
@@ -401,6 +405,21 @@ def write_mux_manifest(workspace, info, plan):
         json.dump(manifest, file, ensure_ascii=False)
 
 
+def write_single_video_manifest(workspace, info):
+    video = find_prefixed_file(workspace, "video-track.")
+    if not video:
+        raise YtetExtractionError("자막을 삽입할 영상 파일을 찾지 못했습니다.")
+    extension = os.path.splitext(video)[1].lower()
+    if extension not in {".mp4", ".m4v", ".mov", ".mkv"} and find_subtitle_files(workspace):
+        extension = ".mkv"
+    manifest = {
+        "video": os.path.basename(video),
+        "output": final_stem(info) + extension,
+    }
+    with open(os.path.join(workspace, "mux.json"), "w", encoding="utf-8") as file:
+        json.dump(manifest, file, ensure_ascii=False)
+
+
 def final_outtmpl(info):
     return final_stem(info) + ".%(ext)s"
 
@@ -493,6 +512,15 @@ def find_prefixed_file(workspace, name_prefix):
             if name.startswith(name_prefix):
                 files.append(os.path.join(root, name))
     return sorted(files)[0] if files else None
+
+
+def find_subtitle_files(workspace):
+    files = []
+    for root, _dirs, names in os.walk(workspace):
+        for name in names:
+            if os.path.splitext(name)[1].lower() in {".srt", ".vtt"}:
+                files.append(os.path.join(root, name))
+    return sorted(files)
 
 
 def progress_hook(progress_listener):

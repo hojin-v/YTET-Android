@@ -42,7 +42,7 @@ public final class ExtractionOutputsTest {
         List<File> outputs = ExtractionOutputs.collectOutputFiles(workspace);
 
         assertEquals(
-                Arrays.asList("audio.m4a", "subtitle.ko.srt", "video.mp4"),
+                Arrays.asList("audio.m4a", "video.mp4"),
                 names(outputs)
         );
     }

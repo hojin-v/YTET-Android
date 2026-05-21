@@ -18,7 +18,7 @@ High-quality video is no longer limited to yt-dlp single-file formats. The Andro
 
 For the `best` option, Android follows the Windows direction: pick the best video-only stream and the best audio-only stream, then remux to `MKV`. For the capped options, Android prefers AVC MP4 video plus M4A audio so phone players handle the result well; if that combination is unavailable, it falls back to capped `MKV` rather than lowering quality to a progressive file.
 
-M4A cover images are embedded with `mutagen` when YouTube exposes a JPEG or PNG thumbnail.
+M4A cover images are embedded with `mutagen` when YouTube exposes a JPEG or PNG thumbnail. Registered subtitles are embedded into the remuxed video when the Android UI requests subtitles.
 
 ## Runtime packaging
 
@@ -31,6 +31,6 @@ M4A cover images are embedded with `mutagen` when YouTube exposes a JPEG or PNG 
 
 - MP3 conversion is not enabled in the Android UI yet.
 - Original Opus cover embedding is not enabled yet.
-- Subtitle embedding is not enabled yet; registered subtitles can be saved as sidecar files.
+- Auto-generated subtitles are not downloaded by default; only registered Korean/English subtitles are considered.
 - Embedded runtime packages may still impose their own license obligations depending on what is bundled.
 - Build verification was performed with a temporary Android SDK under `/tmp/android-sdk-ytet`.

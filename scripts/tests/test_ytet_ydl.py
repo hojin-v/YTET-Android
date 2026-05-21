@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import importlib
+import json
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -107,8 +109,20 @@ class YtetYdlOptionsTest(unittest.TestCase):
         self.assertEqual("248", plan["video"]["format_id"])
         self.assertEqual("251", plan["audio"]["format_id"])
 
-    def test_video_subtitles_are_sidecar_downloads_not_embedded_muxing(self):
+    def test_video_subtitle_language_priority_is_limited_to_registered_ko_and_en(self):
         self.assertEqual(["ko", "ko-KR", "en", "en-US", "en-GB"], ytet_ydl.SUBTITLE_LANGUAGES)
+
+    def test_single_video_manifest_remuxes_subtitled_webm_to_mkv(self):
+        with tempfile.TemporaryDirectory() as workspace:
+            Path(workspace, "video-track.webm").write_text("video")
+            Path(workspace, "sample.ko.srt").write_text("subtitle")
+
+            ytet_ydl.write_single_video_manifest(workspace, {"title": "A/B"})
+
+            manifest = json.loads(Path(workspace, "mux.json").read_text())
+
+        self.assertEqual("video-track.webm", manifest["video"])
+        self.assertEqual("A B.mkv", manifest["output"])
 
     def test_progress_hook_reports_bounded_download_progress(self):
         hook = ytet_ydl.progress_hook(self.listener)

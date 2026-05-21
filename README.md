@@ -26,7 +26,7 @@ Android 저장소 권한 모델에 맞춰 사용자가 저장 폴더를 직접 �
 | --- | --- | --- |
 | Audio | 음악, 강의, 플레이리스트 정리 | `M4A (AAC)`, `Original Opus` |
 | Video | 모바일 보관, 고화질 저장 | 최고품질 `MKV` 또는 호환 우선 `MP4` |
-| Subtitles | 선택형 한국어/영어 등록 자막 | 가능한 경우 `.srt` 또는 `.vtt` sidecar |
+| Subtitles | 선택형 한국어/영어 등록 자막 | 가능한 경우 영상 내부 자막 트랙 |
 
 ## Features
 
@@ -37,8 +37,8 @@ Android 저장소 권한 모델에 맞춰 사용자가 저장 폴더를 직접 �
 | 백그라운드 진행 | foreground service와 알림으로 추출 진행 상태를 표시합니다. |
 | 자동 파일명 | 오디오는 `artist - title`, 영상은 `channel - title` 형식으로 저장합니다. |
 | 고화질 영상 옵션 | 최고품질은 분리 영상/오디오 트랙을 `MKV`로 병합하고, 1080p/720p/480p는 호환성 좋은 `MP4`를 우선합니다. |
-| 선택형 자막 | `자막 포함` 선택 시 등록된 한국어/영어 자막을 sidecar 파일로 저장합니다. |
-| 명확한 제한 안내 | 아직 포팅하지 않은 MP3 변환과 자막 삽입은 오류로 안내합니다. |
+| 선택형 자막 | `자막 포함` 선택 시 등록된 한국어/영어 자막을 영상 파일 안에 트랙으로 삽입합니다. |
+| 명확한 제한 안내 | 아직 포팅하지 않은 MP3 변환은 오류로 안내합니다. |
 
 ## Quick Start
 
@@ -85,9 +85,9 @@ YouTube의 1080p 이상 영상은 보통 영상/오디오가 분리된 DASH 스�
 
 ## Subtitles & Audio Tracks
 
-영상 모드에서 `자막 포함`을 선택하면 업로더가 등록한 한국어와 영어 자막만 저장합니다.
+영상 모드에서 `자막 포함`을 선택하면 업로더가 등록한 한국어와 영어 자막만 가져옵니다.
 
-저장 가능한 자막이 있으면 같은 이름의 `.srt` 또는 `.vtt` 파일을 함께 저장합니다.
+저장 가능한 자막이 있으면 FFmpegKit remux 단계에서 영상 파일 안의 자막 트랙으로 삽입합니다. MP4 결과에는 `mov_text`, MKV 결과에는 SRT 자막 트랙을 사용합니다.
 
 자동 생성 자막만 있는 영상은 기본적으로 자막을 저장하지 않습니다.
 
@@ -110,8 +110,7 @@ Java foreground service
 ```text
 audio:    artist - title.ext
 video:    channel - title.ext
-subtitle: channel - title.ko.srt
-subtitle: channel - title.en.srt
+subtitle: embedded in video when requested
 ```
 
 Android 결과 화면은 저장소로 복사된 파일과 요청 조건만 표시합니다. Windows 앱처럼 화질/코덱/오디오/자막 스트림을 재검증해 표시하는 단계는 아직 포팅하지 않았으며, 확인되지 않은 값은 기본값처럼 표시하지 않습니다.
@@ -216,6 +215,6 @@ YouTube JS challenge 처리를 위한 `yt-dlp-ejs` script package는 포함되�
 - 권한이 있는 콘텐츠에만 사용하세요.
 - YouTube 서비스 약관과 지역 법규를 확인해야 합니다.
 - 영상 제공 품질과 자막 여부는 YouTube와 업로더 설정에 따라 달라집니다.
-- MP3 변환과 자막 삽입은 Android 경로에 아직 포팅하지 않았습니다.
+- MP3 변환은 Android 경로에 아직 포팅하지 않았습니다.
 - 내장 Python, `yt-dlp`, `mutagen`, `FFmpegKit` 등 함께 배포되는 런타임의 라이선스와 고지 의무를 확인해야 합니다.
 - 처음 설치하는 APK는 Android 보안 경고가 표시될 수 있습니다. 신뢰할 수 있는 출처에서 받은 파일인지 확인한 뒤 설치하세요.
