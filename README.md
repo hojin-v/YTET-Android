@@ -4,7 +4,7 @@
 
 YouTube Extractor Toolkit for Android
 
-YouTube URL 하나로 오디오와 영상을 Android 기기에 저장하는 모바일 추출 도구입니다.
+YouTube 미디어 스트림과 메타데이터 동작을 확인하는 Android용 모바일 도구입니다.
 
 [![CI](https://github.com/hojin-v/YTET-Android/actions/workflows/ci.yml/badge.svg)](https://github.com/hojin-v/YTET-Android/actions/workflows/ci.yml)
 [![Release](https://github.com/hojin-v/YTET-Android/actions/workflows/release.yml/badge.svg)](https://github.com/hojin-v/YTET-Android/actions/workflows/release.yml)
@@ -18,21 +18,21 @@ YouTube URL 하나로 오디오와 영상을 Android 기기에 저장하는 모�
 
 ## Overview
 
-YTET Android는 YouTube 링크를 오디오 파일이나 영상 파일로 저장합니다.
+YTET Android는 권한이 있는 YouTube 링크를 대상으로 오디오/영상 스트림, 메타데이터, 자막 처리를 확인합니다.
 
 Android 저장소 권한 모델에 맞춰 사용자가 저장 폴더를 직접 선택하고, 추출 작업은 foreground service에서 진행됩니다. 추출 엔진은 프로젝트 내부의 `YtDlpPythonEngine`이 담당하며, APK에 포함된 Python 런타임과 `yt-dlp` 패키지로 다운로드를 실행합니다.
 
 | Mode | Best For | Output |
 | --- | --- | --- |
-| Audio | 음악, 강의, 플레이리스트 정리 | `M4A (AAC)`, `Original Opus` |
-| Video | 모바일 보관, 고화질 저장 | 최고품질 `MKV` 또는 호환 우선 `MP4` |
+| Audio | 오디오 포맷과 메타데이터 확인 | `M4A (AAC)`, `Original Opus` |
+| Video | 영상 스트림과 컨테이너 확인 | 최고품질 `MKV` 또는 호환 우선 `MP4` |
 | Subtitles | 선택형 한국어/영어 등록 자막 | 가능한 경우 영상 내부 자막 트랙 |
 
 ## Features
 
 | Feature | Description |
 | --- | --- |
-| URL 기반 추출 | YouTube URL을 넣고 저장 폴더를 고르면 추출을 시작합니다. |
+| URL 기반 추출 | 권한이 있는 YouTube URL을 넣고 저장 폴더를 고르면 추출을 시작합니다. |
 | Android 폴더 선택 | Storage Access Framework로 사용자가 지정한 폴더에 결과를 저장합니다. |
 | 백그라운드 진행 | foreground service와 알림으로 추출 진행 상태를 표시합니다. |
 | 자동 파일명 | 오디오는 `artist - title`, 영상은 `channel - title` 형식으로 저장합니다. |
@@ -44,7 +44,7 @@ Android 저장소 권한 모델에 맞춰 사용자가 저장 폴더를 직접 �
 
 1. [Releases](https://github.com/hojin-v/YTET-Android/releases)에서 최신 `YTET-Android-버전-debug.apk` 또는 ZIP을 받습니다.
 2. APK를 Android 기기에 설치합니다.
-3. YouTube URL을 입력합니다.
+3. 권한이 있는 YouTube URL을 입력합니다.
 4. `음원` 또는 `영상`을 선택합니다.
 5. 저장 폴더와 포맷 또는 품질을 고릅니다.
 6. 영상일 경우 `자막 포함`을 필요에 맞게 선택합니다.
@@ -57,7 +57,7 @@ Android 저장소 권한 모델에 맞춰 사용자가 저장 폴더를 직접 �
 | Format | When to Use |
 | --- | --- |
 | `M4A (AAC)` | 기본 추천 포맷 |
-| `Original Opus` | YouTube 원본 오디오에 가깝고 용량 효율이 좋은 포맷 |
+| `Original Opus` | 제공되는 원본 오디오 스트림에 가깝고 용량 효율이 좋은 포맷 |
 | `MP3` | FFmpeg 변환 런타임 추가 전까지 Android APK에서 비활성 |
 
 오디오 추출 결과에는 가능한 경우 다음 정보가 포함됩니다.
@@ -119,7 +119,7 @@ Android 결과 화면은 저장소로 복사된 파일과 요청 조건만 표�
 
 ```mermaid
 flowchart LR
-    A[YouTube URL] --> B[Android foreground service]
+    A[Authorized YouTube URL] --> B[Android foreground service]
     B --> C[Start embedded Python runtime]
     C --> D{Mode}
     D -->|Audio| E[Run yt-dlp audio download]
@@ -214,6 +214,7 @@ YouTube JS challenge 처리를 위한 `yt-dlp-ejs` script package는 포함되�
 
 - 권한이 있는 콘텐츠에만 사용하세요.
 - YouTube 서비스 약관과 지역 법규를 확인해야 합니다.
+- YTET Android는 YouTube 또는 Google과 관련이 없습니다.
 - 영상 제공 품질과 자막 여부는 YouTube와 업로더 설정에 따라 달라집니다.
 - MP3 변환은 Android 경로에 아직 포팅하지 않았습니다.
 - 내장 Python, `yt-dlp`, `mutagen`, `FFmpegKit` 등 함께 배포되는 런타임의 라이선스와 고지 의무를 확인해야 합니다.
