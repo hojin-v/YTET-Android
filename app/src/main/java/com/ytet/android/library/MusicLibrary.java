@@ -1,10 +1,13 @@
 package com.ytet.android.library;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+
+import com.ytet.android.stream.MusicStation;
 
 public final class MusicLibrary {
     public static final String ALL_FOLDERS = "전체";
@@ -38,6 +41,22 @@ public final class MusicLibrary {
             }
         }
         return filtered;
+    }
+
+    public static List<DeviceAudioTrack> tracksForStation(List<DeviceAudioTrack> tracks, MusicStation station) {
+        List<DeviceAudioTrack> selected = new ArrayList<>();
+        if (tracks == null || station == null) {
+            return selected;
+        }
+        for (DeviceAudioTrack track : tracks) {
+            if (station.mixType() == MusicStation.MixType.ALL
+                    || (station.mixType() == MusicStation.MixType.ARTIST && station.mixValue().equals(track.artist()))
+                    || (station.mixType() == MusicStation.MixType.FOLDER && station.mixValue().equals(track.folder()))) {
+                selected.add(track);
+            }
+        }
+        Collections.shuffle(selected);
+        return selected;
     }
 
     public static String folderLabelFromPath(String relativePath, String fallback) {

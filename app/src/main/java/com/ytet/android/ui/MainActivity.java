@@ -13,8 +13,6 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
-import android.media.AudioManager;
-import android.media.MediaPlayer;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -45,14 +43,14 @@ import com.ytet.android.extract.ExtractionService;
 import com.ytet.android.library.DeviceAudioTrack;
 import com.ytet.android.library.DeviceMusicLibrary;
 import com.ytet.android.library.MusicLibrary;
+import com.ytet.android.playback.PlaybackService;
 import com.ytet.android.stream.MusicStation;
 import com.ytet.android.stream.StationCatalog;
-import com.ytet.android.stream.StreamUrlResolver;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ExecutorService;
 
 public final class MainActivity extends Activity {
     private static final int REQUEST_OUTPUT_TREE = 1207;
@@ -63,8 +61,6 @@ public final class MainActivity extends Activity {
     private static final String PREFS = "ytet_android";
     private static final String PREF_OUTPUT_TREE = "output_tree";
 
-    private final List<MusicStation> stations = StationCatalog.defaultStations();
-    private final ExecutorService streamExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService libraryExecutor = Executors.newSingleThreadExecutor();
     private final DeviceMusicLibrary deviceMusicLibrary = new DeviceMusicLibrary();
 
@@ -77,7 +73,6 @@ public final class MainActivity extends Activity {
     private Button homeTabButton;
     private Button libraryTabButton;
     private Button extractorTabButton;
-    private EditText customStreamInput;
 
     private EditText urlInput;
     private RadioGroup mediaGroup;
@@ -93,13 +88,13 @@ public final class MainActivity extends Activity {
     private ProgressBar progressBar;
 
     private Tab currentTab = Tab.HOME;
-    private MediaPlayer mediaPlayer;
     private MusicStation activeStation;
-    private boolean streamReady;
-    private boolean streamPreparing;
-    private int streamRequestVersion;
-    private String streamStatus = "추천 스테이션을 선택하세요.";
-    private String customStreamUrl = "";
+    private boolean playbackHasQueue;
+    private boolean playbackPlaying;
+    private boolean playbackPreparing;
+    private String playbackTitle = "로컬 재생 대기";
+    private String playbackMeta = "기기 음악을 스캔하면 재생할 수 있습니다.";
+    private String streamStatus = "기기 음악을 스캔하면 추천 믹스가 표시됩니다.";
     private String extractorUrl = "";
     private MediaType extractorMediaType = MediaType.AUDIO;
     private String extractorOption = AudioFormat.M4A.value();
@@ -119,6 +114,7 @@ public final class MainActivity extends Activity {
     private String extractionResult = "-";
     private boolean extractionBusy;
     private boolean receiverRegistered;
+    private boolean playbackReceiverRegistered;
 
     private final BroadcastReceiver progressReceiver = new BroadcastReceiver() {
         @Override
@@ -154,6 +150,34 @@ public final class MainActivity extends Activity {
         }
     };
 
+    private final BroadcastReceiver playbackReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (!PlaybackService.ACTION_STATE.equals(intent.getAction())) {
+                return;
+            }
+            playbackHasQueue = intent.getBooleanExtra(PlaybackService.EXTRA_HAS_QUEUE, false);
+            playbackPlaying = intent.getBooleanExtra(PlaybackService.EXTRA_PLAYING, false);
+            playbackPreparing = intent.getBooleanExtra(PlaybackService.EXTRA_PREPARING, false);
+            playbackTitle = valueOrDefault(
+                    intent.getStringExtra(PlaybackService.EXTRA_TITLE),
+                    "로컬 재생 대기"
+            );
+            playbackMeta = valueOrDefault(
+                    intent.getStringExtra(PlaybackService.EXTRA_META),
+                    "기기 음악을 스캔하면 재생할 수 있습니다."
+            );
+            streamStatus = valueOrDefault(
+                    intent.getStringExtra(PlaybackService.EXTRA_STATUS),
+                    playbackMeta
+            );
+            if (!playbackHasQueue) {
+                activeStation = null;
+            }
+            updateNowPlayingBar();
+        }
+    };
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -174,10 +198,24 @@ public final class MainActivity extends Activity {
             }
             receiverRegistered = true;
         }
+        if (!playbackReceiverRegistered) {
+            IntentFilter filter = new IntentFilter(PlaybackService.ACTION_STATE);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(playbackReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+            } else {
+                registerReceiver(playbackReceiver, filter);
+            }
+            playbackReceiverRegistered = true;
+            startService(PlaybackService.commandIntent(this, PlaybackService.ACTION_REQUEST_STATE));
+        }
     }
 
     @Override
     protected void onStop() {
+        if (playbackReceiverRegistered) {
+            unregisterReceiver(playbackReceiver);
+            playbackReceiverRegistered = false;
+        }
         if (receiverRegistered) {
             unregisterReceiver(progressReceiver);
             receiverRegistered = false;
@@ -187,8 +225,6 @@ public final class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
-        releaseMediaPlayer();
-        streamExecutor.shutdownNow();
         libraryExecutor.shutdownNow();
         super.onDestroy();
     }
@@ -225,7 +261,7 @@ public final class MainActivity extends Activity {
             startLibraryRefresh(true);
         } else {
             libraryStatus = "기기 음악을 관리하려면 오디오 읽기 권한이 필요합니다.";
-            renderLibraryIfCurrent();
+            renderLibraryDependentTabs();
         }
     }
 
@@ -326,17 +362,42 @@ public final class MainActivity extends Activity {
     private View buildHomeTab() {
         LinearLayout root = screenRoot();
         root.addView(title("YTET"), marginBottom(4));
-        root.addView(muted("추천 스테이션과 스트리밍을 한 화면에서 시작합니다.", 14), marginBottom(22));
+        root.addView(muted("디바이스에 저장된 음악을 기준으로 추천 믹스와 로컬 재생을 시작합니다.", 14), marginBottom(22));
+
+        if (!hasAudioPermission()) {
+            LinearLayout permission = panel();
+            permission.addView(label("오디오 권한 필요"), marginBottom(8));
+            permission.addView(muted("홈 추천 믹스는 디바이스 내 음악 메타데이터와 폴더를 읽은 뒤 생성됩니다.", 14), marginBottom(14));
+            Button request = primaryButton("권한 허용");
+            request.setOnClickListener(view -> requestAudioPermission());
+            permission.addView(request, matchWrap());
+            root.addView(permission, marginBottom(18));
+            return root;
+        }
+
+        if (!libraryLoaded && !libraryLoading) {
+            startLibraryRefresh(false);
+        }
 
         LinearLayout hero = panel();
-        hero.addView(label("오늘 바로 듣기"), marginBottom(8));
-        hero.addView(text("아티스트 감성과 장르 흐름을 고른 뒤, 하단 플레이어에서 이어서 제어하세요.", 16, R.color.ytet_text, false), marginBottom(14));
-        Button primaryPlay = primaryButton(activeStation == null ? "첫 추천 재생" : "다시 재생");
-        primaryPlay.setOnClickListener(view -> playStation(activeStation == null ? stations.get(0) : activeStation));
+        hero.addView(label("내 음악 바로 듣기"), marginBottom(8));
+        hero.addView(text(libraryStatus, 15, R.color.ytet_text, false), marginBottom(12));
+        hero.addView(muted(librarySummary(), 13), marginBottom(14));
+        Button primaryPlay = primaryButton(activeStation == null ? "전체 셔플 재생" : "현재 믹스 다시 재생");
+        primaryPlay.setEnabled(!libraryTracks.isEmpty());
+        primaryPlay.setOnClickListener(view -> playStation(activeStation == null ? firstStation() : activeStation));
         hero.addView(primaryPlay, matchWrap());
         root.addView(hero, marginBottom(24));
 
-        root.addView(sectionTitle("추천 스테이션"), marginBottom(10));
+        root.addView(sectionTitle("추천 믹스"), marginBottom(10));
+        List<MusicStation> stations = StationCatalog.recommendedStations(libraryTracks);
+        if (stations.isEmpty()) {
+            LinearLayout empty = panel();
+            empty.addView(label("추천할 음악이 없습니다."), marginBottom(8));
+            empty.addView(muted("내 음악 탭에서 스캔 상태를 확인하거나 기기에 음악 파일을 추가하세요.", 13), matchWrap());
+            root.addView(empty, marginBottom(18));
+            return root;
+        }
         HorizontalScrollView shelf = new HorizontalScrollView(this);
         shelf.setHorizontalScrollBarEnabled(false);
         LinearLayout row = new LinearLayout(this);
@@ -346,23 +407,6 @@ public final class MainActivity extends Activity {
         }
         shelf.addView(row, matchWrap());
         root.addView(shelf, marginBottom(24));
-
-        root.addView(sectionTitle("스트리밍"), marginBottom(10));
-        LinearLayout streaming = panel();
-        streaming.addView(label("직접 스트림 URL"), marginBottom(8));
-        customStreamInput = new EditText(this);
-        customStreamInput.setSingleLine(true);
-        customStreamInput.setText(customStreamUrl);
-        customStreamInput.setHint("https://.../station.m3u");
-        customStreamInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        styleInput(customStreamInput);
-        streaming.addView(customStreamInput, marginBottom(12));
-        Button customPlay = secondaryButton("URL 재생");
-        customPlay.setOnClickListener(view -> playCustomStream());
-        streaming.addView(customPlay, marginBottom(12));
-        streamStatusText = muted(streamStatus, 13);
-        streaming.addView(streamStatusText, matchWrap());
-        root.addView(streaming, marginBottom(18));
         return root;
     }
 
@@ -374,7 +418,7 @@ public final class MainActivity extends Activity {
         TextView category = text(station.category(), 12, android.R.color.white, true);
         category.setAlpha(0.86f);
         card.addView(category, marginBottom(10));
-        card.addView(text(station.title(), 20, android.R.color.white, true), marginBottom(8));
+        card.addView(text(station.title(), 18, android.R.color.white, true), marginBottom(8));
         card.addView(text(station.subtitle(), 13, android.R.color.white, false), marginBottom(12));
         TextView description = text(station.description(), 12, android.R.color.white, false);
         description.setAlpha(0.82f);
@@ -473,12 +517,15 @@ public final class MainActivity extends Activity {
 
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
+        Button play = primaryButton("재생");
+        play.setOnClickListener(view -> playTrack(selectedTrack));
         Button open = secondaryButton("열기");
         open.setOnClickListener(view -> openSelectedTrack());
         Button share = secondaryButton("공유");
         share.setOnClickListener(view -> shareSelectedTrack());
         Button delete = dangerButton("삭제");
         delete.setOnClickListener(view -> deleteSelectedTrack());
+        actions.addView(play, weightedButtonParams(6));
         actions.addView(open, weightedButtonParams(6));
         actions.addView(share, weightedButtonParams(6));
         actions.addView(delete, new LinearLayout.LayoutParams(0, dp(44), 1f));
@@ -581,109 +628,80 @@ public final class MainActivity extends Activity {
         return root;
     }
 
-    private void playStation(MusicStation station) {
-        releaseMediaPlayer();
-        activeStation = station;
-        streamReady = false;
-        streamPreparing = true;
-        int version = ++streamRequestVersion;
-        setStreamingStatus("연결 중: " + station.title());
-        updateNowPlayingBar();
-
-        streamExecutor.execute(() -> {
-            try {
-                String resolvedUrl = StreamUrlResolver.resolve(station.streamUrl());
-                runOnUiThread(() -> prepareMediaPlayer(version, station, resolvedUrl));
-            } catch (Exception exception) {
-                runOnUiThread(() -> {
-                    if (version != streamRequestVersion) {
-                        return;
-                    }
-                    releaseMediaPlayer();
-                    streamPreparing = false;
-                    streamReady = false;
-                    setStreamingStatus("스트림 연결 실패: " + exception.getMessage());
-                    updateNowPlayingBar();
-                });
-            }
-        });
+    private MusicStation firstStation() {
+        List<MusicStation> stations = StationCatalog.recommendedStations(libraryTracks);
+        return stations.isEmpty() ? null : stations.get(0);
     }
 
-    private void prepareMediaPlayer(int version, MusicStation station, String resolvedUrl) {
-        if (version != streamRequestVersion) {
+    private MusicStation singleTrackStation(DeviceAudioTrack track) {
+        return new MusicStation(
+                "track-" + track.id(),
+                "선택한 파일",
+                "파일 재생",
+                track.artist(),
+                track.displayName(),
+                MusicStation.MixType.ALL,
+                "",
+                color(R.color.ytet_accent)
+        );
+    }
+
+    private void playStation(MusicStation station) {
+        if (station == null) {
+            toast("재생할 음악이 없습니다.");
             return;
         }
-        try {
-            releaseMediaPlayer();
-            mediaPlayer = new MediaPlayer();
-            mediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
-            mediaPlayer.setDataSource(this, Uri.parse(resolvedUrl));
-            mediaPlayer.setOnPreparedListener(player -> {
-                if (version != streamRequestVersion) {
-                    return;
-                }
-                streamPreparing = false;
-                streamReady = true;
-                player.start();
-                setStreamingStatus("재생 중: " + station.subtitle());
-                updateNowPlayingBar();
-            });
-            mediaPlayer.setOnErrorListener((player, what, extra) -> {
-                if (version != streamRequestVersion) {
-                    return true;
-                }
-                streamPreparing = false;
-                streamReady = false;
-                setStreamingStatus("재생 오류가 발생했습니다. 다른 스테이션을 선택해 보세요.");
-                updateNowPlayingBar();
-                return true;
-            });
-            mediaPlayer.prepareAsync();
-        } catch (Exception exception) {
-            streamPreparing = false;
-            streamReady = false;
-            setStreamingStatus("재생 준비 실패: " + exception.getMessage());
-            updateNowPlayingBar();
+        List<DeviceAudioTrack> queue = MusicLibrary.tracksForStation(libraryTracks, station);
+        if (queue.isEmpty()) {
+            toast("이 믹스에 포함할 음악이 없습니다.");
+            return;
         }
+        activeStation = station;
+        playbackHasQueue = true;
+        playbackPlaying = false;
+        playbackPreparing = true;
+        playbackTitle = station.title();
+        playbackMeta = station.subtitle();
+        setStreamingStatus("준비 중: " + station.title());
+        updateNowPlayingBar();
+        startPlayback(PlaybackService.playQueueIntent(this, station, queue));
     }
 
-    private void playCustomStream() {
-        customStreamUrl = customStreamInput == null ? "" : customStreamInput.getText().toString().trim();
-        try {
-            playStation(MusicStation.custom(customStreamUrl));
-        } catch (IllegalArgumentException exception) {
-            toast(exception.getMessage());
+    private void playTrack(DeviceAudioTrack track) {
+        if (track == null) {
+            return;
         }
+        MusicStation station = singleTrackStation(track);
+        activeStation = station;
+        playbackHasQueue = true;
+        playbackPlaying = false;
+        playbackPreparing = true;
+        playbackTitle = track.title();
+        playbackMeta = track.artist() + " · " + track.folder();
+        setStreamingStatus("준비 중: " + track.title());
+        updateNowPlayingBar();
+        List<DeviceAudioTrack> queue = new ArrayList<>();
+        queue.add(track);
+        startPlayback(PlaybackService.playQueueIntent(this, station, queue));
     }
 
     private void toggleStreamPlayback() {
-        if (mediaPlayer != null && streamReady) {
-            if (mediaPlayer.isPlaying()) {
-                mediaPlayer.pause();
-                setStreamingStatus("일시정지: " + activeStation.title());
-            } else {
-                mediaPlayer.start();
-                setStreamingStatus("재생 중: " + activeStation.subtitle());
-            }
-            updateNowPlayingBar();
+        if (playbackHasQueue || activeStation != null) {
+            startPlayback(PlaybackService.commandIntent(this, PlaybackService.ACTION_TOGGLE));
             return;
         }
-        if (!streamPreparing) {
-            playStation(activeStation == null ? stations.get(0) : activeStation);
+        if (!playbackPreparing) {
+            playStation(activeStation == null ? firstStation() : activeStation);
         }
     }
 
-    private void releaseMediaPlayer() {
-        if (mediaPlayer == null) {
-            return;
+    private void startPlayback(Intent intent) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                && PlaybackService.ACTION_PLAY_QUEUE.equals(intent.getAction())) {
+            startForegroundService(intent);
+        } else {
+            startService(intent);
         }
-        try {
-            mediaPlayer.reset();
-            mediaPlayer.release();
-        } catch (IllegalStateException ignored) {
-            mediaPlayer.release();
-        }
-        mediaPlayer = null;
     }
 
     private void setStreamingStatus(String status) {
@@ -697,16 +715,15 @@ public final class MainActivity extends Activity {
         if (nowPlayingTitle == null || nowPlayingMeta == null || playPauseButton == null) {
             return;
         }
-        if (activeStation == null) {
-            nowPlayingTitle.setText("스트리밍 대기");
-            nowPlayingMeta.setText("홈에서 추천 스테이션을 선택하세요.");
+        if (!playbackHasQueue && activeStation == null) {
+            nowPlayingTitle.setText("로컬 재생 대기");
+            nowPlayingMeta.setText("기기 음악을 스캔하면 재생할 수 있습니다.");
             playPauseButton.setText("재생");
             return;
         }
-        nowPlayingTitle.setText(activeStation.title());
-        nowPlayingMeta.setText(streamPreparing ? "연결 중" : streamStatus);
-        boolean playing = mediaPlayer != null && streamReady && mediaPlayer.isPlaying();
-        playPauseButton.setText(playing ? "일시정지" : "재생");
+        nowPlayingTitle.setText(playbackTitle);
+        nowPlayingMeta.setText(playbackPreparing ? streamStatus : playbackMeta);
+        playPauseButton.setText(playbackPlaying ? "일시정지" : "재생");
     }
 
     private void startLibraryRefresh(boolean renderImmediately) {
@@ -729,7 +746,7 @@ public final class MainActivity extends Activity {
                     libraryStatus = tracks.isEmpty()
                             ? "기기에서 음악 파일을 찾지 못했습니다."
                             : "스캔 완료";
-                    renderLibraryIfCurrent();
+                    renderLibraryDependentTabs();
                 });
             } catch (Exception exception) {
                 runOnUiThread(() -> {
@@ -738,14 +755,14 @@ public final class MainActivity extends Activity {
                     libraryTracks = new ArrayList<>();
                     selectedTrack = null;
                     libraryStatus = "스캔 실패: " + exception.getMessage();
-                    renderLibraryIfCurrent();
+                    renderLibraryDependentTabs();
                 });
             }
         });
     }
 
-    private void renderLibraryIfCurrent() {
-        if (currentTab == Tab.LIBRARY) {
+    private void renderLibraryDependentTabs() {
+        if (currentTab == Tab.HOME || currentTab == Tab.LIBRARY) {
             renderCurrentTab();
         }
     }
@@ -891,6 +908,10 @@ public final class MainActivity extends Activity {
         return safeStage + " · " + message.trim();
     }
 
+    private static String valueOrDefault(String value, String fallback) {
+        return value == null || value.trim().isEmpty() ? fallback : value.trim();
+    }
+
     private void updateModeOptions() {
         if (optionSpinner == null || subtitlesCheck == null) {
             return;
@@ -984,9 +1005,6 @@ public final class MainActivity extends Activity {
     }
 
     private void saveCurrentTabInputs() {
-        if (currentTab == Tab.HOME && customStreamInput != null) {
-            customStreamUrl = customStreamInput.getText().toString().trim();
-        }
         if (currentTab == Tab.EXTRACTOR) {
             saveExtractorInputs();
         }

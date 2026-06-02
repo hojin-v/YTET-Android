@@ -1,4 +1,5 @@
 <resources>
     <string name="app_name">YTET</string>
     <string name="notification_channel_name">추출 작업</string>
+    <string name="playback_notification_channel_name">음악 재생</string>
 </resources>

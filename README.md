@@ -4,7 +4,7 @@
 
 YouTube Extractor Toolkit
 
-Android 저장소에서 개발되는 YTET 모바일 앱입니다. 앱 표시 이름은 `YTET`이며, 홈 스트리밍, 디바이스 음악 관리, YouTube 추출기를 하단 탭으로 제공합니다.
+Android 저장소에서 개발되는 YTET 모바일 앱입니다. 앱 표시 이름은 `YTET`이며, 로컬 음악 스트리밍, 디바이스 음악 관리, YouTube 추출기를 하단 탭으로 제공합니다.
 
 [![CI](https://github.com/hojin-v/YTET-Android/actions/workflows/ci.yml/badge.svg)](https://github.com/hojin-v/YTET-Android/actions/workflows/ci.yml)
 [![Release](https://github.com/hojin-v/YTET-Android/actions/workflows/release.yml/badge.svg)](https://github.com/hojin-v/YTET-Android/actions/workflows/release.yml)
@@ -18,24 +18,26 @@ Android 저장소에서 개발되는 YTET 모바일 앱입니다. 앱 표시 이
 
 ## Overview
 
-YTET는 기존 YouTube 추출기 기능을 유지하면서, 음악 앱처럼 빠르게 들을 수 있는 홈과 기기 내 음악 파일 관리 화면을 추가한 Android 앱입니다.
+YTET는 기존 YouTube 추출기 기능을 유지하면서, 기기에 저장된 음악을 앱 안에서 빠르게 듣고 관리하는 Android 앱입니다.
 
-하단 탭은 `홈`, `내 음악`, `추출기`로 구성됩니다. 홈은 추천 아티스트/장르 믹스와 직접 스트리밍 URL 재생을 제공하고, 내 음악은 Android MediaStore 기반으로 폴더와 파일을 스캔합니다. 추출 작업은 기존처럼 사용자가 저장 폴더를 직접 선택하고 foreground service에서 진행됩니다.
+하단 탭은 `홈`, `내 음악`, `추출기`로 구성됩니다. 홈은 Android MediaStore에서 읽은 로컬 음악만으로 전체 셔플, 아티스트 믹스, 폴더 믹스를 만들고, 내 음악은 폴더와 파일을 스캔해 재생/공유/삭제를 제공합니다. 추출 작업은 기존처럼 사용자가 저장 폴더를 직접 선택하고 foreground service에서 진행됩니다.
 
 | Tab | Best For | Main Actions |
 | --- | --- | --- |
-| Home | 추천 스테이션과 스트리밍 | 아티스트 믹스, 장르 믹스, 직접 URL 재생 |
-| Library | 디바이스 음악 폴더/파일 관리 | 폴더 필터, 파일 열기, 공유, 삭제 |
+| Home | 로컬 추천 믹스와 스트리밍 | 전체 셔플, 아티스트 믹스, 폴더 믹스 |
+| Library | 디바이스 음악 폴더/파일 관리 | 폴더 필터, 앱 내 재생, 파일 열기, 공유, 삭제 |
 | Extractor | 권한이 있는 YouTube 링크 저장 | `M4A`, Original Opus, `MP4`/`MKV`, 자막 |
 
 ## Features
 
 | Feature | Description |
 | --- | --- |
-| 홈 추천 스테이션 | Spotify식 하단 플레이어와 카드형 추천 목록으로 아티스트/장르 믹스를 재생합니다. |
-| 스트리밍 URL 해석 | `.m3u`, `.m3u8`, `.pls` 플레이리스트에서 실제 오디오 URL을 찾아 Android `MediaPlayer`로 재생합니다. |
+| 홈 추천 믹스 | Spotify식 하단 플레이어와 카드형 추천 목록으로 실제 보유 음악 기반 믹스를 재생합니다. |
+| 로컬 스트리밍 재생 | MediaStore content URI로 기기 내 음악을 앱 안에서 재생합니다. |
+| 백그라운드 플레이어 | 화면을 잠그거나 앱을 나가도 foreground media playback service가 재생을 유지하고 알림/잠금화면 컨트롤을 제공합니다. |
+| 검증 가능한 분류 | 무드나 장르를 추측하지 않고 실제 아티스트 메타데이터와 폴더명 기준으로 믹스를 만듭니다. |
 | 디바이스 음악 관리 | `READ_MEDIA_AUDIO` 또는 `READ_EXTERNAL_STORAGE` 권한으로 MediaStore 음악을 폴더별로 정리합니다. |
-| 파일 액션 | 선택한 음악 파일을 열기, 공유, Android 삭제 확인 플로우로 관리합니다. |
+| 파일 액션 | 선택한 음악 파일을 앱 안에서 재생하거나 열기, 공유, Android 삭제 확인 플로우로 관리합니다. |
 | URL 기반 추출 | 권한이 있는 YouTube URL을 넣고 저장 폴더를 고르면 추출을 시작합니다. |
 | Android 폴더 선택 | Storage Access Framework로 사용자가 지정한 폴더에 결과를 저장합니다. |
 | 백그라운드 진행 | foreground service와 알림으로 추출 진행 상태를 표시합니다. |
@@ -48,8 +50,8 @@ YTET는 기존 YouTube 추출기 기능을 유지하면서, 음악 앱처럼 빠
 
 1. [Releases](https://github.com/hojin-v/YTET-Android/releases)에서 최신 `YTET-Android-버전-debug.apk` 또는 ZIP을 받습니다.
 2. APK를 Android 기기에 설치합니다.
-3. `홈`에서 추천 스테이션을 선택하거나 직접 스트리밍 URL을 입력합니다.
-4. `내 음악`에서 오디오 권한을 허용하면 기기 음악을 폴더별로 볼 수 있습니다.
+3. `홈`에서 오디오 권한을 허용한 뒤 기기 음악 기반 추천 믹스를 재생합니다.
+4. `내 음악`에서 기기 음악을 폴더별로 보고 선택한 파일을 앱 안에서 재생합니다.
 5. `추출기`에서 권한이 있는 YouTube URL을 입력합니다.
 6. `음원` 또는 `영상`, 저장 폴더, 포맷 또는 품질을 고릅니다.
 7. 영상일 경우 `자막 포함`을 필요에 맞게 선택한 뒤 `추출`을 누릅니다.
@@ -58,16 +60,17 @@ YTET는 기존 YouTube 추출기 기능을 유지하면서, 음악 앱처럼 빠
 
 ## Streaming
 
-홈 탭은 추천 스테이션과 하단 미니 플레이어를 중심으로 구성됩니다. 기본 스테이션은 공개 인터넷 라디오의 영구 M3U 플레이리스트 URL을 사용하고, 앱 내부의 `StreamUrlResolver`가 `.m3u`, `.pls` 파일에서 첫 번째 재생 가능한 네트워크 URL을 해석합니다. HLS `.m3u8`은 Android `MediaPlayer`가 전체 플레이리스트를 처리하도록 원본 URL을 그대로 전달합니다.
+홈 탭은 추천 믹스와 하단 미니 플레이어를 중심으로 구성됩니다. 여기서 스트리밍은 외부 라디오나 네트워크 URL을 가져오는 기능이 아니라, 디바이스에 저장된 음악 파일을 앱 내부 플레이어로 이어서 재생하는 로컬 스트리밍을 뜻합니다.
 
-일부 인터넷 라디오 플레이리스트는 HTTPS로 제공되더라도 내부 오디오 스트림은 `http://` URL일 수 있습니다. YTET는 홈 스트리밍과 직접 URL 재생을 위해 Android 네트워크 보안 설정에서 cleartext 오디오 스트림을 허용합니다.
+추천 목록은 세 가지 흐름으로 나뉩니다.
 
-추천 목록은 두 종류로 나뉩니다.
+- 전체 셔플: 디바이스에 저장된 모든 음악을 섞어 재생
+- 아티스트 믹스: MediaStore의 아티스트 값이 정확히 같은 곡만 묶은 셔플
+- 폴더 믹스: 디바이스 폴더명이 같은 곡만 묶은 셔플
 
-- 아티스트 믹스: 특정 아티스트 감성을 기준으로 이름과 설명을 붙인 추천 카드
-- 장르 믹스: Downtempo, Deep House, Ambient 같은 장르 흐름 중심 카드
+YTET는 사용자가 보유하지 않은 음악 취향을 추측해 “밤에 어울리는 음악”, “차분한 힙합” 같은 테마를 만들지 않습니다. 그런 분류는 오분류를 만들 수 있으므로, 앱은 실제 파일 메타데이터와 폴더 구조에서 확인되는 값만 사용합니다.
 
-직접 스트리밍 URL 입력도 지원하므로 사용자가 가진 라디오/오디오 스트림을 홈에서 바로 재생할 수 있습니다.
+재생은 `PlaybackService`에서 foreground media playback으로 유지됩니다. 앱을 나가거나 화면을 잠근 뒤에도 재생이 이어지며, Android 알림 영역과 잠금화면에서 이전, 재생/일시정지, 다음 컨트롤을 사용할 수 있습니다.
 
 ## Library
 
@@ -78,7 +81,7 @@ YTET는 기존 YouTube 추출기 기능을 유지하면서, 음악 앱처럼 빠
 | Android 13+ | `READ_MEDIA_AUDIO` |
 | Android 12L and below | `READ_EXTERNAL_STORAGE` |
 
-스캔된 음악은 폴더 칩과 파일 목록으로 표시됩니다. 파일을 선택하면 열기, 공유, 삭제 작업을 실행할 수 있으며, Android 11 이상에서는 시스템 삭제 확인 화면을 거칩니다.
+스캔된 음악은 폴더 칩과 파일 목록으로 표시됩니다. 파일을 선택하면 앱 내 재생, 열기, 공유, 삭제 작업을 실행할 수 있으며, Android 11 이상에서는 시스템 삭제 확인 화면을 거칩니다.
 
 ## Extractor
 

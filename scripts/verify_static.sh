@@ -8,12 +8,15 @@ required=(
   "$root/build.gradle"
   "$root/app/build.gradle"
   "$root/app/src/main/AndroidManifest.xml"
-  "$root/app/src/main/res/xml/network_security_config.xml"
   "$root/app/src/main/java/com/ytet/android/ui/MainActivity.java"
   "$root/app/src/main/java/com/ytet/android/extract/ExtractionService.java"
+  "$root/app/src/main/java/com/ytet/android/playback/PlaybackService.java"
+  "$root/app/src/main/java/com/ytet/android/stream/StationCatalog.java"
+  "$root/app/src/main/java/com/ytet/android/library/MusicLibrary.java"
   "$root/app/src/main/java/com/ytet/android/extract/YtDlpPythonEngine.java"
   "$root/app/src/main/java/com/ytet/android/extract/MediaTrackMuxer.java"
   "$root/app/src/main/java/com/ytet/android/extract/ExtractionOutputs.java"
+  "$root/app/src/main/res/drawable/ic_stat_playback.xml"
   "$root/app/src/main/python/ytet_ydl.py"
   "$root/app/src/test/java/com/ytet/android/core/YoutubeUrlValidatorTest.java"
   "$root/app/src/test/java/com/ytet/android/core/ExtractionRequestTest.java"
@@ -21,6 +24,8 @@ required=(
   "$root/app/src/test/java/com/ytet/android/extract/ExtractionOutputsTest.java"
   "$root/app/src/test/java/com/ytet/android/extract/MediaTrackMuxerTest.java"
   "$root/app/src/test/java/com/ytet/android/extract/StorageWriterTest.java"
+  "$root/app/src/test/java/com/ytet/android/stream/StationCatalogTest.java"
+  "$root/app/src/test/java/com/ytet/android/library/MusicLibraryTest.java"
   "$root/scripts/test_python_engine.sh"
   "$root/scripts/verify_apk_runtime.sh"
   "$root/app/src/main/java/com/ytet/android/core/YoutubeUrlValidator.java"
@@ -44,11 +49,16 @@ grep -q 'yt-dlp==2026.3.17' "$root/app/build.gradle"
 grep -q 'yt-dlp-ejs==0.8.0' "$root/app/build.gradle"
 grep -q 'mutagen==1.47.0' "$root/app/build.gradle"
 grep -q 'android.permission.FOREGROUND_SERVICE' "$root/app/src/main/AndroidManifest.xml"
+grep -q 'android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK' "$root/app/src/main/AndroidManifest.xml"
 grep -q 'android:allowBackup="false"' "$root/app/src/main/AndroidManifest.xml"
-grep -q 'android:networkSecurityConfig="@xml/network_security_config"' "$root/app/src/main/AndroidManifest.xml"
-grep -q 'cleartextTrafficPermitted="true"' "$root/app/src/main/res/xml/network_security_config.xml"
+grep -q 'android:foregroundServiceType="mediaPlayback"' "$root/app/src/main/AndroidManifest.xml"
 grep -q 'ACTION_OPEN_DOCUMENT_TREE' "$root/app/src/main/java/com/ytet/android/ui/MainActivity.java"
 grep -q 'new YtDlpPythonEngine()' "$root/app/src/main/java/com/ytet/android/extract/ExtractionService.java"
+grep -q 'MediaSession' "$root/app/src/main/java/com/ytet/android/playback/PlaybackService.java"
+grep -q 'Notification.MediaStyle' "$root/app/src/main/java/com/ytet/android/playback/PlaybackService.java"
+grep -q 'FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK' "$root/app/src/main/java/com/ytet/android/playback/PlaybackService.java"
+grep -q 'recommendedStations' "$root/app/src/main/java/com/ytet/android/stream/StationCatalog.java"
+grep -q 'tracksForStation' "$root/app/src/main/java/com/ytet/android/library/MusicLibrary.java"
 grep -q 'Python.start' "$root/app/src/main/java/com/ytet/android/extract/YtDlpPythonEngine.java"
 grep -q 'MediaTrackMuxer.mergeWorkspace' "$root/app/src/main/java/com/ytet/android/extract/YtDlpPythonEngine.java"
 grep -q 'FFmpegKit.executeWithArguments' "$root/app/src/main/java/com/ytet/android/extract/MediaTrackMuxer.java"
@@ -75,6 +85,11 @@ fi
 
 if grep -R "app/src/main/assets/runtime/<ABI>" "$root/app/src/main/java" "$root/README.md" "$root/docs" >/dev/null; then
   echo "stale executable asset runtime instructions found" >&2
+  exit 1
+fi
+
+if grep -R "somafm\\|StreamUrlResolver\\|cleartextTrafficPermitted\\|android:networkSecurityConfig\\|station\\.m3u\\|직접 스트리밍 URL\\|인터넷 라디오" "$root/app/src" "$root/README.md" >/dev/null; then
+  echo "external radio or playlist streaming reference found" >&2
   exit 1
 fi
 

@@ -1,10 +1,13 @@
 package com.ytet.android.library;
 
+import com.ytet.android.stream.MusicStation;
+
 import org.junit.Test;
 
 import java.util.List;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 
 public final class MusicLibraryTest {
     @Test
@@ -29,17 +32,54 @@ public final class MusicLibraryTest {
         assertEquals("1.5 MB", MusicLibrary.formatBytes(1_572_864));
     }
 
+    @Test
+    public void selectsStationQueuesFromExactLocalFields() {
+        DeviceAudioTrack first = track(1, "Alpha", "Artist A", "Camera");
+        DeviceAudioTrack second = track(2, "Beta", "Artist A", "Downloads");
+        DeviceAudioTrack third = track(3, "Gamma", "Artist B", "Camera");
+
+        MusicStation artist = station(MusicStation.MixType.ARTIST, "Artist A");
+        MusicStation folder = station(MusicStation.MixType.FOLDER, "Camera");
+        MusicStation all = station(MusicStation.MixType.ALL, "");
+
+        List<DeviceAudioTrack> artistTracks = MusicLibrary.tracksForStation(List.of(first, second, third), artist);
+        List<DeviceAudioTrack> folderTracks = MusicLibrary.tracksForStation(List.of(first, second, third), folder);
+
+        assertEquals(2, artistTracks.size());
+        assertTrue(artistTracks.stream().allMatch(track -> "Artist A".equals(track.artist())));
+        assertEquals(2, folderTracks.size());
+        assertTrue(folderTracks.stream().allMatch(track -> "Camera".equals(track.folder())));
+        assertEquals(3, MusicLibrary.tracksForStation(List.of(first, second, third), all).size());
+    }
+
     private DeviceAudioTrack track(long id, String title, String folder) {
+        return track(id, title, "Artist", folder);
+    }
+
+    private DeviceAudioTrack track(long id, String title, String artist, String folder) {
         return new DeviceAudioTrack(
                 id,
                 title,
-                "Artist",
+                artist,
                 "Album",
                 title + ".mp3",
                 folder,
                 "content://audio/" + id,
                 1000,
                 1024
+        );
+    }
+
+    private MusicStation station(MusicStation.MixType mixType, String mixValue) {
+        return new MusicStation(
+                "test",
+                "Test",
+                "Test",
+                "Test",
+                "Test",
+                mixType,
+                mixValue,
+                0
         );
     }
 }
