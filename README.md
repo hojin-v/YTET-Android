@@ -1,10 +1,10 @@
 <div align="center">
 
-# YTET Android
+# YTET
 
-YouTube Extractor Toolkit for Android
+YouTube Extractor Toolkit
 
-YouTube 미디어 스트림과 메타데이터 동작을 확인하는 Android용 모바일 도구입니다.
+Android 저장소에서 개발되는 YTET 모바일 앱입니다. 앱 표시 이름은 `YTET`이며, 홈 스트리밍, 디바이스 음악 관리, YouTube 추출기를 하단 탭으로 제공합니다.
 
 [![CI](https://github.com/hojin-v/YTET-Android/actions/workflows/ci.yml/badge.svg)](https://github.com/hojin-v/YTET-Android/actions/workflows/ci.yml)
 [![Release](https://github.com/hojin-v/YTET-Android/actions/workflows/release.yml/badge.svg)](https://github.com/hojin-v/YTET-Android/actions/workflows/release.yml)
@@ -12,26 +12,30 @@ YouTube 미디어 스트림과 메타데이터 동작을 확인하는 Android용
 ![Platform](https://img.shields.io/badge/platform-Android-3DDC84)
 ![Java](https://img.shields.io/badge/java-17-ED8B00)
 
-[Download](https://github.com/hojin-v/YTET-Android/releases) · [Features](#features) · [Tech Stack](#tech-stack) · [Caution](#caution)
+[Download](https://github.com/hojin-v/YTET-Android/releases) · [Features](#features) · [Streaming](#streaming) · [Library](#library) · [Extractor](#extractor) · [Caution](#caution)
 
 </div>
 
 ## Overview
 
-YTET Android는 권한이 있는 YouTube 링크를 대상으로 오디오/영상 스트림, 메타데이터, 자막 처리를 확인합니다.
+YTET는 기존 YouTube 추출기 기능을 유지하면서, 음악 앱처럼 빠르게 들을 수 있는 홈과 기기 내 음악 파일 관리 화면을 추가한 Android 앱입니다.
 
-Android 저장소 권한 모델에 맞춰 사용자가 저장 폴더를 직접 선택하고, 추출 작업은 foreground service에서 진행됩니다. 추출 엔진은 프로젝트 내부의 `YtDlpPythonEngine`이 담당하며, APK에 포함된 Python 런타임과 `yt-dlp` 패키지로 다운로드를 실행합니다.
+하단 탭은 `홈`, `내 음악`, `추출기`로 구성됩니다. 홈은 추천 아티스트/장르 믹스와 직접 스트리밍 URL 재생을 제공하고, 내 음악은 Android MediaStore 기반으로 폴더와 파일을 스캔합니다. 추출 작업은 기존처럼 사용자가 저장 폴더를 직접 선택하고 foreground service에서 진행됩니다.
 
-| Mode | Best For | Output |
+| Tab | Best For | Main Actions |
 | --- | --- | --- |
-| Audio | 오디오 포맷과 메타데이터 확인 | `M4A (AAC)`, `Original Opus` |
-| Video | 영상 스트림과 컨테이너 확인 | 최고품질 `MKV` 또는 호환 우선 `MP4` |
-| Subtitles | 선택형 한국어/영어 등록 자막 | 가능한 경우 영상 내부 자막 트랙 |
+| Home | 추천 스테이션과 스트리밍 | 아티스트 믹스, 장르 믹스, 직접 URL 재생 |
+| Library | 디바이스 음악 폴더/파일 관리 | 폴더 필터, 파일 열기, 공유, 삭제 |
+| Extractor | 권한이 있는 YouTube 링크 저장 | `M4A`, Original Opus, `MP4`/`MKV`, 자막 |
 
 ## Features
 
 | Feature | Description |
 | --- | --- |
+| 홈 추천 스테이션 | Spotify식 하단 플레이어와 카드형 추천 목록으로 아티스트/장르 믹스를 재생합니다. |
+| 스트리밍 URL 해석 | `.m3u`, `.m3u8`, `.pls` 플레이리스트에서 실제 오디오 URL을 찾아 Android `MediaPlayer`로 재생합니다. |
+| 디바이스 음악 관리 | `READ_MEDIA_AUDIO` 또는 `READ_EXTERNAL_STORAGE` 권한으로 MediaStore 음악을 폴더별로 정리합니다. |
+| 파일 액션 | 선택한 음악 파일을 열기, 공유, Android 삭제 확인 플로우로 관리합니다. |
 | URL 기반 추출 | 권한이 있는 YouTube URL을 넣고 저장 폴더를 고르면 추출을 시작합니다. |
 | Android 폴더 선택 | Storage Access Framework로 사용자가 지정한 폴더에 결과를 저장합니다. |
 | 백그라운드 진행 | foreground service와 알림으로 추출 진행 상태를 표시합니다. |
@@ -44,13 +48,39 @@ Android 저장소 권한 모델에 맞춰 사용자가 저장 폴더를 직접 �
 
 1. [Releases](https://github.com/hojin-v/YTET-Android/releases)에서 최신 `YTET-Android-버전-debug.apk` 또는 ZIP을 받습니다.
 2. APK를 Android 기기에 설치합니다.
-3. 권한이 있는 YouTube URL을 입력합니다.
-4. `음원` 또는 `영상`을 선택합니다.
-5. 저장 폴더와 포맷 또는 품질을 고릅니다.
-6. 영상일 경우 `자막 포함`을 필요에 맞게 선택합니다.
-7. `추출`을 누릅니다.
+3. `홈`에서 추천 스테이션을 선택하거나 직접 스트리밍 URL을 입력합니다.
+4. `내 음악`에서 오디오 권한을 허용하면 기기 음악을 폴더별로 볼 수 있습니다.
+5. `추출기`에서 권한이 있는 YouTube URL을 입력합니다.
+6. `음원` 또는 `영상`, 저장 폴더, 포맷 또는 품질을 고릅니다.
+7. 영상일 경우 `자막 포함`을 필요에 맞게 선택한 뒤 `추출`을 누릅니다.
 
 > 현재 저장소는 `io.github.junkfood02.youtubedl-android` 같은 GPL Android wrapper에 의존하지 않습니다. `yt-dlp`는 Chaquopy 기반 내장 Python 런타임으로 APK에 포함되며, 영상 병합에는 Android NDK 기반 `FFmpegKit`, M4A 커버 태깅에는 `mutagen`, YouTube JS challenge script 패키지에는 `yt-dlp-ejs`를 사용합니다.
+
+## Streaming
+
+홈 탭은 추천 스테이션과 하단 미니 플레이어를 중심으로 구성됩니다. 기본 스테이션은 공개 인터넷 라디오의 영구 M3U 플레이리스트 URL을 사용하고, 앱 내부의 `StreamUrlResolver`가 `.m3u`, `.m3u8`, `.pls` 파일에서 첫 번째 재생 가능한 네트워크 URL을 해석합니다.
+
+추천 목록은 두 종류로 나뉩니다.
+
+- 아티스트 믹스: 특정 아티스트 감성을 기준으로 이름과 설명을 붙인 추천 카드
+- 장르 믹스: Downtempo, Deep House, Ambient 같은 장르 흐름 중심 카드
+
+직접 스트리밍 URL 입력도 지원하므로 사용자가 가진 라디오/오디오 스트림을 홈에서 바로 재생할 수 있습니다.
+
+## Library
+
+내 음악 탭은 Android MediaStore를 사용합니다.
+
+| Android Version | Permission |
+| --- | --- |
+| Android 13+ | `READ_MEDIA_AUDIO` |
+| Android 12L and below | `READ_EXTERNAL_STORAGE` |
+
+스캔된 음악은 폴더 칩과 파일 목록으로 표시됩니다. 파일을 선택하면 열기, 공유, 삭제 작업을 실행할 수 있으며, Android 11 이상에서는 시스템 삭제 확인 화면을 거칩니다.
+
+## Extractor
+
+추출기 탭은 기존 YouTube 저장 기능을 유지합니다.
 
 ## Audio
 
@@ -214,7 +244,7 @@ YouTube JS challenge 처리를 위한 `yt-dlp-ejs` script package는 포함되�
 
 - 권한이 있는 콘텐츠에만 사용하세요.
 - YouTube 서비스 약관과 지역 법규를 확인해야 합니다.
-- YTET Android는 YouTube 또는 Google과 관련이 없습니다.
+- YTET는 YouTube 또는 Google과 관련이 없습니다.
 - 영상 제공 품질과 자막 여부는 YouTube와 업로더 설정에 따라 달라집니다.
 - MP3 변환은 Android 경로에 아직 포팅하지 않았습니다.
 - 내장 Python, `yt-dlp`, `mutagen`, `FFmpegKit` 등 함께 배포되는 런타임의 라이선스와 고지 의무를 확인해야 합니다.
