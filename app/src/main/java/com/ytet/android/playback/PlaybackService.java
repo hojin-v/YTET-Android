@@ -222,11 +222,12 @@ public final class PlaybackService extends Service {
         if (version != queueLoadVersion) {
             return;
         }
+        boolean shouldStartWhenPrepared = startWhenPrepared;
         queue.clear();
         queue.addAll(loadedTracks);
         queueIndex = 0;
         failedTrackSkips = 0;
-        prepareCurrentTrack();
+        prepareCurrentTrack(shouldStartWhenPrepared);
     }
 
     private void handleQueueLoadFailure(int version, Exception exception) {
@@ -245,6 +246,10 @@ public final class PlaybackService extends Service {
     }
 
     private void prepareCurrentTrack() {
+        prepareCurrentTrack(true);
+    }
+
+    private void prepareCurrentTrack(boolean shouldStartWhenPrepared) {
         if (queue.isEmpty()) {
             errorStatus = "재생할 로컬 음악이 없습니다.";
             preparing = false;
@@ -260,7 +265,7 @@ public final class PlaybackService extends Service {
         int version = ++playbackVersion;
         preparing = true;
         playing = false;
-        startWhenPrepared = true;
+        startWhenPrepared = shouldStartWhenPrepared;
         errorStatus = null;
         updateTransportState();
         showNotification();
@@ -409,6 +414,8 @@ public final class PlaybackService extends Service {
     }
 
     private void stopPlayback() {
+        queueLoadVersion++;
+        playbackVersion++;
         queue.clear();
         queueIndex = 0;
         failedTrackSkips = 0;
@@ -452,7 +459,7 @@ public final class PlaybackService extends Service {
             pause(false);
             abandonAudioFocus();
         } else if (focusChange == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) {
-            pause(true);
+            pause(playing || (preparing && startWhenPrepared));
         } else if (focusChange == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK) {
             setPlayerVolume(0.25f);
         } else if (focusChange == AudioManager.AUDIOFOCUS_GAIN) {
