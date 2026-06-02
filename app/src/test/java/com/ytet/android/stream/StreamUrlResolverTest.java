@@ -40,4 +40,20 @@ public final class StreamUrlResolverTest {
                 StreamUrlResolver.resolve("https://example.com/live.m3u8")
         );
     }
+
+    @Test
+    public void recognizesPlaylistUrlsWithQueryStrings() {
+        assertEquals(true, StreamUrlResolver.shouldResolvePlaylist("https://example.com/station.m3u?token=abc"));
+        assertEquals(false, StreamUrlResolver.shouldResolvePlaylist("https://example.com/live.m3u8?token=abc"));
+    }
+
+    @Test
+    public void resolvesRelativePlaylistEntriesAgainstOriginalUrl() {
+        String playlist = "#EXTM3U\nstream/live.mp3\n";
+
+        assertEquals(
+                "https://example.com/radio/stream/live.mp3",
+                StreamUrlResolver.resolveFromPlaylist("https://example.com/radio/station.m3u?token=abc", playlist)
+        );
+    }
 }

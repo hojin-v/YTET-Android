@@ -100,6 +100,10 @@ public final class MainActivity extends Activity {
     private int streamRequestVersion;
     private String streamStatus = "추천 스테이션을 선택하세요.";
     private String customStreamUrl = "";
+    private String extractorUrl = "";
+    private MediaType extractorMediaType = MediaType.AUDIO;
+    private String extractorOption = AudioFormat.M4A.value();
+    private boolean extractorIncludeSubtitles;
 
     private List<DeviceAudioTrack> libraryTracks = new ArrayList<>();
     private boolean libraryLoaded;
@@ -143,6 +147,8 @@ public final class MainActivity extends Activity {
 
             if (done) {
                 extractionBusy = false;
+            } else {
+                extractionBusy = true;
             }
             applyExtractionStateToViews();
         }
@@ -195,6 +201,10 @@ public final class MainActivity extends Activity {
             return;
         }
         if (requestCode == REQUEST_DELETE_AUDIO && resultCode == RESULT_OK) {
+            if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q && pendingDeleteTrack != null) {
+                deleteTrackDirectly(pendingDeleteTrack);
+                return;
+            }
             toast("선택한 파일을 삭제했습니다.");
             selectedTrack = null;
             pendingDeleteTrack = null;
@@ -287,6 +297,7 @@ public final class MainActivity extends Activity {
     }
 
     private void showTab(Tab tab) {
+        saveCurrentTabInputs();
         currentTab = tab;
         renderCurrentTab();
     }
@@ -499,6 +510,7 @@ public final class MainActivity extends Activity {
         root.addView(label("YouTube URL"), marginBottom(8));
         urlInput = new EditText(this);
         urlInput.setSingleLine(true);
+        urlInput.setText(extractorUrl);
         urlInput.setHint("https://youtu.be/...");
         urlInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         styleInput(urlInput);
@@ -517,8 +529,14 @@ public final class MainActivity extends Activity {
         videoRadio.setTextColor(color(R.color.ytet_text));
         mediaGroup.addView(audioRadio, radioParams());
         mediaGroup.addView(videoRadio, radioParams());
-        mediaGroup.check(audioRadio.getId());
-        mediaGroup.setOnCheckedChangeListener((group, checkedId) -> updateModeOptions());
+        mediaGroup.check(extractorMediaType == MediaType.VIDEO ? videoRadio.getId() : audioRadio.getId());
+        mediaGroup.setOnCheckedChangeListener((group, checkedId) -> {
+            extractorMediaType = selectedMediaType();
+            extractorOption = extractorMediaType == MediaType.VIDEO
+                    ? VideoQuality.BEST.value()
+                    : AudioFormat.M4A.value();
+            updateModeOptions();
+        });
         root.addView(mediaGroup, marginBottom(16));
 
         root.addView(label("포맷 / 품질"), marginBottom(8));
@@ -529,6 +547,7 @@ public final class MainActivity extends Activity {
         subtitlesCheck = new CheckBox(this);
         subtitlesCheck.setText("한국어/영어 등록 자막 포함");
         subtitlesCheck.setTextColor(color(R.color.ytet_text));
+        subtitlesCheck.setChecked(extractorIncludeSubtitles);
         root.addView(subtitlesCheck, marginBottom(18));
 
         root.addView(label("저장 폴더"), marginBottom(8));
@@ -555,6 +574,7 @@ public final class MainActivity extends Activity {
         root.addView(resultText, matchWrap());
 
         updateModeOptions();
+        selectOption(extractorMediaType, extractorOption);
         updateFolderLabel();
         applyExtractionStateToViews();
         setBusy(extractionBusy);
@@ -562,6 +582,7 @@ public final class MainActivity extends Activity {
     }
 
     private void playStation(MusicStation station) {
+        releaseMediaPlayer();
         activeStation = station;
         streamReady = false;
         streamPreparing = true;
@@ -578,6 +599,7 @@ public final class MainActivity extends Activity {
                     if (version != streamRequestVersion) {
                         return;
                     }
+                    releaseMediaPlayer();
                     streamPreparing = false;
                     streamReady = false;
                     setStreamingStatus("스트림 연결 실패: " + exception.getMessage());
@@ -607,6 +629,9 @@ public final class MainActivity extends Activity {
                 updateNowPlayingBar();
             });
             mediaPlayer.setOnErrorListener((player, what, extra) -> {
+                if (version != streamRequestVersion) {
+                    return true;
+                }
                 streamPreparing = false;
                 streamReady = false;
                 setStreamingStatus("재생 오류가 발생했습니다. 다른 스테이션을 선택해 보세요.");
@@ -708,7 +733,10 @@ public final class MainActivity extends Activity {
                 });
             } catch (Exception exception) {
                 runOnUiThread(() -> {
+                    libraryLoaded = true;
                     libraryLoading = false;
+                    libraryTracks = new ArrayList<>();
+                    selectedTrack = null;
                     libraryStatus = "스캔 실패: " + exception.getMessage();
                     renderLibraryIfCurrent();
                 });
@@ -887,6 +915,7 @@ public final class MainActivity extends Activity {
     }
 
     private void startExtraction() {
+        saveExtractorInputs();
         if (outputTreeUri == null || outputTreeUri.trim().isEmpty()) {
             toast("저장 폴더를 선택하세요.");
             return;
@@ -952,6 +981,46 @@ public final class MainActivity extends Activity {
         subtitlesCheck.setEnabled(!busy);
         chooseFolderButton.setEnabled(!busy);
         extractButton.setEnabled(!busy);
+    }
+
+    private void saveCurrentTabInputs() {
+        if (currentTab == Tab.HOME && customStreamInput != null) {
+            customStreamUrl = customStreamInput.getText().toString().trim();
+        }
+        if (currentTab == Tab.EXTRACTOR) {
+            saveExtractorInputs();
+        }
+    }
+
+    private void saveExtractorInputs() {
+        if (urlInput != null) {
+            extractorUrl = urlInput.getText().toString();
+        }
+        if (mediaGroup != null) {
+            extractorMediaType = selectedMediaType();
+        }
+        if (optionSpinner != null) {
+            extractorOption = selectedOption(extractorMediaType);
+        }
+        if (subtitlesCheck != null) {
+            extractorIncludeSubtitles = subtitlesCheck.isChecked();
+        }
+    }
+
+    private void selectOption(MediaType mediaType, String optionValue) {
+        if (optionSpinner == null) {
+            return;
+        }
+        String label = mediaType == MediaType.VIDEO
+                ? VideoQuality.fromValue(optionValue).label()
+                : AudioFormat.fromValue(optionValue).label();
+        for (int index = 0; index < optionSpinner.getCount(); index++) {
+            Object item = optionSpinner.getItemAtPosition(index);
+            if (item != null && label.equals(item.toString())) {
+                optionSpinner.setSelection(index);
+                return;
+            }
+        }
     }
 
     private void applyExtractionStateToViews() {
