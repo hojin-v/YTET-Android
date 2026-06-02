@@ -18,7 +18,10 @@ public final class StreamUrlResolver {
     public static String resolve(String url) throws IOException {
         String safeUrl = requireUrl(url);
         String lower = safeUrl.toLowerCase(Locale.ROOT);
-        if (!lower.endsWith(".m3u") && !lower.endsWith(".m3u8") && !lower.endsWith(".pls")) {
+        if (lower.endsWith(".m3u8")) {
+            return safeUrl;
+        }
+        if (!lower.endsWith(".m3u") && !lower.endsWith(".pls")) {
             return safeUrl;
         }
 

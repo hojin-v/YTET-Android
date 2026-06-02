@@ -3,6 +3,7 @@ package com.ytet.android.ui;
 import android.Manifest;
 import android.app.Activity;
 import android.app.PendingIntent;
+import android.app.RecoverableSecurityException;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -58,6 +59,7 @@ public final class MainActivity extends Activity {
     private static final int REQUEST_NOTIFICATIONS = 1208;
     private static final int REQUEST_DELETE_AUDIO = 1209;
     private static final int REQUEST_AUDIO_LIBRARY = 1210;
+    private static final int REQUEST_WRITE_LIBRARY = 1211;
     private static final String PREFS = "ytet_android";
     private static final String PREF_OUTPUT_TREE = "output_tree";
 
@@ -105,6 +107,7 @@ public final class MainActivity extends Activity {
     private String libraryStatus = "기기 음악 권한을 허용하면 폴더와 파일을 스캔합니다.";
     private String selectedFolder = MusicLibrary.ALL_FOLDERS;
     private DeviceAudioTrack selectedTrack;
+    private DeviceAudioTrack pendingDeleteTrack;
 
     private String outputTreeUri;
     private int extractionPercent;
@@ -194,6 +197,7 @@ public final class MainActivity extends Activity {
         if (requestCode == REQUEST_DELETE_AUDIO && resultCode == RESULT_OK) {
             toast("선택한 파일을 삭제했습니다.");
             selectedTrack = null;
+            pendingDeleteTrack = null;
             startLibraryRefresh(true);
         }
     }
@@ -202,13 +206,16 @@ public final class MainActivity extends Activity {
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode != REQUEST_AUDIO_LIBRARY) {
+            if (requestCode == REQUEST_WRITE_LIBRARY) {
+                handleWritePermissionResult(grantResults);
+            }
             return;
         }
         if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
             startLibraryRefresh(true);
         } else {
             libraryStatus = "기기 음악을 관리하려면 오디오 읽기 권한이 필요합니다.";
-            renderCurrentTab();
+            renderLibraryIfCurrent();
         }
     }
 
@@ -684,7 +691,7 @@ public final class MainActivity extends Activity {
         }
         libraryLoading = true;
         libraryStatus = "기기 음악을 스캔하는 중입니다.";
-        if (renderImmediately) {
+        if (renderImmediately && currentTab == Tab.LIBRARY) {
             renderCurrentTab();
         }
         libraryExecutor.execute(() -> {
@@ -697,16 +704,22 @@ public final class MainActivity extends Activity {
                     libraryStatus = tracks.isEmpty()
                             ? "기기에서 음악 파일을 찾지 못했습니다."
                             : "스캔 완료";
-                    renderCurrentTab();
+                    renderLibraryIfCurrent();
                 });
             } catch (Exception exception) {
                 runOnUiThread(() -> {
                     libraryLoading = false;
                     libraryStatus = "스캔 실패: " + exception.getMessage();
-                    renderCurrentTab();
+                    renderLibraryIfCurrent();
                 });
             }
         });
+    }
+
+    private void renderLibraryIfCurrent() {
+        if (currentTab == Tab.LIBRARY) {
+            renderCurrentTab();
+        }
     }
 
     private String librarySummary() {
@@ -754,6 +767,7 @@ public final class MainActivity extends Activity {
         if (selectedTrack == null) {
             return;
         }
+        pendingDeleteTrack = selectedTrack;
         Uri uri = Uri.parse(selectedTrack.contentUri());
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -770,14 +784,56 @@ public final class MainActivity extends Activity {
                 );
                 return;
             }
-            int deleted = getContentResolver().delete(uri, null, null);
-            toast(deleted > 0 ? "선택한 파일을 삭제했습니다." : "삭제할 수 없는 파일입니다.");
-            selectedTrack = null;
-            startLibraryRefresh(true);
+            if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P
+                    && checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, REQUEST_WRITE_LIBRARY);
+                return;
+            }
+            deleteTrackDirectly(selectedTrack);
         } catch (IntentSender.SendIntentException exception) {
             toast("삭제 확인 화면을 열 수 없습니다.");
         } catch (SecurityException exception) {
             toast("이 파일을 삭제할 권한이 없습니다.");
+        }
+    }
+
+    private void handleWritePermissionResult(int[] grantResults) {
+        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED && pendingDeleteTrack != null) {
+            deleteTrackDirectly(pendingDeleteTrack);
+        } else {
+            toast("파일 삭제에는 저장소 쓰기 권한이 필요합니다.");
+        }
+    }
+
+    private void deleteTrackDirectly(DeviceAudioTrack track) {
+        Uri uri = Uri.parse(track.contentUri());
+        try {
+            int deleted = getContentResolver().delete(uri, null, null);
+            toast(deleted > 0 ? "선택한 파일을 삭제했습니다." : "삭제할 수 없는 파일입니다.");
+            selectedTrack = null;
+            pendingDeleteTrack = null;
+            startLibraryRefresh(true);
+        } catch (SecurityException exception) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && exception instanceof RecoverableSecurityException) {
+                requestRecoverableDelete((RecoverableSecurityException) exception);
+                return;
+            }
+            toast("이 파일을 삭제할 권한이 없습니다.");
+        }
+    }
+
+    private void requestRecoverableDelete(RecoverableSecurityException exception) {
+        try {
+            startIntentSenderForResult(
+                    exception.getUserAction().getActionIntent().getIntentSender(),
+                    REQUEST_DELETE_AUDIO,
+                    null,
+                    0,
+                    0,
+                    0
+            );
+        } catch (IntentSender.SendIntentException intentException) {
+            toast("삭제 확인 화면을 열 수 없습니다.");
         }
     }
 

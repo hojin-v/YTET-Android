@@ -32,4 +32,12 @@ public final class StreamUrlResolverTest {
                 StreamUrlResolver.resolveFromPlaylist("https://example.com/station.m3u", "#EXTM3U\n")
         );
     }
+
+    @Test
+    public void leavesHlsPlaylistsForMediaPlayer() throws Exception {
+        assertEquals(
+                "https://example.com/live.m3u8",
+                StreamUrlResolver.resolve("https://example.com/live.m3u8")
+        );
+    }
 }
