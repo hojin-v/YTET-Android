@@ -15,6 +15,7 @@ import java.util.Map;
 
 public final class DeviceMusicLibrary {
     private static final int QUERY_CHUNK_SIZE = 200;
+    private static final Uri ALBUM_ART_URI = Uri.parse("content://media/external/audio/albumart");
 
     public List<DeviceAudioTrack> loadTracks(Context context) {
         ContentResolver resolver = context.getContentResolver();
@@ -90,6 +91,7 @@ public final class DeviceMusicLibrary {
         projection.add(MediaStore.Audio.Media.TITLE);
         projection.add(MediaStore.Audio.Media.ARTIST);
         projection.add(MediaStore.Audio.Media.ALBUM);
+        projection.add(MediaStore.Audio.Media.ALBUM_ID);
         projection.add(MediaStore.Audio.Media.DISPLAY_NAME);
         projection.add(MediaStore.Audio.Media.DURATION);
         projection.add(MediaStore.Audio.Media.SIZE);
@@ -112,9 +114,18 @@ public final class DeviceMusicLibrary {
                 getString(cursor, MediaStore.Audio.Media.DISPLAY_NAME),
                 folderFromCursor(cursor),
                 contentUri.toString(),
+                albumArtUri(cursor),
                 getLong(cursor, MediaStore.Audio.Media.DURATION),
                 getLong(cursor, MediaStore.Audio.Media.SIZE)
         );
+    }
+
+    private String albumArtUri(Cursor cursor) {
+        long albumId = getLong(cursor, MediaStore.Audio.Media.ALBUM_ID);
+        if (albumId <= 0) {
+            return "";
+        }
+        return ContentUris.withAppendedId(ALBUM_ART_URI, albumId).toString();
     }
 
     private String folderFromCursor(Cursor cursor) {

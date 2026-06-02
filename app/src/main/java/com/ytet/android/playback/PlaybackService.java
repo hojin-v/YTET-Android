@@ -28,6 +28,7 @@ import com.ytet.android.stream.MusicStation;
 import com.ytet.android.ui.MainActivity;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -40,8 +41,14 @@ public final class PlaybackService extends Service {
     public static final String ACTION_NEXT = "com.ytet.android.action.PLAYBACK_NEXT";
     public static final String ACTION_PREVIOUS = "com.ytet.android.action.PLAYBACK_PREVIOUS";
     public static final String ACTION_STOP = "com.ytet.android.action.PLAYBACK_STOP";
+    public static final String ACTION_TOGGLE_SHUFFLE = "com.ytet.android.action.PLAYBACK_TOGGLE_SHUFFLE";
+    public static final String ACTION_TOGGLE_REPEAT = "com.ytet.android.action.PLAYBACK_TOGGLE_REPEAT";
     public static final String ACTION_REQUEST_STATE = "com.ytet.android.action.PLAYBACK_REQUEST_STATE";
     public static final String ACTION_STATE = "com.ytet.android.action.PLAYBACK_STATE";
+
+    public static final int REPEAT_OFF = 0;
+    public static final int REPEAT_ALL = 1;
+    public static final int REPEAT_ONE = 2;
 
     public static final String EXTRA_HAS_QUEUE = "com.ytet.android.extra.HAS_QUEUE";
     public static final String EXTRA_PLAYING = "com.ytet.android.extra.PLAYING";
@@ -51,6 +58,18 @@ public final class PlaybackService extends Service {
     public static final String EXTRA_TITLE = "com.ytet.android.extra.PLAYBACK_TITLE";
     public static final String EXTRA_META = "com.ytet.android.extra.PLAYBACK_META";
     public static final String EXTRA_STATUS = "com.ytet.android.extra.PLAYBACK_STATUS";
+    public static final String EXTRA_TRACK_ID = "com.ytet.android.extra.PLAYBACK_TRACK_ID";
+    public static final String EXTRA_ARTIST = "com.ytet.android.extra.PLAYBACK_ARTIST";
+    public static final String EXTRA_ALBUM = "com.ytet.android.extra.PLAYBACK_ALBUM";
+    public static final String EXTRA_FOLDER = "com.ytet.android.extra.PLAYBACK_FOLDER";
+    public static final String EXTRA_ALBUM_ART_URI = "com.ytet.android.extra.PLAYBACK_ALBUM_ART_URI";
+    public static final String EXTRA_DURATION_MS = "com.ytet.android.extra.PLAYBACK_DURATION_MS";
+    public static final String EXTRA_POSITION_MS = "com.ytet.android.extra.PLAYBACK_POSITION_MS";
+    public static final String EXTRA_QUEUE_INDEX = "com.ytet.android.extra.PLAYBACK_QUEUE_INDEX";
+    public static final String EXTRA_QUEUE_SIZE = "com.ytet.android.extra.PLAYBACK_QUEUE_SIZE";
+    public static final String EXTRA_MIX = "com.ytet.android.extra.PLAYBACK_MIX";
+    public static final String EXTRA_SHUFFLE_ENABLED = "com.ytet.android.extra.PLAYBACK_SHUFFLE_ENABLED";
+    public static final String EXTRA_REPEAT_MODE = "com.ytet.android.extra.PLAYBACK_REPEAT_MODE";
 
     private static final String EXTRA_MIX_TITLE = "com.ytet.android.extra.MIX_TITLE";
     private static final String EXTRA_MIX_SUBTITLE = "com.ytet.android.extra.MIX_SUBTITLE";
@@ -63,6 +82,14 @@ public final class PlaybackService extends Service {
     private final ExecutorService queueExecutor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final AudioManager.OnAudioFocusChangeListener focusChangeListener = this::onAudioFocusChanged;
+    private final Runnable stateTick = new Runnable() {
+        @Override
+        public void run() {
+            if (playing || preparing) {
+                broadcastState();
+            }
+        }
+    };
 
     private MediaPlayer mediaPlayer;
     private MediaSession mediaSession;
@@ -77,6 +104,8 @@ public final class PlaybackService extends Service {
     private boolean playing;
     private boolean startWhenPrepared;
     private boolean resumeOnAudioFocusGain;
+    private boolean shuffleEnabled;
+    private int repeatMode = REPEAT_OFF;
     private String errorStatus;
 
     public static Intent playQueueIntent(Context context, MusicStation station, List<DeviceAudioTrack> tracks) {
@@ -84,6 +113,10 @@ public final class PlaybackService extends Service {
         intent.setAction(ACTION_PLAY_QUEUE);
         intent.putExtra(EXTRA_MIX_TITLE, station == null ? "로컬 음악" : station.title());
         intent.putExtra(EXTRA_MIX_SUBTITLE, station == null ? "기기 저장 음악" : station.subtitle());
+        intent.putExtra(EXTRA_SHUFFLE_ENABLED, station != null
+                && station.mixType() != MusicStation.MixType.TRACK
+                && tracks != null
+                && tracks.size() > 1);
 
         int count = tracks == null ? 0 : tracks.size();
         long[] ids = new long[count];
@@ -158,6 +191,10 @@ public final class PlaybackService extends Service {
             playPrevious();
         } else if (ACTION_STOP.equals(action)) {
             stopPlayback();
+        } else if (ACTION_TOGGLE_SHUFFLE.equals(action)) {
+            toggleShuffle();
+        } else if (ACTION_TOGGLE_REPEAT.equals(action)) {
+            toggleRepeat();
         } else if (ACTION_REQUEST_STATE.equals(action)) {
             broadcastState();
             if (queue.isEmpty()) {
@@ -177,6 +214,7 @@ public final class PlaybackService extends Service {
     @Override
     public void onDestroy() {
         queueExecutor.shutdownNow();
+        mainHandler.removeCallbacks(stateTick);
         releasePlayer();
         abandonAudioFocus();
         if (mediaSession != null) {
@@ -197,6 +235,8 @@ public final class PlaybackService extends Service {
         errorStatus = null;
         mixTitle = safeExtra(intent, EXTRA_MIX_TITLE, "로컬 음악");
         mixSubtitle = safeExtra(intent, EXTRA_MIX_SUBTITLE, "기기 저장 음악");
+        shuffleEnabled = intent.getBooleanExtra(EXTRA_SHUFFLE_ENABLED, false);
+        repeatMode = REPEAT_OFF;
         preparing = true;
         playing = false;
         startWhenPrepared = true;
@@ -298,7 +338,7 @@ public final class PlaybackService extends Service {
                 showNotification();
                 broadcastState();
             });
-            player.setOnCompletionListener(completed -> playNext());
+            player.setOnCompletionListener(completed -> handleTrackCompletion());
             player.setOnErrorListener((failed, what, extra) -> {
                 if (version == playbackVersion) {
                     handlePlaybackError("이 파일을 재생할 수 없습니다: " + track.displayName());
@@ -403,7 +443,18 @@ public final class PlaybackService extends Service {
     }
 
     private void playNext() {
+        moveToNextTrack(false);
+    }
+
+    private void moveToNextTrack(boolean fromCompletion) {
         if (queue.isEmpty()) {
+            return;
+        }
+        if (fromCompletion
+                && repeatMode == REPEAT_OFF
+                && !shuffleEnabled
+                && queueIndex >= queue.size() - 1) {
+            finishQueuePlayback();
             return;
         }
         failedTrackSkips = 0;
@@ -418,6 +469,29 @@ public final class PlaybackService extends Service {
         failedTrackSkips = 0;
         queueIndex = queueIndex == 0 ? queue.size() - 1 : queueIndex - 1;
         prepareCurrentTrack();
+    }
+
+    private void handleTrackCompletion() {
+        if (queue.isEmpty()) {
+            finishQueuePlayback();
+            return;
+        }
+        if (repeatMode == REPEAT_ONE) {
+            prepareCurrentTrack();
+            return;
+        }
+        moveToNextTrack(true);
+    }
+
+    private void finishQueuePlayback() {
+        preparing = false;
+        playing = false;
+        startWhenPrepared = false;
+        resumeOnAudioFocusGain = false;
+        abandonAudioFocus();
+        updateTransportState();
+        showNotification();
+        broadcastState();
     }
 
     private void stopPlayback() {
@@ -436,6 +510,43 @@ public final class PlaybackService extends Service {
         broadcastState();
         stopForeground(STOP_FOREGROUND_REMOVE);
         stopSelf();
+    }
+
+    private void toggleShuffle() {
+        shuffleEnabled = !shuffleEnabled && queue.size() > 1;
+        if (shuffleEnabled) {
+            shuffleQueueFromCurrentTrack();
+        }
+        updateTransportState();
+        showNotification();
+        broadcastState();
+    }
+
+    private void shuffleQueueFromCurrentTrack() {
+        DeviceAudioTrack track = currentTrack();
+        if (track == null || queue.size() < 2) {
+            return;
+        }
+        List<DeviceAudioTrack> remaining = new ArrayList<>(queue);
+        remaining.remove(track);
+        Collections.shuffle(remaining);
+        queue.clear();
+        queue.add(track);
+        queue.addAll(remaining);
+        queueIndex = 0;
+    }
+
+    private void toggleRepeat() {
+        if (repeatMode == REPEAT_OFF) {
+            repeatMode = REPEAT_ALL;
+        } else if (repeatMode == REPEAT_ALL) {
+            repeatMode = REPEAT_ONE;
+        } else {
+            repeatMode = REPEAT_OFF;
+        }
+        updateTransportState();
+        showNotification();
+        broadcastState();
     }
 
     private void handlePlaybackError(String message) {
@@ -647,7 +758,27 @@ public final class PlaybackService extends Service {
         intent.putExtra(EXTRA_TITLE, track == null ? "로컬 재생 대기" : track.title());
         intent.putExtra(EXTRA_META, track == null ? "기기 음악을 스캔하면 재생할 수 있습니다." : track.artist() + " · " + mixTitle);
         intent.putExtra(EXTRA_STATUS, statusText(track));
+        intent.putExtra(EXTRA_TRACK_ID, track == null ? -1L : track.id());
+        intent.putExtra(EXTRA_ARTIST, track == null ? "" : track.artist());
+        intent.putExtra(EXTRA_ALBUM, track == null ? "" : track.album());
+        intent.putExtra(EXTRA_FOLDER, track == null ? "" : track.folder());
+        intent.putExtra(EXTRA_ALBUM_ART_URI, track == null ? "" : track.albumArtUri());
+        intent.putExtra(EXTRA_DURATION_MS, track == null ? 0L : track.durationMs());
+        intent.putExtra(EXTRA_POSITION_MS, currentPosition());
+        intent.putExtra(EXTRA_QUEUE_INDEX, queue.isEmpty() ? -1 : queueIndex);
+        intent.putExtra(EXTRA_QUEUE_SIZE, queue.size());
+        intent.putExtra(EXTRA_MIX, mixTitle);
+        intent.putExtra(EXTRA_SHUFFLE_ENABLED, shuffleEnabled);
+        intent.putExtra(EXTRA_REPEAT_MODE, repeatMode);
         sendBroadcast(intent);
+        scheduleStateTick();
+    }
+
+    private void scheduleStateTick() {
+        mainHandler.removeCallbacks(stateTick);
+        if (playing || preparing) {
+            mainHandler.postDelayed(stateTick, 1000);
+        }
     }
 
     private String statusText(DeviceAudioTrack track) {

@@ -8,6 +8,7 @@ public final class DeviceAudioTrack {
     private final String displayName;
     private final String folder;
     private final String contentUri;
+    private final String albumArtUri;
     private final long durationMs;
     private final long sizeBytes;
 
@@ -22,6 +23,21 @@ public final class DeviceAudioTrack {
             long durationMs,
             long sizeBytes
     ) {
+        this(id, title, artist, album, displayName, folder, contentUri, "", durationMs, sizeBytes);
+    }
+
+    public DeviceAudioTrack(
+            long id,
+            String title,
+            String artist,
+            String album,
+            String displayName,
+            String folder,
+            String contentUri,
+            String albumArtUri,
+            long durationMs,
+            long sizeBytes
+    ) {
         this.id = id;
         this.title = clean(title, "제목 없음");
         this.artist = clean(artist, "알 수 없는 아티스트");
@@ -29,6 +45,7 @@ public final class DeviceAudioTrack {
         this.displayName = clean(displayName, this.title);
         this.folder = clean(folder, "알 수 없는 폴더");
         this.contentUri = clean(contentUri, "");
+        this.albumArtUri = clean(albumArtUri, "");
         this.durationMs = Math.max(0, durationMs);
         this.sizeBytes = Math.max(0, sizeBytes);
     }
@@ -59,6 +76,10 @@ public final class DeviceAudioTrack {
 
     public String contentUri() {
         return contentUri;
+    }
+
+    public String albumArtUri() {
+        return albumArtUri;
     }
 
     public long durationMs() {
