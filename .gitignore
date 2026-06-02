@@ -10,5 +10,6 @@ dist/
 *.apk
 *.aab
 *.keystore
+*.jks
 __pycache__/
 *.pyc
