@@ -330,6 +330,13 @@ public final class PlaybackService extends Service {
 
     private void play() {
         if (queue.isEmpty()) {
+            if (preparing) {
+                startWhenPrepared = true;
+                resumeOnAudioFocusGain = false;
+                updateTransportState();
+                showNotification();
+                broadcastState();
+            }
             return;
         }
         if (mediaPlayer == null || errorStatus != null) {
