@@ -51,7 +51,8 @@ public final class MusicLibrary {
         for (DeviceAudioTrack track : tracks) {
             if (station.mixType() == MusicStation.MixType.ALL
                     || (station.mixType() == MusicStation.MixType.ARTIST && station.mixValue().equals(track.artist()))
-                    || (station.mixType() == MusicStation.MixType.FOLDER && station.mixValue().equals(track.folder()))) {
+                    || (station.mixType() == MusicStation.MixType.FOLDER && station.mixValue().equals(track.folder()))
+                    || (station.mixType() == MusicStation.MixType.TRACK && station.mixValue().equals(Long.toString(track.id())))) {
                 selected.add(track);
             }
         }

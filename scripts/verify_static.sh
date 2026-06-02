@@ -59,6 +59,7 @@ grep -q 'Notification.MediaStyle' "$root/app/src/main/java/com/ytet/android/play
 grep -q 'FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK' "$root/app/src/main/java/com/ytet/android/playback/PlaybackService.java"
 grep -q 'recommendedStations' "$root/app/src/main/java/com/ytet/android/stream/StationCatalog.java"
 grep -q 'tracksForStation' "$root/app/src/main/java/com/ytet/android/library/MusicLibrary.java"
+grep -q 'loadTracksByIds' "$root/app/src/main/java/com/ytet/android/library/DeviceMusicLibrary.java"
 grep -q 'Python.start' "$root/app/src/main/java/com/ytet/android/extract/YtDlpPythonEngine.java"
 grep -q 'MediaTrackMuxer.mergeWorkspace' "$root/app/src/main/java/com/ytet/android/extract/YtDlpPythonEngine.java"
 grep -q 'FFmpegKit.executeWithArguments' "$root/app/src/main/java/com/ytet/android/extract/MediaTrackMuxer.java"
@@ -90,6 +91,11 @@ fi
 
 if grep -R "somafm\\|StreamUrlResolver\\|cleartextTrafficPermitted\\|android:networkSecurityConfig\\|station\\.m3u\\|직접 스트리밍 URL\\|인터넷 라디오" "$root/app/src" "$root/README.md" >/dev/null; then
   echo "external radio or playlist streaming reference found" >&2
+  exit 1
+fi
+
+if grep -R "EXTRA_TRACK_TITLES\\|EXTRA_TRACK_ARTISTS\\|EXTRA_TRACK_ALBUMS\\|EXTRA_TRACK_URIS" "$root/app/src/main/java/com/ytet/android/playback" >/dev/null; then
+  echo "oversized playback queue intent metadata found" >&2
   exit 1
 fi
 

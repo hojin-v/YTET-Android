@@ -4,7 +4,8 @@ public final class MusicStation {
     public enum MixType {
         ALL,
         ARTIST,
-        FOLDER
+        FOLDER,
+        TRACK
     }
 
     private final String id;

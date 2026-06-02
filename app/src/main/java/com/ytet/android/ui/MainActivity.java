@@ -68,7 +68,6 @@ public final class MainActivity extends Activity {
     private LinearLayout nowPlayingBar;
     private TextView nowPlayingTitle;
     private TextView nowPlayingMeta;
-    private TextView streamStatusText;
     private Button playPauseButton;
     private Button homeTabButton;
     private Button libraryTabButton;
@@ -92,6 +91,7 @@ public final class MainActivity extends Activity {
     private boolean playbackHasQueue;
     private boolean playbackPlaying;
     private boolean playbackPreparing;
+    private boolean playbackError;
     private String playbackTitle = "로컬 재생 대기";
     private String playbackMeta = "기기 음악을 스캔하면 재생할 수 있습니다.";
     private String streamStatus = "기기 음악을 스캔하면 추천 믹스가 표시됩니다.";
@@ -159,6 +159,7 @@ public final class MainActivity extends Activity {
             playbackHasQueue = intent.getBooleanExtra(PlaybackService.EXTRA_HAS_QUEUE, false);
             playbackPlaying = intent.getBooleanExtra(PlaybackService.EXTRA_PLAYING, false);
             playbackPreparing = intent.getBooleanExtra(PlaybackService.EXTRA_PREPARING, false);
+            playbackError = intent.getBooleanExtra(PlaybackService.EXTRA_ERROR, false);
             playbackTitle = valueOrDefault(
                     intent.getStringExtra(PlaybackService.EXTRA_TITLE),
                     "로컬 재생 대기"
@@ -296,8 +297,8 @@ public final class MainActivity extends Activity {
 
         LinearLayout copy = new LinearLayout(this);
         copy.setOrientation(LinearLayout.VERTICAL);
-        nowPlayingTitle = text("스트리밍 대기", 14, R.color.ytet_text, true);
-        nowPlayingMeta = text("홈에서 추천 스테이션을 선택하세요.", 12, R.color.ytet_muted, false);
+        nowPlayingTitle = text("로컬 재생 대기", 14, R.color.ytet_text, true);
+        nowPlayingMeta = text("기기 음악을 스캔하면 재생할 수 있습니다.", 12, R.color.ytet_muted, false);
         copy.addView(nowPlayingTitle, matchWrap());
         copy.addView(nowPlayingMeta, matchWrap());
         bar.addView(copy, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
@@ -640,8 +641,8 @@ public final class MainActivity extends Activity {
                 "파일 재생",
                 track.artist(),
                 track.displayName(),
-                MusicStation.MixType.ALL,
-                "",
+                MusicStation.MixType.TRACK,
+                Long.toString(track.id()),
                 color(R.color.ytet_accent)
         );
     }
@@ -660,6 +661,7 @@ public final class MainActivity extends Activity {
         playbackHasQueue = true;
         playbackPlaying = false;
         playbackPreparing = true;
+        playbackError = false;
         playbackTitle = station.title();
         playbackMeta = station.subtitle();
         setStreamingStatus("준비 중: " + station.title());
@@ -676,6 +678,7 @@ public final class MainActivity extends Activity {
         playbackHasQueue = true;
         playbackPlaying = false;
         playbackPreparing = true;
+        playbackError = false;
         playbackTitle = track.title();
         playbackMeta = track.artist() + " · " + track.folder();
         setStreamingStatus("준비 중: " + track.title());
@@ -706,9 +709,6 @@ public final class MainActivity extends Activity {
 
     private void setStreamingStatus(String status) {
         streamStatus = status;
-        if (streamStatusText != null) {
-            streamStatusText.setText(streamStatus);
-        }
     }
 
     private void updateNowPlayingBar() {
@@ -722,7 +722,7 @@ public final class MainActivity extends Activity {
             return;
         }
         nowPlayingTitle.setText(playbackTitle);
-        nowPlayingMeta.setText(playbackPreparing ? streamStatus : playbackMeta);
+        nowPlayingMeta.setText(playbackPreparing || playbackError ? streamStatus : playbackMeta);
         playPauseButton.setText(playbackPlaying ? "일시정지" : "재생");
     }
 

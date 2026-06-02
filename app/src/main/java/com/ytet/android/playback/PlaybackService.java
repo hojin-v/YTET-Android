@@ -21,6 +21,7 @@ import android.os.IBinder;
 
 import com.ytet.android.R;
 import com.ytet.android.library.DeviceAudioTrack;
+import com.ytet.android.library.DeviceMusicLibrary;
 import com.ytet.android.stream.MusicStation;
 import com.ytet.android.ui.MainActivity;
 
@@ -41,6 +42,7 @@ public final class PlaybackService extends Service {
     public static final String EXTRA_HAS_QUEUE = "com.ytet.android.extra.HAS_QUEUE";
     public static final String EXTRA_PLAYING = "com.ytet.android.extra.PLAYING";
     public static final String EXTRA_PREPARING = "com.ytet.android.extra.PREPARING";
+    public static final String EXTRA_ERROR = "com.ytet.android.extra.PLAYBACK_ERROR";
     public static final String EXTRA_TITLE = "com.ytet.android.extra.PLAYBACK_TITLE";
     public static final String EXTRA_META = "com.ytet.android.extra.PLAYBACK_META";
     public static final String EXTRA_STATUS = "com.ytet.android.extra.PLAYBACK_STATUS";
@@ -48,18 +50,11 @@ public final class PlaybackService extends Service {
     private static final String EXTRA_MIX_TITLE = "com.ytet.android.extra.MIX_TITLE";
     private static final String EXTRA_MIX_SUBTITLE = "com.ytet.android.extra.MIX_SUBTITLE";
     private static final String EXTRA_TRACK_IDS = "com.ytet.android.extra.TRACK_IDS";
-    private static final String EXTRA_TRACK_TITLES = "com.ytet.android.extra.TRACK_TITLES";
-    private static final String EXTRA_TRACK_ARTISTS = "com.ytet.android.extra.TRACK_ARTISTS";
-    private static final String EXTRA_TRACK_ALBUMS = "com.ytet.android.extra.TRACK_ALBUMS";
-    private static final String EXTRA_TRACK_DISPLAY_NAMES = "com.ytet.android.extra.TRACK_DISPLAY_NAMES";
-    private static final String EXTRA_TRACK_FOLDERS = "com.ytet.android.extra.TRACK_FOLDERS";
-    private static final String EXTRA_TRACK_URIS = "com.ytet.android.extra.TRACK_URIS";
-    private static final String EXTRA_TRACK_DURATIONS = "com.ytet.android.extra.TRACK_DURATIONS";
-    private static final String EXTRA_TRACK_SIZES = "com.ytet.android.extra.TRACK_SIZES";
     private static final String CHANNEL_ID = "ytet_playback";
     private static final int NOTIFICATION_ID = 4211;
 
     private final ArrayList<DeviceAudioTrack> queue = new ArrayList<>();
+    private final DeviceMusicLibrary musicLibrary = new DeviceMusicLibrary();
     private final AudioManager.OnAudioFocusChangeListener focusChangeListener = this::onAudioFocusChanged;
 
     private MediaPlayer mediaPlayer;
@@ -69,6 +64,7 @@ public final class PlaybackService extends Service {
     private String mixSubtitle = "기기 저장 음악";
     private int queueIndex;
     private int playbackVersion;
+    private int failedTrackSkips;
     private boolean preparing;
     private boolean playing;
     private boolean startWhenPrepared;
@@ -83,37 +79,12 @@ public final class PlaybackService extends Service {
 
         int count = tracks == null ? 0 : tracks.size();
         long[] ids = new long[count];
-        String[] titles = new String[count];
-        String[] artists = new String[count];
-        String[] albums = new String[count];
-        String[] displayNames = new String[count];
-        String[] folders = new String[count];
-        String[] uris = new String[count];
-        long[] durations = new long[count];
-        long[] sizes = new long[count];
 
         for (int index = 0; index < count; index++) {
-            DeviceAudioTrack track = tracks.get(index);
-            ids[index] = track.id();
-            titles[index] = track.title();
-            artists[index] = track.artist();
-            albums[index] = track.album();
-            displayNames[index] = track.displayName();
-            folders[index] = track.folder();
-            uris[index] = track.contentUri();
-            durations[index] = track.durationMs();
-            sizes[index] = track.sizeBytes();
+            ids[index] = tracks.get(index).id();
         }
 
         intent.putExtra(EXTRA_TRACK_IDS, ids);
-        intent.putExtra(EXTRA_TRACK_TITLES, titles);
-        intent.putExtra(EXTRA_TRACK_ARTISTS, artists);
-        intent.putExtra(EXTRA_TRACK_ALBUMS, albums);
-        intent.putExtra(EXTRA_TRACK_DISPLAY_NAMES, displayNames);
-        intent.putExtra(EXTRA_TRACK_FOLDERS, folders);
-        intent.putExtra(EXTRA_TRACK_URIS, uris);
-        intent.putExtra(EXTRA_TRACK_DURATIONS, durations);
-        intent.putExtra(EXTRA_TRACK_SIZES, sizes);
         return intent;
     }
 
@@ -131,7 +102,6 @@ public final class PlaybackService extends Service {
         audioFocusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
                 .setAudioAttributes(attributes)
                 .setOnAudioFocusChangeListener(focusChangeListener)
-                .setWillPauseWhenDucked(true)
                 .build();
         mediaSession = new MediaSession(this, "YTETPlayback");
         mediaSession.setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS
@@ -212,38 +182,13 @@ public final class PlaybackService extends Service {
     private void loadQueue(Intent intent) {
         queue.clear();
         queueIndex = 0;
+        failedTrackSkips = 0;
         errorStatus = null;
         mixTitle = safeExtra(intent, EXTRA_MIX_TITLE, "로컬 음악");
         mixSubtitle = safeExtra(intent, EXTRA_MIX_SUBTITLE, "기기 저장 음악");
 
         long[] ids = intent.getLongArrayExtra(EXTRA_TRACK_IDS);
-        String[] titles = intent.getStringArrayExtra(EXTRA_TRACK_TITLES);
-        String[] artists = intent.getStringArrayExtra(EXTRA_TRACK_ARTISTS);
-        String[] albums = intent.getStringArrayExtra(EXTRA_TRACK_ALBUMS);
-        String[] displayNames = intent.getStringArrayExtra(EXTRA_TRACK_DISPLAY_NAMES);
-        String[] folders = intent.getStringArrayExtra(EXTRA_TRACK_FOLDERS);
-        String[] uris = intent.getStringArrayExtra(EXTRA_TRACK_URIS);
-        long[] durations = intent.getLongArrayExtra(EXTRA_TRACK_DURATIONS);
-        long[] sizes = intent.getLongArrayExtra(EXTRA_TRACK_SIZES);
-
-        int count = ids == null ? 0 : ids.length;
-        for (int index = 0; index < count; index++) {
-            String uri = stringAt(uris, index, "");
-            if (uri.trim().isEmpty()) {
-                continue;
-            }
-            queue.add(new DeviceAudioTrack(
-                    ids[index],
-                    stringAt(titles, index, "제목 없음"),
-                    stringAt(artists, index, "알 수 없는 아티스트"),
-                    stringAt(albums, index, "앨범 정보 없음"),
-                    stringAt(displayNames, index, stringAt(titles, index, "음악 파일")),
-                    stringAt(folders, index, "알 수 없는 폴더"),
-                    uri,
-                    longAt(durations, index),
-                    longAt(sizes, index)
-            ));
-        }
+        queue.addAll(musicLibrary.loadTracksByIds(this, ids));
     }
 
     private void prepareCurrentTrack() {
@@ -281,6 +226,7 @@ public final class PlaybackService extends Service {
                 }
                 mediaPlayer = prepared;
                 preparing = false;
+                failedTrackSkips = 0;
                 if (startWhenPrepared && requestAudioFocus()) {
                     prepared.start();
                     playing = true;
@@ -372,6 +318,7 @@ public final class PlaybackService extends Service {
         if (queue.isEmpty()) {
             return;
         }
+        failedTrackSkips = 0;
         queueIndex = (queueIndex + 1) % queue.size();
         prepareCurrentTrack();
     }
@@ -380,6 +327,7 @@ public final class PlaybackService extends Service {
         if (queue.isEmpty()) {
             return;
         }
+        failedTrackSkips = 0;
         queueIndex = queueIndex == 0 ? queue.size() - 1 : queueIndex - 1;
         prepareCurrentTrack();
     }
@@ -387,6 +335,7 @@ public final class PlaybackService extends Service {
     private void stopPlayback() {
         queue.clear();
         queueIndex = 0;
+        failedTrackSkips = 0;
         preparing = false;
         playing = false;
         startWhenPrepared = false;
@@ -400,6 +349,19 @@ public final class PlaybackService extends Service {
     }
 
     private void handlePlaybackError(String message) {
+        if (queue.size() > 1 && failedTrackSkips < queue.size() - 1) {
+            preparing = false;
+            playing = false;
+            startWhenPrepared = false;
+            errorStatus = message + " 다음 곡으로 넘어갑니다.";
+            updateTransportState();
+            showNotification();
+            broadcastState();
+            failedTrackSkips++;
+            queueIndex = (queueIndex + 1) % queue.size();
+            prepareCurrentTrack();
+            return;
+        }
         preparing = false;
         playing = false;
         startWhenPrepared = false;
@@ -494,7 +456,7 @@ public final class PlaybackService extends Service {
                 .setVisibility(Notification.VISIBILITY_PUBLIC)
                 .setShowWhen(false)
                 .setOnlyAlertOnce(true)
-                .setOngoing(playing || preparing);
+                .setOngoing(playing || (preparing && startWhenPrepared));
 
         builder.addAction(android.R.drawable.ic_media_previous, "이전", serviceAction(ACTION_PREVIOUS, 1));
         builder.addAction(
@@ -589,6 +551,7 @@ public final class PlaybackService extends Service {
         intent.putExtra(EXTRA_HAS_QUEUE, !queue.isEmpty());
         intent.putExtra(EXTRA_PLAYING, playing);
         intent.putExtra(EXTRA_PREPARING, preparing);
+        intent.putExtra(EXTRA_ERROR, errorStatus != null);
         intent.putExtra(EXTRA_TITLE, track == null ? "로컬 재생 대기" : track.title());
         intent.putExtra(EXTRA_META, track == null ? "기기 음악을 스캔하면 재생할 수 있습니다." : track.artist() + " · " + mixTitle);
         intent.putExtra(EXTRA_STATUS, statusText(track));
@@ -648,17 +611,4 @@ public final class PlaybackService extends Service {
         return value == null || value.trim().isEmpty() ? fallback : value.trim();
     }
 
-    private static String stringAt(String[] values, int index, String fallback) {
-        if (values == null || index < 0 || index >= values.length || values[index] == null) {
-            return fallback;
-        }
-        return values[index];
-    }
-
-    private static long longAt(long[] values, int index) {
-        if (values == null || index < 0 || index >= values.length) {
-            return 0;
-        }
-        return values[index];
-    }
 }

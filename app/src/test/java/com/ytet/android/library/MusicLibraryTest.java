@@ -40,15 +40,18 @@ public final class MusicLibraryTest {
 
         MusicStation artist = station(MusicStation.MixType.ARTIST, "Artist A");
         MusicStation folder = station(MusicStation.MixType.FOLDER, "Camera");
+        MusicStation trackStation = station(MusicStation.MixType.TRACK, "2");
         MusicStation all = station(MusicStation.MixType.ALL, "");
 
         List<DeviceAudioTrack> artistTracks = MusicLibrary.tracksForStation(List.of(first, second, third), artist);
         List<DeviceAudioTrack> folderTracks = MusicLibrary.tracksForStation(List.of(first, second, third), folder);
+        List<DeviceAudioTrack> trackQueue = MusicLibrary.tracksForStation(List.of(first, second, third), trackStation);
 
         assertEquals(2, artistTracks.size());
         assertTrue(artistTracks.stream().allMatch(track -> "Artist A".equals(track.artist())));
         assertEquals(2, folderTracks.size());
         assertTrue(folderTracks.stream().allMatch(track -> "Camera".equals(track.folder())));
+        assertEquals(List.of(second), trackQueue);
         assertEquals(3, MusicLibrary.tracksForStation(List.of(first, second, third), all).size());
     }
 
