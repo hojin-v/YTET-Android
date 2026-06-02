@@ -116,7 +116,7 @@ public final class ExtractionService extends Service {
                 : new Notification.Builder(this);
 
         builder.setSmallIcon(R.drawable.ic_stat_extract)
-                .setContentTitle("YTET Android - " + stage)
+                .setContentTitle("YTET - " + stage)
                 .setContentText(message)
                 .setOngoing(percent < 100)
                 .setOnlyAlertOnce(true);

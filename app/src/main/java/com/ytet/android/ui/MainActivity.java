@@ -163,7 +163,7 @@ public final class MainActivity extends Activity {
         ));
 
         TextView title = new TextView(this);
-        title.setText("YTET Android");
+        title.setText("YTET");
         title.setTextColor(getColor(R.color.ytet_text));
         title.setTextSize(28);
         title.setTypeface(Typeface.DEFAULT_BOLD);
