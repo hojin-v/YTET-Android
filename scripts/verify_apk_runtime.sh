@@ -2,7 +2,7 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-apk="${1:-$root/app/build/outputs/apk/debug/app-debug.apk}"
+apk="${1:-$root/app/build/outputs/apk/release/app-release-unsigned.apk}"
 
 if [[ ! -f "$apk" ]]; then
   echo "missing APK: $apk" >&2

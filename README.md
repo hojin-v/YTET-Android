@@ -49,7 +49,7 @@ YTET는 기존 YouTube 추출기 기능을 유지하면서, 기기에 저장된 
 
 ## Quick Start
 
-1. [Releases](https://github.com/hojin-v/YTET-Android/releases)에서 최신 `YTET-Android-버전-debug.apk` 또는 ZIP을 받습니다.
+1. [Releases](https://github.com/hojin-v/YTET-Android/releases)에서 최신 `YTET-Android-버전.apk` 또는 ZIP을 받습니다.
 2. APK를 Android 기기에 설치합니다.
 3. `홈`에서 오디오 권한을 허용한 뒤 기기 음악 기반 추천 믹스를 재생합니다.
 4. `내 음악`에서 기기 음악을 폴더별로 보고 선택한 파일을 앱 안에서 재생합니다.
@@ -99,14 +99,14 @@ YTET는 사용자가 보유하지 않은 음악 취향을 추측해 “밤에 �
 
 업데이트 APK는 Android `DownloadManager`로 내려받고, 다운로드가 끝나면 Android 패키지 설치 화면을 엽니다. Android 정책상 앱이 사용자 승인 없이 조용히 업데이트를 설치하지는 않습니다.
 
-업데이트 설치가 성공하려면 기존 앱과 새 APK가 같은 signing key로 서명되어 있어야 합니다. GitHub Actions 릴리즈 빌드는 `v1.2.3` 태그를 `versionName=1.2.3-android`, 증가하는 `versionCode`로 반영하고, 다음 secrets가 설정되어 있으면 고정 signing key로 debug APK를 서명합니다.
+업데이트 설치가 성공하려면 기존 앱과 새 APK가 같은 signing key로 서명되어 있어야 합니다. GitHub Actions 릴리즈 빌드는 `v1.2.3` 태그를 `versionName=1.2.3-android`, 증가하는 `versionCode`로 반영하고, 다음 secrets로 signed release APK를 만듭니다.
 
 - `YTET_SIGNING_KEYSTORE_BASE64`
 - `YTET_SIGNING_STORE_PASSWORD`
 - `YTET_SIGNING_KEY_ALIAS`
 - `YTET_SIGNING_KEY_PASSWORD`
 
-secrets가 없으면 기본 debug signing key를 사용하므로, 기기에 이미 설치된 APK와 서명이 달라 업데이트 설치가 거절될 수 있습니다.
+secrets가 없거나 일부만 설정되어 있으면 릴리즈 빌드는 실패합니다. 이는 unsigned APK나 다른 키로 서명된 APK가 배포되어 업데이트 설치가 거절되는 일을 막기 위한 보호 장치입니다.
 
 ## Extractor
 
@@ -205,14 +205,14 @@ flowchart LR
 ## Build From Source
 
 ```bash
-./gradlew assembleDebug
+./gradlew assembleRelease
 ```
 
 For CLI builds without Android Studio, set `ANDROID_HOME` or `sdk.dir` so Gradle can find Android SDK Platform 36 and Build Tools 36.0.0.
 
 ```bash
 scripts/verify_static.sh
-./gradlew clean :app:assembleDebug
+./gradlew clean :app:assembleRelease
 ```
 
 ## Release Pipeline
@@ -220,17 +220,17 @@ scripts/verify_static.sh
 ```mermaid
 flowchart TD
     A[Push to main] --> B[CI]
-    B --> C[Android debug build]
+    B --> C[Android release build]
     C --> D[Nightly prerelease]
     E[Push v* tag] --> F[CI]
-    F --> G[Android debug build]
+    F --> G[Signed Android release build]
     G --> H[Versioned GitHub Release]
 ```
 
 Every release build uploads:
 
-- `YTET-Android-버전-debug.apk`
-- `YTET-Android-버전-android-debug.zip`
+- `YTET-Android-버전.apk`
+- `YTET-Android-버전-android.zip`
 
 ## Source Environment
 
@@ -239,7 +239,7 @@ Every release build uploads:
 릴리즈 파일, CI, 빌드 스크립트는 Android SDK 환경을 기준으로 제공됩니다. Windows/macOS/Linux에서 Gradle 빌드를 실행할 수는 있지만, 앱 실행과 추출 검증은 Android 기기 또는 에뮬레이터가 필요합니다.
 
 ```bash
-./gradlew :app:assembleDebug
+./gradlew :app:assembleRelease
 ```
 
 CLI 빌드에는 다음 항목이 준비되어 있어야 합니다.

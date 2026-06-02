@@ -46,6 +46,8 @@ grep -q 'com.android.application' "$root/build.gradle"
 grep -q 'com.chaquo.python' "$root/build.gradle"
 grep -q 'compileSdk = 36' "$root/app/build.gradle"
 grep -q 'abiFilters "arm64-v8a"' "$root/app/build.gradle"
+grep -q 'release {' "$root/app/build.gradle"
+grep -q 'signingConfig = signingConfigs.ytetRelease' "$root/app/build.gradle"
 grep -q 'testImplementation "junit:junit:4.13.2"' "$root/app/build.gradle"
 grep -q 'com.mrljdx:ffmpeg-kit-full:6.1.4' "$root/app/build.gradle"
 grep -q 'yt-dlp==2026.3.17' "$root/app/build.gradle"
@@ -81,6 +83,10 @@ grep -q 'doesNotFallbackToArbitraryFiles' "$root/app/src/test/java/com/ytet/andr
 grep -q 'embedsSubtitlesIntoMp4AsMovText' "$root/app/src/test/java/com/ytet/android/extract/MediaTrackMuxerTest.java"
 grep -q 'guessesAndroidFriendlyMimeTypesForKnownOutputs' "$root/app/src/test/java/com/ytet/android/extract/StorageWriterTest.java"
 grep -q 'yt_dlp-2026\\.3\\.17\\.dist-info' "$root/scripts/verify_apk_runtime.sh"
+grep -q 'assembleRelease' "$root/.github/workflows/release.yml"
+grep -q 'apksigner" verify' "$root/.github/workflows/release.yml"
+grep -q 'app-release.apk' "$root/.github/workflows/release.yml"
+grep -q 'app-release-unsigned.apk' "$root/.github/workflows/ci.yml"
 
 if grep -R "io.github.junkfood02.youtubedl-android\\|com.yausername.youtubedl_android\\|YoutubeDlAndroidEngine" "$root/app/src" "$root/app/build.gradle" "$root/build.gradle" "$root/settings.gradle" >/dev/null; then
   echo "unexpected youtubedl-android dependency or engine reference found" >&2
