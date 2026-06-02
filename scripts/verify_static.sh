@@ -86,6 +86,9 @@ grep -q 'yt_dlp-2026\\.3\\.17\\.dist-info' "$root/scripts/verify_apk_runtime.sh"
 grep -q 'assembleRelease' "$root/.github/workflows/release.yml"
 grep -q 'apksigner" verify' "$root/.github/workflows/release.yml"
 grep -q 'app-release.apk' "$root/.github/workflows/release.yml"
+grep -q 'Release version must be nightly or a formal tag like v1.2.3' "$root/.github/workflows/release.yml"
+grep -q 'skipping nightly release publishing' "$root/.github/workflows/release.yml"
+grep -q -- '--prerelease' "$root/.github/workflows/release.yml"
 grep -q 'app-release-unsigned.apk' "$root/.github/workflows/ci.yml"
 
 if grep -R "io.github.junkfood02.youtubedl-android\\|com.yausername.youtubedl_android\\|YoutubeDlAndroidEngine" "$root/app/src" "$root/app/build.gradle" "$root/build.gradle" "$root/settings.gradle" >/dev/null; then

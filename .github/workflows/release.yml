@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release tag to create or update, for example v0.1.0"
+        description: "Release tag to create or update, for example v0.1.0 or nightly"
         required: true
         default: "v0.1.0"
 
@@ -60,7 +60,53 @@ jobs:
           yes | "$sdkmanager_bin" --licenses >/dev/null || true
           "$sdkmanager_bin" "platforms;android-36" "build-tools;36.0.0"
 
+      - name: Resolve release version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            version="${{ inputs.version }}"
+          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
+            version="${{ github.ref_name }}"
+          else
+            version="nightly"
+          fi
+          if [[ "$version" == "nightly" ]]; then
+            formal=false
+          elif [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            formal=true
+          else
+            echo "::error::Release version must be nightly or a formal tag like v1.2.3."
+            exit 1
+          fi
+          {
+            echo "version=$version"
+            echo "formal=$formal"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Export Android version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          if [[ "$version" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            major="${BASH_REMATCH[1]}"
+            minor="${BASH_REMATCH[2]}"
+            patch="${BASH_REMATCH[3]}"
+            version_name="${major}.${minor}.${patch}-android"
+            version_code=$((10#$major * 1000000 + 10#$minor * 1000 + 10#$patch))
+          else
+            version_name="0.1.3-nightly.${{ github.run_number }}"
+            version_code=$((900000000 + ${{ github.run_number }}))
+          fi
+          {
+            echo "YTET_VERSION_NAME=$version_name"
+            echo "YTET_VERSION_CODE=$version_code"
+          } >> "$GITHUB_ENV"
+
       - name: Configure release APK signing
+        id: signing
         shell: bash
         env:
           YTET_SIGNING_KEYSTORE_BASE64: ${{ secrets.YTET_SIGNING_KEYSTORE_BASE64 }}
@@ -82,70 +128,57 @@ jobs:
             fi
           done
           if [[ "$missing" -ne 0 ]]; then
-            exit 1
+            if [[ "${{ steps.version.outputs.formal }}" == "true" ]]; then
+              exit 1
+            fi
+            echo "::warning::Signing secrets are incomplete; skipping nightly release publishing."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           keystore="$RUNNER_TEMP/ytet-release-signing.jks"
           printf '%s' "$YTET_SIGNING_KEYSTORE_BASE64" | base64 --decode > "$keystore"
-          keytool -list \
-            -keystore "$keystore" \
-            -storepass "$YTET_SIGNING_STORE_PASSWORD" \
-            -alias "$YTET_SIGNING_KEY_ALIAS" >/dev/null
+          if ! keytool -list \
+              -keystore "$keystore" \
+              -storepass "$YTET_SIGNING_STORE_PASSWORD" \
+              -alias "$YTET_SIGNING_KEY_ALIAS" >/dev/null; then
+            if [[ "${{ steps.version.outputs.formal }}" == "true" ]]; then
+              echo "::error::Release signing keystore, password, or alias is invalid."
+              exit 1
+            fi
+            echo "::warning::Release signing is invalid; skipping nightly release publishing."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           {
             echo "YTET_SIGNING_STORE_FILE=$keystore"
             echo "YTET_SIGNING_STORE_PASSWORD=$YTET_SIGNING_STORE_PASSWORD"
             echo "YTET_SIGNING_KEY_ALIAS=$YTET_SIGNING_KEY_ALIAS"
             echo "YTET_SIGNING_KEY_PASSWORD=$YTET_SIGNING_KEY_PASSWORD"
           } >> "$GITHUB_ENV"
-
-      - name: Resolve release version
-        id: version
-        shell: bash
-        run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            version="${{ inputs.version }}"
-          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
-            version="${{ github.ref_name }}"
-          else
-            version="nightly"
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-
-      - name: Export Android version for formal release
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="${{ steps.version.outputs.version }}"
-          if [[ "$version" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-            major="${BASH_REMATCH[1]}"
-            minor="${BASH_REMATCH[2]}"
-            patch="${BASH_REMATCH[3]}"
-            version_name="${major}.${minor}.${patch}-android"
-            version_code=$((10#$major * 1000000 + 10#$minor * 1000 + 10#$patch))
-            {
-              echo "YTET_VERSION_NAME=$version_name"
-              echo "YTET_VERSION_CODE=$version_code"
-            } >> "$GITHUB_ENV"
-          else
-            echo "Release version '$version' is not a formal Android version tag; keeping the Gradle default version."
-          fi
+          echo "configured=true" >> "$GITHUB_OUTPUT"
 
       - name: Verify project structure
+        if: steps.signing.outputs.configured == 'true'
         run: |
           chmod +x scripts/verify_static.sh
           scripts/verify_static.sh
 
       - name: Run Python engine unit tests
+        if: steps.signing.outputs.configured == 'true'
         run: |
           chmod +x scripts/test_python_engine.sh
           scripts/test_python_engine.sh
 
       - name: Run JVM unit tests
+        if: steps.signing.outputs.configured == 'true'
         run: ./gradlew --no-daemon :app:testDebugUnitTest --warning-mode all
 
       - name: Build YTET Android
+        if: steps.signing.outputs.configured == 'true'
         run: ./gradlew --no-daemon clean :app:assembleRelease --warning-mode all
 
       - name: Verify release APK signature
+        if: steps.signing.outputs.configured == 'true'
         run: |
           set -euo pipefail
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify \
@@ -153,11 +186,13 @@ jobs:
             app/build/outputs/apk/release/app-release.apk
 
       - name: Verify APK runtime packaging
+        if: steps.signing.outputs.configured == 'true'
         run: |
           chmod +x scripts/verify_apk_runtime.sh
           scripts/verify_apk_runtime.sh app/build/outputs/apk/release/app-release.apk
 
       - name: Package release assets
+        if: steps.signing.outputs.configured == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -173,6 +208,7 @@ jobs:
           (cd dist && jar --create --file "YTET-Android-${version}-android.zip" "YTET-Android-${version}.apk" README.md PORTING.md)
 
       - name: Upload workflow artifact
+        if: steps.signing.outputs.configured == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: YTET-Android-${{ steps.version.outputs.version }}-android
@@ -182,6 +218,7 @@ jobs:
           if-no-files-found: error
 
       - name: Publish GitHub Release
+        if: steps.signing.outputs.configured == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -192,6 +229,9 @@ jobs:
           apk="dist/YTET-Android-${tag}.apk"
           zip="dist/YTET-Android-${tag}-android.zip"
 
+          title="YTET Android $tag"
+          notes="Automated YTET Android release build for $tag. Includes embedded Python yt-dlp runtime and arm64 FFmpegKit remuxing; see README before distribution."
+          prerelease_flag=""
           if [[ "$tag" == "nightly" ]]; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -200,10 +240,6 @@ jobs:
             title="YTET Android Nightly"
             notes="Automated Android release build from $GITHUB_SHA. Includes embedded Python yt-dlp runtime and arm64 FFmpegKit remuxing; see README before distribution."
             prerelease_flag="--prerelease"
-          else
-            title="YTET Android $tag"
-            notes="Automated YTET Android release build for $tag. Includes embedded Python yt-dlp runtime and arm64 FFmpegKit remuxing; see README before distribution."
-            prerelease_flag=""
           fi
 
           if gh release view "$tag" >/dev/null 2>&1; then

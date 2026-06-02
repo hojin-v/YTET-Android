@@ -220,10 +220,10 @@ scripts/verify_static.sh
 ```mermaid
 flowchart TD
     A[Push to main] --> B[CI]
-    B --> C[Android release build]
-    C --> D[Nightly prerelease]
-    E[Push v* tag] --> F[CI]
-    F --> G[Signed Android release build]
+    B --> C[Unsigned release APK artifact]
+    A --> D[Signed nightly release build]
+    D --> E[Nightly prerelease]
+    F[Push vX.Y.Z tag] --> G[Signed Android release build]
     G --> H[Versioned GitHub Release]
 ```
 
