@@ -12,7 +12,7 @@ Android 저장소에서 개발되는 YTET 모바일 앱입니다. 앱 표시 이
 ![Platform](https://img.shields.io/badge/platform-Android-3DDC84)
 ![Java](https://img.shields.io/badge/java-17-ED8B00)
 
-[Download](https://github.com/hojin-v/YTET-Android/releases) · [Features](#features) · [Streaming](#streaming) · [Library](#library) · [Extractor](#extractor) · [Caution](#caution)
+[Download](https://github.com/hojin-v/YTET-Android/releases) · [Features](#features) · [Streaming](#streaming) · [Library](#library) · [Updates](#updates) · [Extractor](#extractor) · [Caution](#caution)
 
 </div>
 
@@ -38,6 +38,7 @@ YTET는 기존 YouTube 추출기 기능을 유지하면서, 기기에 저장된 
 | 검증 가능한 분류 | 무드나 장르를 추측하지 않고 실제 아티스트 메타데이터와 폴더명 기준으로 믹스를 만듭니다. |
 | 디바이스 음악 관리 | `READ_MEDIA_AUDIO` 또는 `READ_EXTERNAL_STORAGE` 권한으로 MediaStore 음악을 폴더별로 정리합니다. |
 | 파일 액션 | 선택한 음악 파일을 앱 안에서 재생하거나 열기, 공유, Android 삭제 확인 플로우로 관리합니다. |
+| 정식 릴리즈 업데이트 | GitHub Releases에서 nightly/prerelease를 제외한 정식 버전만 확인하고 APK 설치 화면을 엽니다. |
 | URL 기반 추출 | 권한이 있는 YouTube URL을 넣고 저장 폴더를 고르면 추출을 시작합니다. |
 | Android 폴더 선택 | Storage Access Framework로 사용자가 지정한 폴더에 결과를 저장합니다. |
 | 백그라운드 진행 | foreground service와 알림으로 추출 진행 상태를 표시합니다. |
@@ -82,6 +83,30 @@ YTET는 사용자가 보유하지 않은 음악 취향을 추측해 “밤에 �
 | Android 12L and below | `READ_EXTERNAL_STORAGE` |
 
 스캔된 음악은 폴더 칩과 파일 목록으로 표시됩니다. 파일을 선택하면 앱 내 재생, 열기, 공유, 삭제 작업을 실행할 수 있으며, Android 11 이상에서는 시스템 삭제 확인 화면을 거칩니다.
+
+## Updates
+
+홈 탭의 업데이트 영역은 GitHub Releases API를 통해 최신 정식 릴리즈를 확인합니다.
+
+업데이트 대상으로 인정하는 릴리즈는 다음 조건을 모두 만족해야 합니다.
+
+- `draft`가 아님
+- `prerelease`가 아님
+- 태그가 `v1.2.3` 같은 정식 버전 형식
+- 태그나 릴리즈명에 `nightly`, `alpha`, `beta`, `rc`, `dev`, `preview`가 없음
+- 현재 앱의 `versionName`보다 높은 버전
+- 다운로드 가능한 YTET APK asset이 있음
+
+업데이트 APK는 Android `DownloadManager`로 내려받고, 다운로드가 끝나면 Android 패키지 설치 화면을 엽니다. Android 정책상 앱이 사용자 승인 없이 조용히 업데이트를 설치하지는 않습니다.
+
+업데이트 설치가 성공하려면 기존 앱과 새 APK가 같은 signing key로 서명되어 있어야 합니다. GitHub Actions 릴리즈 빌드는 `v1.2.3` 태그를 `versionName=1.2.3-android`, 증가하는 `versionCode`로 반영하고, 다음 secrets가 설정되어 있으면 고정 signing key로 debug APK를 서명합니다.
+
+- `YTET_SIGNING_KEYSTORE_BASE64`
+- `YTET_SIGNING_STORE_PASSWORD`
+- `YTET_SIGNING_KEY_ALIAS`
+- `YTET_SIGNING_KEY_PASSWORD`
+
+secrets가 없으면 기본 debug signing key를 사용하므로, 기기에 이미 설치된 APK와 서명이 달라 업데이트 설치가 거절될 수 있습니다.
 
 ## Extractor
 

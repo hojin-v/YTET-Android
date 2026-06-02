@@ -2,8 +2,10 @@ package com.ytet.android.ui;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.DownloadManager;
 import android.app.PendingIntent;
 import android.app.RecoverableSecurityException;
+import android.content.ActivityNotFoundException;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -11,12 +13,15 @@ import android.content.IntentFilter;
 import android.content.IntentSender;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.database.Cursor;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
 import android.provider.MediaStore;
+import android.provider.Settings;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
@@ -46,6 +51,8 @@ import com.ytet.android.library.MusicLibrary;
 import com.ytet.android.playback.PlaybackService;
 import com.ytet.android.stream.MusicStation;
 import com.ytet.android.stream.StationCatalog;
+import com.ytet.android.update.UpdateChecker;
+import com.ytet.android.update.UpdateInfo;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -58,11 +65,16 @@ public final class MainActivity extends Activity {
     private static final int REQUEST_DELETE_AUDIO = 1209;
     private static final int REQUEST_AUDIO_LIBRARY = 1210;
     private static final int REQUEST_WRITE_LIBRARY = 1211;
+    private static final long NO_DOWNLOAD_ID = -1L;
     private static final String PREFS = "ytet_android";
     private static final String PREF_OUTPUT_TREE = "output_tree";
+    private static final String PREF_UPDATE_DOWNLOAD_ID = "update_download_id";
+    private static final String PREF_UPDATE_TAG = "update_tag";
 
     private final ExecutorService libraryExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService updateExecutor = Executors.newSingleThreadExecutor();
     private final DeviceMusicLibrary deviceMusicLibrary = new DeviceMusicLibrary();
+    private final UpdateChecker updateChecker = new UpdateChecker();
 
     private ScrollView contentScrollView;
     private LinearLayout nowPlayingBar;
@@ -72,6 +84,8 @@ public final class MainActivity extends Activity {
     private Button homeTabButton;
     private Button libraryTabButton;
     private Button extractorTabButton;
+    private TextView updateStatusText;
+    private Button updateActionButton;
 
     private EditText urlInput;
     private RadioGroup mediaGroup;
@@ -116,6 +130,13 @@ public final class MainActivity extends Activity {
     private boolean extractionBusy;
     private boolean receiverRegistered;
     private boolean playbackReceiverRegistered;
+    private boolean updateReceiverRegistered;
+    private boolean updateChecking;
+    private boolean updateChecked;
+    private boolean updateDownloading;
+    private String updateStatus = "정식 릴리즈 업데이트만 확인합니다.";
+    private UpdateInfo availableUpdate;
+    private long updateDownloadId = NO_DOWNLOAD_ID;
 
     private final BroadcastReceiver progressReceiver = new BroadcastReceiver() {
         @Override
@@ -181,12 +202,28 @@ public final class MainActivity extends Activity {
         }
     };
 
+    private final BroadcastReceiver updateDownloadReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (!DownloadManager.ACTION_DOWNLOAD_COMPLETE.equals(intent.getAction())) {
+                return;
+            }
+            long downloadId = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, NO_DOWNLOAD_ID);
+            if (downloadId == updateDownloadId && downloadId != NO_DOWNLOAD_ID) {
+                handleUpdateDownloadComplete(downloadId);
+            }
+        }
+    };
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         outputTreeUri = getPreferences().getString(PREF_OUTPUT_TREE, null);
+        updateDownloadId = getPreferences().getLong(PREF_UPDATE_DOWNLOAD_ID, NO_DOWNLOAD_ID);
+        clearInstalledPendingUpdateIfNeeded();
         setContentView(buildContent());
         requestNotificationPermissionIfNeeded();
+        startUpdateCheck(false);
     }
 
     @Override
@@ -211,6 +248,16 @@ public final class MainActivity extends Activity {
             playbackReceiverRegistered = true;
             startService(PlaybackService.commandIntent(this, PlaybackService.ACTION_REQUEST_STATE));
         }
+        if (!updateReceiverRegistered) {
+            IntentFilter filter = new IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(updateDownloadReceiver, filter, Context.RECEIVER_EXPORTED);
+            } else {
+                registerReceiver(updateDownloadReceiver, filter);
+            }
+            updateReceiverRegistered = true;
+        }
+        refreshPendingUpdateDownloadState();
     }
 
     @Override
@@ -218,6 +265,10 @@ public final class MainActivity extends Activity {
         if (playbackReceiverRegistered) {
             unregisterReceiver(playbackReceiver);
             playbackReceiverRegistered = false;
+        }
+        if (updateReceiverRegistered) {
+            unregisterReceiver(updateDownloadReceiver);
+            updateReceiverRegistered = false;
         }
         if (receiverRegistered) {
             unregisterReceiver(progressReceiver);
@@ -229,6 +280,7 @@ public final class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         libraryExecutor.shutdownNow();
+        updateExecutor.shutdownNow();
         super.onDestroy();
     }
 
@@ -366,6 +418,7 @@ public final class MainActivity extends Activity {
         LinearLayout root = screenRoot();
         root.addView(title("YTET"), marginBottom(4));
         root.addView(muted("디바이스에 저장된 음악을 기준으로 추천 믹스와 로컬 재생을 시작합니다.", 14), marginBottom(22));
+        root.addView(updatePanel(), marginBottom(18));
 
         if (!hasAudioPermission()) {
             LinearLayout permission = panel();
@@ -431,6 +484,257 @@ public final class MainActivity extends Activity {
         play.setOnClickListener(view -> playStation(station));
         card.addView(play, matchWrap());
         return card;
+    }
+
+    private View updatePanel() {
+        LinearLayout panel = panel();
+        panel.addView(label("업데이트"), marginBottom(8));
+        panel.addView(muted("GitHub의 정식 버전 릴리즈만 확인합니다. Nightly와 prerelease는 건너뜁니다.", 13), marginBottom(10));
+        updateStatusText = text(updateStatus, 14, R.color.ytet_text, false);
+        panel.addView(updateStatusText, marginBottom(12));
+        updateActionButton = secondaryButton(updateActionLabel());
+        updateActionButton.setEnabled(!updateChecking && !updateDownloading);
+        updateActionButton.setOnClickListener(view -> handleUpdateAction());
+        panel.addView(updateActionButton, matchWrap());
+        return panel;
+    }
+
+    private String updateActionLabel() {
+        if (updateChecking) {
+            return "확인 중";
+        }
+        if (updateDownloading) {
+            return "다운로드 중";
+        }
+        if (isDownloadedUpdateReady()) {
+            return "설치";
+        }
+        if (availableUpdate != null) {
+            return "다운로드";
+        }
+        return updateChecked ? "다시 확인" : "업데이트 확인";
+    }
+
+    private void handleUpdateAction() {
+        if (updateChecking || updateDownloading) {
+            return;
+        }
+        if (isDownloadedUpdateReady()) {
+            installDownloadedUpdate(updateDownloadId);
+            return;
+        }
+        if (availableUpdate != null) {
+            downloadUpdate(availableUpdate);
+            return;
+        }
+        startUpdateCheck(true);
+    }
+
+    private void startUpdateCheck(boolean manual) {
+        if (updateChecking) {
+            return;
+        }
+        updateChecking = true;
+        updateStatus = "정식 릴리즈 업데이트를 확인하는 중입니다.";
+        renderUpdateState();
+        String currentVersionName = currentAppVersionName();
+        updateExecutor.execute(() -> {
+            try {
+                UpdateInfo update = updateChecker.checkForStableUpdate(currentVersionName);
+                runOnUiThread(() -> {
+                    updateChecking = false;
+                    updateChecked = true;
+                    availableUpdate = update;
+                    if (update == null) {
+                        updateStatus = "현재 설치된 " + currentVersionName + " 버전이 최신 정식 버전입니다.";
+                    } else {
+                        updateStatus = update.tagName() + " 정식 업데이트를 사용할 수 있습니다.";
+                    }
+                    renderUpdateState();
+                });
+            } catch (Exception exception) {
+                runOnUiThread(() -> {
+                    updateChecking = false;
+                    updateChecked = true;
+                    if (manual) {
+                        updateStatus = "업데이트 확인 실패: " + safeMessage(exception);
+                    } else {
+                        updateStatus = "업데이트 확인에 실패했습니다. 필요할 때 다시 확인하세요.";
+                    }
+                    renderUpdateState();
+                });
+            }
+        });
+    }
+
+    private void downloadUpdate(UpdateInfo update) {
+        if (update == null || update.apkUrl().isEmpty()) {
+            toast("다운로드할 업데이트 파일이 없습니다.");
+            return;
+        }
+        try {
+            DownloadManager manager = downloadManager();
+            DownloadManager.Request request = new DownloadManager.Request(Uri.parse(update.apkUrl()));
+            request.setTitle("YTET " + update.tagName());
+            request.setDescription("정식 업데이트 APK 다운로드");
+            request.setMimeType("application/vnd.android.package-archive");
+            request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+            request.setDestinationInExternalFilesDir(
+                    this,
+                    Environment.DIRECTORY_DOWNLOADS,
+                    "updates/" + update.tagName() + "-" + System.currentTimeMillis() + ".apk"
+            );
+            updateDownloadId = manager.enqueue(request);
+            updateDownloading = true;
+            updateStatus = update.tagName() + " 업데이트 APK를 다운로드하는 중입니다.";
+            getPreferences().edit()
+                    .putLong(PREF_UPDATE_DOWNLOAD_ID, updateDownloadId)
+                    .putString(PREF_UPDATE_TAG, update.tagName())
+                    .apply();
+            renderUpdateState();
+        } catch (Exception exception) {
+            updateDownloading = false;
+            updateStatus = "업데이트 다운로드를 시작할 수 없습니다: " + safeMessage(exception);
+            renderUpdateState();
+        }
+    }
+
+    private void handleUpdateDownloadComplete(long downloadId) {
+        int status = downloadStatus(downloadId);
+        updateDownloading = false;
+        if (status == DownloadManager.STATUS_SUCCESSFUL) {
+            updateStatus = "업데이트 다운로드가 완료되었습니다. 설치 화면을 여는 중입니다.";
+            renderUpdateState();
+            installDownloadedUpdate(downloadId);
+            return;
+        }
+        clearPendingUpdateDownload();
+        updateStatus = "업데이트 다운로드에 실패했습니다.";
+        renderUpdateState();
+    }
+
+    private void installDownloadedUpdate(long downloadId) {
+        if (downloadId == NO_DOWNLOAD_ID || downloadStatus(downloadId) != DownloadManager.STATUS_SUCCESSFUL) {
+            toast("설치할 업데이트 APK가 아직 준비되지 않았습니다.");
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !getPackageManager().canRequestPackageInstalls()) {
+            updateStatus = "설치를 계속하려면 YTET의 알 수 없는 앱 설치를 허용한 뒤 설치를 다시 누르세요.";
+            renderUpdateState();
+            openInstallPermissionSettings();
+            return;
+        }
+        Uri apkUri = downloadManager().getUriForDownloadedFile(downloadId);
+        if (apkUri == null) {
+            updateStatus = "다운로드한 APK를 열 수 없습니다. 다시 다운로드하세요.";
+            renderUpdateState();
+            return;
+        }
+
+        Intent install = new Intent(Intent.ACTION_VIEW);
+        install.setDataAndType(apkUri, "application/vnd.android.package-archive");
+        install.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        try {
+            startActivity(install);
+            updateStatus = "Android 설치 화면에서 업데이트를 승인하세요.";
+            renderUpdateState();
+        } catch (ActivityNotFoundException exception) {
+            updateStatus = "APK 설치 화면을 열 수 없습니다.";
+            renderUpdateState();
+        }
+    }
+
+    private void openInstallPermissionSettings() {
+        Intent intent = new Intent(
+                Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                Uri.parse("package:" + getPackageName())
+        );
+        try {
+            startActivity(intent);
+        } catch (ActivityNotFoundException exception) {
+            startActivity(new Intent(Settings.ACTION_SECURITY_SETTINGS));
+        }
+    }
+
+    private void refreshPendingUpdateDownloadState() {
+        clearInstalledPendingUpdateIfNeeded();
+        if (updateDownloadId == NO_DOWNLOAD_ID) {
+            return;
+        }
+        int status = downloadStatus(updateDownloadId);
+        if (status == DownloadManager.STATUS_SUCCESSFUL) {
+            updateDownloading = false;
+            String tag = getPreferences().getString(PREF_UPDATE_TAG, "다운로드한 업데이트");
+            updateStatus = tag + " APK 다운로드가 완료되었습니다. 설치할 수 있습니다.";
+            renderUpdateState();
+        } else if (status == DownloadManager.STATUS_FAILED) {
+            clearPendingUpdateDownload();
+            updateDownloading = false;
+            updateStatus = "이전 업데이트 다운로드가 실패했습니다.";
+            renderUpdateState();
+        } else if (status == DownloadManager.STATUS_PENDING || status == DownloadManager.STATUS_RUNNING) {
+            updateDownloading = true;
+            updateStatus = "업데이트 APK를 다운로드하는 중입니다.";
+            renderUpdateState();
+        }
+    }
+
+    private boolean isDownloadedUpdateReady() {
+        return updateDownloadId != NO_DOWNLOAD_ID
+                && downloadStatus(updateDownloadId) == DownloadManager.STATUS_SUCCESSFUL;
+    }
+
+    private void clearInstalledPendingUpdateIfNeeded() {
+        String tag = getPreferences().getString(PREF_UPDATE_TAG, "");
+        if (!tag.isEmpty() && UpdateChecker.compareStableTagToCurrentVersion(tag, currentAppVersionName()) <= 0) {
+            clearPendingUpdateDownload();
+            updateDownloading = false;
+        }
+    }
+
+    private int downloadStatus(long downloadId) {
+        if (downloadId == NO_DOWNLOAD_ID) {
+            return -1;
+        }
+        DownloadManager.Query query = new DownloadManager.Query().setFilterById(downloadId);
+        try (Cursor cursor = downloadManager().query(query)) {
+            if (cursor == null || !cursor.moveToFirst()) {
+                return -1;
+            }
+            int column = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS);
+            return column < 0 ? -1 : cursor.getInt(column);
+        } catch (Exception exception) {
+            return -1;
+        }
+    }
+
+    private void clearPendingUpdateDownload() {
+        updateDownloadId = NO_DOWNLOAD_ID;
+        getPreferences().edit()
+                .remove(PREF_UPDATE_DOWNLOAD_ID)
+                .remove(PREF_UPDATE_TAG)
+                .apply();
+    }
+
+    private void renderUpdateState() {
+        if (currentTab == Tab.HOME && contentScrollView != null) {
+            renderCurrentTab();
+        }
+    }
+
+    private DownloadManager downloadManager() {
+        return (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+    }
+
+    private String currentAppVersionName() {
+        try {
+            String versionName = getPackageManager()
+                    .getPackageInfo(getPackageName(), 0)
+                    .versionName;
+            return versionName == null || versionName.trim().isEmpty() ? "0.0.0" : versionName.trim();
+        } catch (PackageManager.NameNotFoundException exception) {
+            return "0.0.0";
+        }
     }
 
     private View buildLibraryTab() {
@@ -914,6 +1218,11 @@ public final class MainActivity extends Activity {
 
     private static String valueOrDefault(String value, String fallback) {
         return value == null || value.trim().isEmpty() ? fallback : value.trim();
+    }
+
+    private static String safeMessage(Exception exception) {
+        String message = exception == null ? null : exception.getMessage();
+        return message == null || message.trim().isEmpty() ? "알 수 없는 오류" : message.trim();
     }
 
     private void updateModeOptions() {

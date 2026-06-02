@@ -60,6 +60,28 @@ jobs:
           yes | "$sdkmanager_bin" --licenses >/dev/null || true
           "$sdkmanager_bin" "platforms;android-36" "build-tools;36.0.0"
 
+      - name: Configure stable APK signing
+        shell: bash
+        env:
+          YTET_SIGNING_KEYSTORE_BASE64: ${{ secrets.YTET_SIGNING_KEYSTORE_BASE64 }}
+          YTET_SIGNING_STORE_PASSWORD: ${{ secrets.YTET_SIGNING_STORE_PASSWORD }}
+          YTET_SIGNING_KEY_ALIAS: ${{ secrets.YTET_SIGNING_KEY_ALIAS }}
+          YTET_SIGNING_KEY_PASSWORD: ${{ secrets.YTET_SIGNING_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${YTET_SIGNING_KEYSTORE_BASE64:-}" ]]; then
+            echo "Stable APK signing secrets are not configured; using the default debug signing key."
+            exit 0
+          fi
+          keystore="$RUNNER_TEMP/ytet-release-signing.jks"
+          printf '%s' "$YTET_SIGNING_KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          {
+            echo "YTET_SIGNING_STORE_FILE=$keystore"
+            echo "YTET_SIGNING_STORE_PASSWORD=$YTET_SIGNING_STORE_PASSWORD"
+            echo "YTET_SIGNING_KEY_ALIAS=$YTET_SIGNING_KEY_ALIAS"
+            echo "YTET_SIGNING_KEY_PASSWORD=$YTET_SIGNING_KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
+
       - name: Resolve release version
         id: version
         shell: bash
@@ -72,6 +94,25 @@ jobs:
             version="nightly"
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Export Android version for formal release
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          if [[ "$version" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            major="${BASH_REMATCH[1]}"
+            minor="${BASH_REMATCH[2]}"
+            patch="${BASH_REMATCH[3]}"
+            version_name="${major}.${minor}.${patch}-android"
+            version_code=$((10#$major * 1000000 + 10#$minor * 1000 + 10#$patch))
+            {
+              echo "YTET_VERSION_NAME=$version_name"
+              echo "YTET_VERSION_CODE=$version_code"
+            } >> "$GITHUB_ENV"
+          else
+            echo "Release version '$version' is not a formal Android version tag; keeping the Gradle default version."
+          fi
 
       - name: Verify project structure
         run: |
