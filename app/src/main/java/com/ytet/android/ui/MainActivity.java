@@ -91,6 +91,7 @@ public final class MainActivity extends Activity {
     private boolean playbackHasQueue;
     private boolean playbackPlaying;
     private boolean playbackPreparing;
+    private boolean playbackWillPlay;
     private boolean playbackError;
     private String playbackTitle = "로컬 재생 대기";
     private String playbackMeta = "기기 음악을 스캔하면 재생할 수 있습니다.";
@@ -159,6 +160,7 @@ public final class MainActivity extends Activity {
             playbackHasQueue = intent.getBooleanExtra(PlaybackService.EXTRA_HAS_QUEUE, false);
             playbackPlaying = intent.getBooleanExtra(PlaybackService.EXTRA_PLAYING, false);
             playbackPreparing = intent.getBooleanExtra(PlaybackService.EXTRA_PREPARING, false);
+            playbackWillPlay = intent.getBooleanExtra(PlaybackService.EXTRA_WILL_PLAY, false);
             playbackError = intent.getBooleanExtra(PlaybackService.EXTRA_ERROR, false);
             playbackTitle = valueOrDefault(
                     intent.getStringExtra(PlaybackService.EXTRA_TITLE),
@@ -661,6 +663,7 @@ public final class MainActivity extends Activity {
         playbackHasQueue = true;
         playbackPlaying = false;
         playbackPreparing = true;
+        playbackWillPlay = true;
         playbackError = false;
         playbackTitle = station.title();
         playbackMeta = station.subtitle();
@@ -678,6 +681,7 @@ public final class MainActivity extends Activity {
         playbackHasQueue = true;
         playbackPlaying = false;
         playbackPreparing = true;
+        playbackWillPlay = true;
         playbackError = false;
         playbackTitle = track.title();
         playbackMeta = track.artist() + " · " + track.folder();
@@ -723,7 +727,7 @@ public final class MainActivity extends Activity {
         }
         nowPlayingTitle.setText(playbackTitle);
         nowPlayingMeta.setText(playbackPreparing || playbackError ? streamStatus : playbackMeta);
-        playPauseButton.setText(playbackPlaying ? "일시정지" : "재생");
+        playPauseButton.setText(playbackPlaying || playbackWillPlay ? "일시정지" : "재생");
     }
 
     private void startLibraryRefresh(boolean renderImmediately) {

@@ -17,7 +17,9 @@ import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 
 import com.ytet.android.R;
 import com.ytet.android.library.DeviceAudioTrack;
@@ -27,6 +29,8 @@ import com.ytet.android.ui.MainActivity;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public final class PlaybackService extends Service {
     public static final String ACTION_PLAY_QUEUE = "com.ytet.android.action.PLAY_QUEUE";
@@ -42,6 +46,7 @@ public final class PlaybackService extends Service {
     public static final String EXTRA_HAS_QUEUE = "com.ytet.android.extra.HAS_QUEUE";
     public static final String EXTRA_PLAYING = "com.ytet.android.extra.PLAYING";
     public static final String EXTRA_PREPARING = "com.ytet.android.extra.PREPARING";
+    public static final String EXTRA_WILL_PLAY = "com.ytet.android.extra.WILL_PLAY";
     public static final String EXTRA_ERROR = "com.ytet.android.extra.PLAYBACK_ERROR";
     public static final String EXTRA_TITLE = "com.ytet.android.extra.PLAYBACK_TITLE";
     public static final String EXTRA_META = "com.ytet.android.extra.PLAYBACK_META";
@@ -55,6 +60,8 @@ public final class PlaybackService extends Service {
 
     private final ArrayList<DeviceAudioTrack> queue = new ArrayList<>();
     private final DeviceMusicLibrary musicLibrary = new DeviceMusicLibrary();
+    private final ExecutorService queueExecutor = Executors.newSingleThreadExecutor();
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final AudioManager.OnAudioFocusChangeListener focusChangeListener = this::onAudioFocusChanged;
 
     private MediaPlayer mediaPlayer;
@@ -64,6 +71,7 @@ public final class PlaybackService extends Service {
     private String mixSubtitle = "기기 저장 음악";
     private int queueIndex;
     private int playbackVersion;
+    private int queueLoadVersion;
     private int failedTrackSkips;
     private boolean preparing;
     private boolean playing;
@@ -139,8 +147,7 @@ public final class PlaybackService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? ACTION_TOGGLE : intent.getAction();
         if (ACTION_PLAY_QUEUE.equals(action)) {
-            loadQueue(intent);
-            prepareCurrentTrack();
+            loadQueueAsync(intent);
         } else if (ACTION_PLAY.equals(action)) {
             play();
         } else if (ACTION_PAUSE.equals(action)) {
@@ -169,6 +176,7 @@ public final class PlaybackService extends Service {
 
     @Override
     public void onDestroy() {
+        queueExecutor.shutdownNow();
         releasePlayer();
         abandonAudioFocus();
         if (mediaSession != null) {
@@ -179,16 +187,61 @@ public final class PlaybackService extends Service {
         super.onDestroy();
     }
 
-    private void loadQueue(Intent intent) {
+    private void loadQueueAsync(Intent intent) {
+        int version = ++queueLoadVersion;
+        long[] ids = intent.getLongArrayExtra(EXTRA_TRACK_IDS);
+
         queue.clear();
         queueIndex = 0;
         failedTrackSkips = 0;
         errorStatus = null;
         mixTitle = safeExtra(intent, EXTRA_MIX_TITLE, "로컬 음악");
         mixSubtitle = safeExtra(intent, EXTRA_MIX_SUBTITLE, "기기 저장 음악");
+        preparing = true;
+        playing = false;
+        startWhenPrepared = true;
+        releasePlayer();
+        abandonAudioFocus();
+        updateTransportState();
+        showNotification();
+        broadcastState();
 
-        long[] ids = intent.getLongArrayExtra(EXTRA_TRACK_IDS);
-        queue.addAll(musicLibrary.loadTracksByIds(this, ids));
+        queueExecutor.execute(() -> {
+            List<DeviceAudioTrack> loadedTracks;
+            try {
+                loadedTracks = musicLibrary.loadTracksByIds(this, ids);
+            } catch (Exception exception) {
+                mainHandler.post(() -> handleQueueLoadFailure(version, exception));
+                return;
+            }
+            mainHandler.post(() -> finishQueueLoad(version, loadedTracks));
+        });
+    }
+
+    private void finishQueueLoad(int version, List<DeviceAudioTrack> loadedTracks) {
+        if (version != queueLoadVersion) {
+            return;
+        }
+        queue.clear();
+        queue.addAll(loadedTracks);
+        queueIndex = 0;
+        failedTrackSkips = 0;
+        prepareCurrentTrack();
+    }
+
+    private void handleQueueLoadFailure(int version, Exception exception) {
+        if (version != queueLoadVersion) {
+            return;
+        }
+        queue.clear();
+        queueIndex = 0;
+        preparing = false;
+        playing = false;
+        startWhenPrepared = false;
+        errorStatus = "재생 큐를 불러오지 못했습니다: " + safeMessage(exception);
+        updateTransportState();
+        showNotification();
+        broadcastState();
     }
 
     private void prepareCurrentTrack() {
@@ -255,6 +308,14 @@ public final class PlaybackService extends Service {
     }
 
     private void toggle() {
+        if (preparing) {
+            if (startWhenPrepared) {
+                pause(false);
+            } else {
+                play();
+            }
+            return;
+        }
         if (playing) {
             pause(false);
         } else {
@@ -270,8 +331,14 @@ public final class PlaybackService extends Service {
             prepareCurrentTrack();
             return;
         }
-        if (preparing || playing) {
+        if (preparing) {
             startWhenPrepared = true;
+            updateTransportState();
+            showNotification();
+            broadcastState();
+            return;
+        }
+        if (playing) {
             return;
         }
         if (!requestAudioFocus()) {
@@ -294,6 +361,15 @@ public final class PlaybackService extends Service {
     }
 
     private void pause(boolean resumeAfterFocusGain) {
+        if (preparing && mediaPlayer == null) {
+            playing = false;
+            startWhenPrepared = false;
+            resumeOnAudioFocusGain = resumeAfterFocusGain;
+            updateTransportState();
+            showNotification();
+            broadcastState();
+            return;
+        }
         if (mediaPlayer == null) {
             return;
         }
@@ -459,9 +535,10 @@ public final class PlaybackService extends Service {
                 .setOngoing(playing || (preparing && startWhenPrepared));
 
         builder.addAction(android.R.drawable.ic_media_previous, "이전", serviceAction(ACTION_PREVIOUS, 1));
+        boolean waitingToPlay = preparing && startWhenPrepared;
         builder.addAction(
-                playing ? android.R.drawable.ic_media_pause : android.R.drawable.ic_media_play,
-                playing ? "일시정지" : "재생",
+                playing || waitingToPlay ? android.R.drawable.ic_media_pause : android.R.drawable.ic_media_play,
+                playing || waitingToPlay ? "일시정지" : "재생",
                 serviceAction(ACTION_TOGGLE, 2)
         );
         builder.addAction(android.R.drawable.ic_media_next, "다음", serviceAction(ACTION_NEXT, 3));
@@ -551,6 +628,7 @@ public final class PlaybackService extends Service {
         intent.putExtra(EXTRA_HAS_QUEUE, !queue.isEmpty());
         intent.putExtra(EXTRA_PLAYING, playing);
         intent.putExtra(EXTRA_PREPARING, preparing);
+        intent.putExtra(EXTRA_WILL_PLAY, preparing && startWhenPrepared);
         intent.putExtra(EXTRA_ERROR, errorStatus != null);
         intent.putExtra(EXTRA_TITLE, track == null ? "로컬 재생 대기" : track.title());
         intent.putExtra(EXTRA_META, track == null ? "기기 음악을 스캔하면 재생할 수 있습니다." : track.artist() + " · " + mixTitle);
@@ -609,6 +687,11 @@ public final class PlaybackService extends Service {
     private static String safeExtra(Intent intent, String key, String fallback) {
         String value = intent.getStringExtra(key);
         return value == null || value.trim().isEmpty() ? fallback : value.trim();
+    }
+
+    private static String safeMessage(Exception exception) {
+        String message = exception == null ? null : exception.getMessage();
+        return message == null || message.trim().isEmpty() ? "알 수 없는 오류" : message.trim();
     }
 
 }
