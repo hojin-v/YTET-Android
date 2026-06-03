@@ -2,6 +2,7 @@ package com.ytet.android.ui;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.app.Dialog;
 import android.app.DownloadManager;
 import android.app.PendingIntent;
@@ -15,7 +16,11 @@ import android.content.IntentSender;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.Rect;
+import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
@@ -26,7 +31,10 @@ import android.os.Environment;
 import android.provider.MediaStore;
 import android.provider.Settings;
 import android.text.InputType;
+import android.text.TextUtils;
 import android.view.Gravity;
+import android.view.inputmethod.EditorInfo;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
@@ -35,8 +43,10 @@ import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
+import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.RadioButton;
@@ -48,10 +58,12 @@ import android.widget.Toast;
 
 import com.ytet.android.R;
 import com.ytet.android.core.AudioFormat;
+import com.ytet.android.core.DefaultMediaPaths;
 import com.ytet.android.core.ExtractionRequest;
 import com.ytet.android.core.MediaType;
 import com.ytet.android.core.VideoQuality;
 import com.ytet.android.extract.ExtractionService;
+import com.ytet.android.extract.StorageWriter;
 import com.ytet.android.library.DeviceAudioTrack;
 import com.ytet.android.library.DeviceMusicLibrary;
 import com.ytet.android.library.MusicLibrary;
@@ -62,7 +74,11 @@ import com.ytet.android.update.UpdateChecker;
 import com.ytet.android.update.UpdateInfo;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutorService;
 
@@ -78,9 +94,9 @@ public final class MainActivity extends Activity {
     private static final String PREF_UPDATE_DOWNLOAD_ID = "update_download_id";
     private static final String PREF_UPDATE_TAG = "update_tag";
     private static final String PREF_AUTO_UPDATE_CHECK = "auto_update_check";
-    private static final String PREF_HIDE_SHORT_AUDIO = "hide_short_audio";
-    private static final String PREF_HIDE_SYSTEM_AUDIO_FOLDERS = "hide_system_audio_folders";
-    private static final long MINIMUM_MUSIC_DURATION_MS = 45_000L;
+    private static final String PREF_LIBRARY_SOURCE = "library_source";
+    private static final String LIBRARY_SOURCE_COLLECTION = "collection";
+    private static final String LIBRARY_SOURCE_DEVICE = "device";
 
     private final ExecutorService libraryExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService updateExecutor = Executors.newSingleThreadExecutor();
@@ -92,14 +108,14 @@ public final class MainActivity extends Activity {
     private TextView nowPlayingCover;
     private TextView nowPlayingTitle;
     private TextView nowPlayingMeta;
-    private Button playPauseButton;
+    private ImageButton playPauseButton;
     private Button homeTabButton;
     private Button libraryTabButton;
     private Button extractorTabButton;
-    private Button settingsTabButton;
     private TextView updateStatusText;
     private Button updateActionButton;
     private Dialog playerDialog;
+    private Dialog queueDialog;
 
     private EditText urlInput;
     private RadioGroup mediaGroup;
@@ -107,7 +123,10 @@ public final class MainActivity extends Activity {
     private RadioButton videoRadio;
     private Spinner optionSpinner;
     private CheckBox subtitlesCheck;
+    private CheckBox playlistCheck;
+    private CheckBox metadataEnhanceCheck;
     private Button chooseFolderButton;
+    private Button resetOutputButton;
     private Button extractButton;
     private TextView folderText;
     private TextView statusText;
@@ -137,16 +156,34 @@ public final class MainActivity extends Activity {
     private boolean playbackShuffleEnabled;
     private int playbackRepeatMode = PlaybackService.REPEAT_OFF;
     private List<DeviceAudioTrack> activeQueuePreview = new ArrayList<>();
+    private long[] playbackQueueTrackIds = new long[0];
+    private boolean queuePreviewLoading;
+    private long sleepTimerEndAtMs;
+    private int sleepTimerMinutes = 30;
+    private boolean suppressPlayerDragDismiss;
     private String extractorUrl = "";
     private MediaType extractorMediaType = MediaType.AUDIO;
     private String extractorOption = AudioFormat.M4A.value();
     private boolean extractorIncludeSubtitles;
+    private boolean extractorIncludePlaylist;
+    private boolean extractorEnhanceMetadata;
 
     private List<DeviceAudioTrack> libraryTracks = new ArrayList<>();
+    private List<DeviceAudioTrack> homeTracks = new ArrayList<>();
     private boolean libraryLoaded;
     private boolean libraryLoading;
     private String libraryStatus = "기기 음악 권한을 허용하면 폴더와 파일을 스캔합니다.";
+    private boolean homeLoaded;
+    private boolean homeLoading;
+    private String homeStatus = "보관함 음악을 스캔하면 추천 믹스가 표시됩니다.";
     private String selectedFolder = MusicLibrary.ALL_FOLDERS;
+    private String librarySearchQuery = "";
+    private boolean libraryGridView;
+    private boolean librarySearchVisible;
+    private EditText librarySearchInput;
+    private float libraryPullStartY;
+    private boolean libraryPullTracking;
+    private String librarySource = LIBRARY_SOURCE_COLLECTION;
     private DeviceAudioTrack selectedTrack;
     private DeviceAudioTrack pendingDeleteTrack;
 
@@ -165,8 +202,7 @@ public final class MainActivity extends Activity {
     private UpdateInfo availableUpdate;
     private long updateDownloadId = NO_DOWNLOAD_ID;
     private boolean autoUpdateCheck = true;
-    private boolean hideShortAudio = true;
-    private boolean hideSystemAudioFolders = true;
+    private boolean extractionPendingNotificationPermission;
 
     private final BroadcastReceiver progressReceiver = new BroadcastReceiver() {
         @Override
@@ -205,6 +241,10 @@ public final class MainActivity extends Activity {
     private final BroadcastReceiver playbackReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
+            if (PlaybackService.ACTION_SLEEP_TIMER_FINISHED.equals(intent.getAction())) {
+                closeAfterSleepTimer();
+                return;
+            }
             if (!PlaybackService.ACTION_STATE.equals(intent.getAction())) {
                 return;
             }
@@ -237,12 +277,16 @@ public final class MainActivity extends Activity {
             playbackMix = valueOrDefault(intent.getStringExtra(PlaybackService.EXTRA_MIX), "로컬 음악");
             playbackShuffleEnabled = intent.getBooleanExtra(PlaybackService.EXTRA_SHUFFLE_ENABLED, false);
             playbackRepeatMode = intent.getIntExtra(PlaybackService.EXTRA_REPEAT_MODE, PlaybackService.REPEAT_OFF);
+            sleepTimerEndAtMs = intent.getLongExtra(PlaybackService.EXTRA_SLEEP_TIMER_END_AT_MS, 0L);
+            updateQueuePreviewFromIds(intent.getLongArrayExtra(PlaybackService.EXTRA_QUEUE_TRACK_IDS));
             if (!playbackHasQueue) {
                 activeStation = null;
                 activeQueuePreview = new ArrayList<>();
+                playbackQueueTrackIds = new long[0];
             }
             updateNowPlayingBar();
             updateExpandedPlayer();
+            updateQueueDialog();
         }
     };
 
@@ -263,13 +307,12 @@ public final class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         outputTreeUri = getPreferences().getString(PREF_OUTPUT_TREE, null);
+        librarySource = getPreferences().getString(PREF_LIBRARY_SOURCE, LIBRARY_SOURCE_COLLECTION);
         updateDownloadId = getPreferences().getLong(PREF_UPDATE_DOWNLOAD_ID, NO_DOWNLOAD_ID);
         autoUpdateCheck = getPreferences().getBoolean(PREF_AUTO_UPDATE_CHECK, true);
-        hideShortAudio = getPreferences().getBoolean(PREF_HIDE_SHORT_AUDIO, true);
-        hideSystemAudioFolders = getPreferences().getBoolean(PREF_HIDE_SYSTEM_AUDIO_FOLDERS, true);
+        ensureDefaultMediaFolders();
         clearInstalledPendingUpdateIfNeeded();
         setContentView(buildContent());
-        requestNotificationPermissionIfNeeded();
         if (autoUpdateCheck) {
             startUpdateCheck(false);
         }
@@ -289,6 +332,7 @@ public final class MainActivity extends Activity {
         }
         if (!playbackReceiverRegistered) {
             IntentFilter filter = new IntentFilter(PlaybackService.ACTION_STATE);
+            filter.addAction(PlaybackService.ACTION_SLEEP_TIMER_FINISHED);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 registerReceiver(playbackReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
             } else {
@@ -332,6 +376,10 @@ public final class MainActivity extends Activity {
             playerDialog.dismiss();
             playerDialog = null;
         }
+        if (queueDialog != null) {
+            queueDialog.dismiss();
+            queueDialog = null;
+        }
         libraryExecutor.shutdownNow();
         updateExecutor.shutdownNow();
         super.onDestroy();
@@ -359,6 +407,21 @@ public final class MainActivity extends Activity {
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQUEST_NOTIFICATIONS) {
+            boolean granted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+            if (extractionPendingNotificationPermission) {
+                extractionPendingNotificationPermission = false;
+                if (granted) {
+                    startExtraction();
+                } else {
+                    extractionStatus = "알림 권한이 필요합니다.";
+                    extractionResult = "앱을 나가도 진행률과 성공/실패를 알림바에서 확인하려면 알림 권한을 허용해야 합니다.";
+                    applyExtractionStateToViews();
+                    toast("알림 권한이 없어 추출을 시작하지 않았습니다.");
+                }
+            }
+            return;
+        }
         if (requestCode != REQUEST_AUDIO_LIBRARY) {
             if (requestCode == REQUEST_WRITE_LIBRARY) {
                 handleWritePermissionResult(grantResults);
@@ -367,8 +430,10 @@ public final class MainActivity extends Activity {
         }
         if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
             startLibraryRefresh(true);
+            startHomeRefresh(true);
         } else {
             libraryStatus = "기기 음악을 관리하려면 오디오 읽기 권한이 필요합니다.";
+            homeStatus = libraryStatus;
             renderLibraryDependentTabs();
         }
     }
@@ -378,7 +443,7 @@ public final class MainActivity extends Activity {
         app.setOrientation(LinearLayout.VERTICAL);
         app.setBackgroundColor(color(R.color.ytet_background));
 
-        contentScrollView = new ScrollView(this);
+        contentScrollView = new PullRefreshScrollView(this);
         contentScrollView.setFillViewport(true);
         contentScrollView.setBackgroundColor(color(R.color.ytet_background));
         app.addView(contentScrollView, new LinearLayout.LayoutParams(
@@ -416,26 +481,24 @@ public final class MainActivity extends Activity {
         copy.addView(nowPlayingMeta, matchWrap());
         bar.addView(copy, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
-        playPauseButton = compactButton("재생");
+        playPauseButton = iconButton(R.drawable.ic_play_arrow, "재생", false);
         playPauseButton.setOnClickListener(view -> toggleStreamPlayback());
-        bar.addView(playPauseButton, new LinearLayout.LayoutParams(dp(86), dp(44)));
+        bar.addView(playPauseButton, new LinearLayout.LayoutParams(dp(48), dp(44)));
         return bar;
     }
 
     private LinearLayout buildBottomTabs() {
         LinearLayout tabs = new LinearLayout(this);
         tabs.setOrientation(LinearLayout.HORIZONTAL);
-        tabs.setPadding(dp(10), dp(8), dp(10), dp(10));
+        tabs.setPadding(dp(10), dp(10), dp(10), dp(16));
         tabs.setBackgroundColor(color(R.color.ytet_background));
 
         homeTabButton = tabButton("홈", Tab.HOME);
         libraryTabButton = tabButton("내 음악", Tab.LIBRARY);
         extractorTabButton = tabButton("추출기", Tab.EXTRACTOR);
-        settingsTabButton = tabButton("설정", Tab.SETTINGS);
         tabs.addView(homeTabButton, tabParams());
         tabs.addView(libraryTabButton, tabParams());
         tabs.addView(extractorTabButton, tabParams());
-        tabs.addView(settingsTabButton, tabParams());
         return tabs;
     }
 
@@ -464,8 +527,6 @@ public final class MainActivity extends Activity {
             view = buildLibraryTab();
         } else if (currentTab == Tab.EXTRACTOR) {
             view = buildExtractorTab();
-        } else if (currentTab == Tab.SETTINGS) {
-            view = buildSettingsTab();
         } else {
             view = buildHomeTab();
         }
@@ -477,12 +538,51 @@ public final class MainActivity extends Activity {
         updateNowPlayingBar();
     }
 
+    private void ensureDefaultMediaFolders() {
+        try {
+            new StorageWriter().ensureDefaultFolders();
+        } catch (Exception ignored) {
+            // MediaStore creates the public folders when the first file is saved on scoped-storage devices.
+        }
+    }
+
+    private boolean handleLibraryPullToRefresh(MotionEvent event) {
+        if (currentTab != Tab.LIBRARY || contentScrollView == null) {
+            libraryPullTracking = false;
+            return false;
+        }
+        if (event.getAction() == MotionEvent.ACTION_DOWN) {
+            libraryPullTracking = contentScrollView.getScrollY() <= 0;
+            libraryPullStartY = event.getRawY();
+            return false;
+        }
+        if (event.getAction() == MotionEvent.ACTION_MOVE && libraryPullTracking) {
+            if (contentScrollView.getScrollY() > 0) {
+                libraryPullTracking = false;
+                return false;
+            }
+            float dragDistance = event.getRawY() - libraryPullStartY;
+            if (dragDistance > dp(92)) {
+                libraryPullTracking = false;
+                if (!libraryLoading) {
+                    toast("내 음악을 새로고침합니다.");
+                    startLibraryRefresh(true);
+                }
+                return true;
+            }
+        }
+        if (event.getAction() == MotionEvent.ACTION_UP || event.getAction() == MotionEvent.ACTION_CANCEL) {
+            libraryPullTracking = false;
+        }
+        return false;
+    }
+
     private View buildHomeTab() {
         LinearLayout root = screenRoot();
         if (!hasAudioPermission()) {
             LinearLayout permission = panel();
             permission.addView(label("오디오 권한 필요"), marginBottom(8));
-            permission.addView(muted("홈 추천 믹스는 디바이스 내 음악 메타데이터와 폴더를 읽은 뒤 생성됩니다.", 14), marginBottom(14));
+            permission.addView(muted("홈 추천 믹스는 YTET 보관함 음악 메타데이터와 폴더를 읽은 뒤 생성됩니다.", 14), marginBottom(14));
             Button request = primaryButton("권한 허용");
             request.setOnClickListener(view -> requestAudioPermission());
             permission.addView(request, matchWrap());
@@ -490,26 +590,27 @@ public final class MainActivity extends Activity {
             return root;
         }
 
-        if (!libraryLoaded && !libraryLoading) {
-            startLibraryRefresh(false);
+        if (!homeLoaded && !homeLoading) {
+            startHomeRefresh(false);
         }
 
         LinearLayout hero = panel();
         hero.addView(label("내 음악 바로 듣기"), marginBottom(8));
-        hero.addView(text(libraryStatus, 15, R.color.ytet_text, false), marginBottom(12));
-        hero.addView(muted(librarySummary(), 13), marginBottom(14));
-        Button primaryPlay = primaryButton(activeStation == null ? "전체 셔플 재생" : "현재 믹스 다시 재생");
-        primaryPlay.setEnabled(!libraryTracks.isEmpty());
-        primaryPlay.setOnClickListener(view -> playStation(activeStation == null ? firstStation() : activeStation));
+        hero.addView(text(homeStatus, 15, R.color.ytet_text, false), marginBottom(12));
+        hero.addView(muted(homeSummary(), 13), marginBottom(14));
+        Button primaryPlay = primaryButton("보관함 추천 재생");
+        primaryPlay.setEnabled(!homeTracks.isEmpty());
+        primaryPlay.setOnClickListener(view -> playStation(firstHomeStation(), homeTracks));
         hero.addView(primaryPlay, matchWrap());
         root.addView(hero, marginBottom(24));
 
         root.addView(sectionTitle("추천 믹스"), marginBottom(10));
-        List<MusicStation> stations = StationCatalog.recommendedStations(libraryTracks);
+        List<MusicStation> stations = StationCatalog.recommendedStations(homeTracks);
         if (stations.isEmpty()) {
             LinearLayout empty = panel();
             empty.addView(label("추천할 음악이 없습니다."), marginBottom(8));
-            empty.addView(muted("내 음악 탭에서 스캔 상태를 확인하거나 기기에 음악 파일을 추가하세요.", 13), matchWrap());
+            empty.addView(muted("추출한 음원이 " + DefaultMediaPaths.displayPath(MediaType.AUDIO)
+                    + "에 저장되면 홈 추천 스테이션에 반영됩니다.", 13), matchWrap());
             root.addView(empty, marginBottom(18));
             return root;
         }
@@ -518,17 +619,17 @@ public final class MainActivity extends Activity {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         for (MusicStation station : stations) {
-            row.addView(stationCard(station), marginRight(12, dp(184), LinearLayout.LayoutParams.WRAP_CONTENT));
+            row.addView(stationCard(station, homeTracks), marginRight(12, dp(184), LinearLayout.LayoutParams.WRAP_CONTENT));
         }
         shelf.addView(row, matchWrap());
         root.addView(shelf, marginBottom(24));
         return root;
     }
 
-    private View stationCard(MusicStation station) {
+    private View stationCard(MusicStation station, List<DeviceAudioTrack> sourceTracks) {
         LinearLayout card = panel();
         card.setBackground(rounded(station.accentColor(), 8));
-        card.setOnClickListener(view -> playStation(station));
+        card.setOnClickListener(view -> playStation(station, sourceTracks));
 
         TextView category = text(station.category(), 12, android.R.color.white, true);
         category.setAlpha(0.86f);
@@ -540,7 +641,7 @@ public final class MainActivity extends Activity {
         description.setMinLines(3);
         card.addView(description, marginBottom(12));
         Button play = compactButton("재생");
-        play.setOnClickListener(view -> playStation(station));
+        play.setOnClickListener(view -> playStation(station, sourceTracks));
         card.addView(play, matchWrap());
         return card;
     }
@@ -776,8 +877,12 @@ public final class MainActivity extends Activity {
     }
 
     private void renderUpdateState() {
-        if (currentTab == Tab.SETTINGS && contentScrollView != null) {
-            renderCurrentTab();
+        if (updateStatusText != null) {
+            updateStatusText.setText(updateStatus);
+        }
+        if (updateActionButton != null) {
+            updateActionButton.setText(updateActionLabel());
+            updateActionButton.setEnabled(!updateChecking && !updateDownloading);
         }
     }
 
@@ -814,15 +919,11 @@ public final class MainActivity extends Activity {
             startLibraryRefresh(false);
         }
 
-        LinearLayout summary = panel();
-        summary.addView(label("라이브러리"), marginBottom(8));
-        summary.addView(muted(libraryStatus, 13), marginBottom(12));
-        summary.addView(text(librarySummary(), 22, R.color.ytet_text, true), marginBottom(12));
-        Button refresh = secondaryButton(libraryLoading ? "스캔 중" : "새로고침");
-        refresh.setEnabled(!libraryLoading);
-        refresh.setOnClickListener(view -> startLibraryRefresh(true));
-        summary.addView(refresh, matchWrap());
-        root.addView(summary, marginBottom(18));
+        root.addView(librarySearchToolbar(), marginBottom(shouldShowLibrarySearchInput() ? 8 : 10));
+        if (shouldShowLibrarySearchInput()) {
+            root.addView(librarySearchInputRow(), marginBottom(10));
+        }
+        root.addView(libraryViewToolbar(), marginBottom(18));
 
         List<String> folders = MusicLibrary.folderNames(libraryTracks);
         if (!folders.contains(selectedFolder)) {
@@ -847,70 +948,370 @@ public final class MainActivity extends Activity {
         folderShelf.addView(folderRow, matchWrap());
         root.addView(folderShelf, marginBottom(18));
 
-        if (selectedTrack != null) {
-            root.addView(selectedTrackPanel(), marginBottom(18));
-        }
-
         root.addView(sectionTitle("파일"), marginBottom(10));
-        List<DeviceAudioTrack> visibleTracks = MusicLibrary.filterByFolder(libraryTracks, selectedFolder);
+        List<DeviceAudioTrack> visibleTracks = visibleLibraryTracks();
         if (visibleTracks.isEmpty()) {
             LinearLayout empty = panel();
-            empty.addView(label("표시할 음악이 없습니다."), marginBottom(8));
-            empty.addView(muted("다른 폴더를 선택하거나 새로고침을 실행하세요.", 13), matchWrap());
+            boolean searching = !librarySearchQuery.trim().isEmpty();
+            empty.addView(label(searching ? "검색 결과가 없습니다." : "표시할 음악이 없습니다."), marginBottom(8));
+            empty.addView(muted(searching
+                    ? "다른 검색어를 입력하거나 폴더 필터를 변경하세요."
+                    : emptyLibraryHint(), 13), matchWrap());
             root.addView(empty, matchWrap());
             return root;
         }
 
         int limit = Math.min(visibleTracks.size(), 80);
-        for (int i = 0; i < limit; i++) {
-            root.addView(trackRow(visibleTracks.get(i)), marginBottom(8));
+        if (libraryGridView) {
+            addTrackCardGrid(root, visibleTracks, limit);
+        } else {
+            for (int i = 0; i < limit; i++) {
+                root.addView(trackRow(visibleTracks.get(i)), marginBottom(8));
+            }
         }
         if (visibleTracks.size() > limit) {
-            root.addView(muted("상위 " + limit + "개만 표시 중입니다. 폴더를 선택하면 목록을 좁힐 수 있습니다.", 12), matchWrap());
+            root.addView(muted("상위 " + limit + "개만 표시 중입니다. 검색하거나 폴더를 선택하면 목록을 좁힐 수 있습니다.", 12), matchWrap());
         }
         return root;
     }
 
-    private View selectedTrackPanel() {
-        LinearLayout panel = panel();
-        panel.addView(label("선택한 파일"), marginBottom(8));
-        panel.addView(text(selectedTrack.title(), 18, R.color.ytet_text, true), marginBottom(4));
-        panel.addView(muted(selectedTrack.artist() + " · " + selectedTrack.album(), 13), marginBottom(4));
-        panel.addView(muted(selectedTrack.folder() + " · " + MusicLibrary.formatDuration(selectedTrack.durationMs())
-                + " · " + MusicLibrary.formatBytes(selectedTrack.sizeBytes()), 13), marginBottom(12));
+    private View librarySearchToolbar() {
+        LinearLayout toolbar = new LinearLayout(this);
+        toolbar.setOrientation(LinearLayout.HORIZONTAL);
+        toolbar.setGravity(Gravity.CENTER_VERTICAL);
 
-        LinearLayout actions = new LinearLayout(this);
-        actions.setOrientation(LinearLayout.HORIZONTAL);
-        Button play = primaryButton("재생");
-        play.setOnClickListener(view -> playTrack(selectedTrack));
-        Button open = secondaryButton("열기");
-        open.setOnClickListener(view -> openSelectedTrack());
-        Button share = secondaryButton("공유");
-        share.setOnClickListener(view -> shareSelectedTrack());
-        Button delete = dangerButton("삭제");
-        delete.setOnClickListener(view -> deleteSelectedTrack());
-        actions.addView(play, weightedButtonParams(6));
-        actions.addView(open, weightedButtonParams(6));
-        actions.addView(share, weightedButtonParams(6));
-        actions.addView(delete, new LinearLayout.LayoutParams(0, dp(44), 1f));
-        panel.addView(actions, matchWrap());
-        return panel;
+        Button source = toolbarTextButton(librarySourceLabel() + " ▾");
+        source.setTextSize(18);
+        source.setOnClickListener(view -> showLibrarySourceDialog());
+        toolbar.addView(source, marginRight(8, dp(126), dp(48)));
+
+        View spacer = new View(this);
+        toolbar.addView(spacer, new LinearLayout.LayoutParams(0, dp(48), 1f));
+
+        ImageButton search = toolbarIconButton(R.drawable.ic_search, "검색", shouldShowLibrarySearchInput());
+        search.setOnClickListener(view -> {
+            if (!shouldShowLibrarySearchInput()) {
+                librarySearchVisible = true;
+                renderCurrentTab();
+                return;
+            }
+            applyLibrarySearch(librarySearchInput == null ? librarySearchQuery : librarySearchInput.getText().toString());
+        });
+        toolbar.addView(search, marginRight(8, dp(44), dp(44)));
+
+        ImageButton list = toolbarIconButton(R.drawable.ic_view_list, "리스트 보기", !libraryGridView);
+        list.setOnClickListener(view -> {
+            if (libraryGridView) {
+                libraryGridView = false;
+                renderCurrentTab();
+            }
+        });
+        toolbar.addView(list, marginRight(6, dp(44), dp(44)));
+
+        ImageButton grid = toolbarIconButton(R.drawable.ic_grid_view, "카드 보기", libraryGridView);
+        grid.setOnClickListener(view -> {
+            if (!libraryGridView) {
+                libraryGridView = true;
+                renderCurrentTab();
+            }
+        });
+        toolbar.addView(grid, new LinearLayout.LayoutParams(dp(44), dp(44)));
+        return toolbar;
+    }
+
+    private View librarySearchInputRow() {
+        librarySearchInput = new EditText(this);
+        librarySearchInput.setSingleLine(true);
+        librarySearchInput.setText(librarySearchQuery);
+        librarySearchInput.setHint("검색");
+        librarySearchInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_NORMAL);
+        librarySearchInput.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
+        styleInput(librarySearchInput);
+        librarySearchInput.setSelection(librarySearchInput.getText().length());
+        librarySearchInput.setOnEditorActionListener((view, actionId, event) -> {
+            if (actionId == EditorInfo.IME_ACTION_SEARCH) {
+                applyLibrarySearch(view.getText().toString());
+                return true;
+            }
+            return false;
+        });
+        if (librarySearchVisible) {
+            librarySearchInput.post(() -> {
+                librarySearchInput.requestFocus();
+                librarySearchInput.setSelection(librarySearchInput.getText().length());
+            });
+        }
+        return librarySearchInput;
+    }
+
+    private View libraryViewToolbar() {
+        LinearLayout toolbar = new LinearLayout(this);
+        toolbar.setOrientation(LinearLayout.HORIZONTAL);
+        toolbar.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView status = muted(libraryStatus, 12);
+        status.setGravity(Gravity.CENTER_VERTICAL);
+        toolbar.addView(status, new LinearLayout.LayoutParams(0, dp(44), 1f));
+        return toolbar;
+    }
+
+    private void showLibrarySourceDialog() {
+        String[] labels = {"보관함", "기기 파일"};
+        int checked = isDeviceFileSource() ? 1 : 0;
+        new AlertDialog.Builder(this)
+                .setTitle("내 콘텐츠 보기")
+                .setSingleChoiceItems(labels, checked, (dialog, which) -> {
+                    setLibrarySource(which == 1 ? LIBRARY_SOURCE_DEVICE : LIBRARY_SOURCE_COLLECTION);
+                    dialog.dismiss();
+                })
+                .setNegativeButton("닫기", null)
+                .show();
+    }
+
+    private void setLibrarySource(String source) {
+        String nextSource = LIBRARY_SOURCE_DEVICE.equals(source)
+                ? LIBRARY_SOURCE_DEVICE
+                : LIBRARY_SOURCE_COLLECTION;
+        if (nextSource.equals(librarySource)) {
+            return;
+        }
+        librarySource = nextSource;
+        getPreferences().edit().putString(PREF_LIBRARY_SOURCE, librarySource).apply();
+        selectedFolder = MusicLibrary.ALL_FOLDERS;
+        selectedTrack = null;
+        libraryLoaded = false;
+        startLibraryRefresh(true);
+    }
+
+    private String librarySourceLabel() {
+        return isDeviceFileSource() ? "기기 파일" : "보관함";
+    }
+
+    private boolean isDeviceFileSource() {
+        return LIBRARY_SOURCE_DEVICE.equals(librarySource);
+    }
+
+    private void applyLibrarySearch(String query) {
+        librarySearchQuery = query == null ? "" : query.trim();
+        librarySearchVisible = !librarySearchQuery.isEmpty();
+        librarySearchInput = null;
+        selectedTrack = null;
+        renderCurrentTab();
+    }
+
+    private boolean shouldShowLibrarySearchInput() {
+        return librarySearchVisible || !librarySearchQuery.trim().isEmpty();
+    }
+
+    private List<DeviceAudioTrack> visibleLibraryTracks() {
+        List<DeviceAudioTrack> byFolder = MusicLibrary.filterByFolder(libraryTracks, selectedFolder);
+        String query = librarySearchQuery == null ? "" : librarySearchQuery.trim().toLowerCase(Locale.ROOT);
+        if (query.isEmpty()) {
+            return byFolder;
+        }
+
+        List<DeviceAudioTrack> matches = new ArrayList<>();
+        for (DeviceAudioTrack track : byFolder) {
+            if (trackMatchesQuery(track, query)) {
+                matches.add(track);
+            }
+        }
+        return matches;
+    }
+
+    private boolean trackMatchesQuery(DeviceAudioTrack track, String query) {
+        return containsIgnoreCase(track.title(), query)
+                || containsIgnoreCase(track.artist(), query)
+                || containsIgnoreCase(track.album(), query)
+                || containsIgnoreCase(track.folder(), query)
+                || containsIgnoreCase(track.displayName(), query);
+    }
+
+    private boolean containsIgnoreCase(String value, String query) {
+        return value != null && value.toLowerCase(Locale.ROOT).contains(query);
+    }
+
+    private void addTrackCardGrid(LinearLayout root, List<DeviceAudioTrack> visibleTracks, int limit) {
+        for (int index = 0; index < limit; index += 2) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.addView(trackCard(visibleTracks.get(index)), cardColumnParams(8));
+            if (index + 1 < limit) {
+                row.addView(trackCard(visibleTracks.get(index + 1)), cardColumnParams(0));
+            } else {
+                row.addView(new View(this), cardColumnParams(0));
+            }
+            root.addView(row, marginBottom(10));
+        }
+    }
+
+    private View trackCard(DeviceAudioTrack track) {
+        LinearLayout card = panel();
+        card.setPadding(dp(10), dp(10), dp(10), dp(12));
+        card.setBackground(rounded(selectedTrack != null && selectedTrack.id() == track.id()
+                ? color(R.color.ytet_panel_alt)
+                : color(R.color.ytet_panel), 8));
+        card.setOnClickListener(view -> {
+            selectedTrack = track;
+            playTrack(track);
+        });
+
+        SquareFrameLayout coverFrame = new SquareFrameLayout(this);
+        coverFrame.addView(trackCoverView(track), new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+        ));
+        ImageButton more = trackMoreButton(track);
+        more.setColorFilter(Color.WHITE);
+        more.setBackground(rounded(0x66000000, 8));
+        FrameLayout.LayoutParams moreParams = new FrameLayout.LayoutParams(dp(36), dp(36), Gravity.TOP | Gravity.END);
+        moreParams.setMargins(0, dp(6), dp(6), 0);
+        coverFrame.addView(more, moreParams);
+        card.addView(coverFrame, marginBottom(10));
+
+        TextView title = text(track.title(), 14, R.color.ytet_text, true);
+        title.setMaxLines(2);
+        title.setEllipsize(TextUtils.TruncateAt.END);
+        card.addView(title, marginBottom(4));
+
+        TextView artist = muted(track.artist(), 12);
+        artist.setSingleLine(true);
+        artist.setEllipsize(TextUtils.TruncateAt.END);
+        card.addView(artist, marginBottom(2));
+        card.addView(muted(MusicLibrary.formatDuration(track.durationMs()), 12), matchWrap());
+        return card;
     }
 
     private View trackRow(DeviceAudioTrack track) {
-        LinearLayout row = panel();
-        row.setPadding(dp(14), dp(12), dp(14), dp(12));
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(10), dp(10), dp(10), dp(10));
         row.setBackground(rounded(selectedTrack != null && selectedTrack.id() == track.id()
                 ? color(R.color.ytet_panel_alt)
                 : color(R.color.ytet_panel), 8));
         row.setOnClickListener(view -> {
             selectedTrack = track;
-            renderCurrentTab();
+            playTrack(track);
         });
-        row.addView(text(track.title(), 15, R.color.ytet_text, true), marginBottom(4));
-        row.addView(muted(track.artist() + " · " + MusicLibrary.formatDuration(track.durationMs()), 12), marginBottom(2));
-        row.addView(muted(track.folder() + " · " + MusicLibrary.formatBytes(track.sizeBytes()), 12), matchWrap());
+
+        LinearLayout.LayoutParams coverParams = new LinearLayout.LayoutParams(dp(58), dp(58));
+        coverParams.setMargins(0, 0, dp(12), 0);
+        row.addView(trackCoverView(track), coverParams);
+
+        LinearLayout info = new LinearLayout(this);
+        info.setOrientation(LinearLayout.VERTICAL);
+        TextView title = text(track.title(), 15, R.color.ytet_text, true);
+        title.setSingleLine(true);
+        title.setEllipsize(TextUtils.TruncateAt.END);
+        info.addView(title, marginBottom(4));
+        TextView meta = muted(track.artist() + " · " + MusicLibrary.formatDuration(track.durationMs()), 12);
+        meta.setSingleLine(true);
+        meta.setEllipsize(TextUtils.TruncateAt.END);
+        info.addView(meta, matchWrap());
+        row.addView(info, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        ImageButton more = trackMoreButton(track);
+        LinearLayout.LayoutParams moreParams = new LinearLayout.LayoutParams(dp(42), dp(42));
+        moreParams.setMargins(dp(8), 0, 0, 0);
+        row.addView(more, moreParams);
         return row;
+    }
+
+    private ImageButton trackMoreButton(DeviceAudioTrack track) {
+        ImageButton more = iconButton(R.drawable.ic_more_vert, "상세정보", false);
+        more.setOnClickListener(view -> showTrackDetails(track));
+        return more;
+    }
+
+    private View trackCoverView(DeviceAudioTrack track) {
+        if (track.albumArtUri() != null && !track.albumArtUri().trim().isEmpty()) {
+            ImageView image = new ImageView(this);
+            image.setBackground(rounded(color(R.color.ytet_panel_alt), 8));
+            image.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            image.setImageURI(Uri.parse(track.albumArtUri()));
+            return image;
+        }
+        TextView placeholder = text(trackInitials(track), 22, android.R.color.white, true);
+        placeholder.setGravity(Gravity.CENTER);
+        placeholder.setBackground(rounded(color(R.color.ytet_accent_dark), 8));
+        return placeholder;
+    }
+
+    private String trackInitials(DeviceAudioTrack track) {
+        String title = track == null ? "" : track.title().trim();
+        if (title.isEmpty()) {
+            return "YT";
+        }
+        return title.substring(0, Math.min(2, title.length())).toUpperCase(Locale.ROOT);
+    }
+
+    private void showTrackDetails(DeviceAudioTrack track) {
+        selectedTrack = track;
+        LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+        body.setPadding(dp(2), dp(8), dp(2), 0);
+        body.addView(trackDetailItem("제목", track.title()), marginBottom(10));
+        body.addView(trackDetailItem("아티스트", track.artist()), marginBottom(10));
+        body.addView(trackDetailItem("앨범", track.album()), marginBottom(10));
+        body.addView(trackDetailItem("재생시간", MusicLibrary.formatDuration(track.durationMs())), marginBottom(10));
+        body.addView(trackDetailItem("폴더", track.folder()), marginBottom(10));
+        body.addView(trackDetailItem("파일명", track.displayName()), marginBottom(10));
+        body.addView(trackDetailItem("용량", MusicLibrary.formatBytes(track.sizeBytes())), marginBottom(14));
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("상세정보")
+                .setView(body)
+                .setNegativeButton("닫기", null)
+                .create();
+
+        LinearLayout firstActions = new LinearLayout(this);
+        firstActions.setOrientation(LinearLayout.HORIZONTAL);
+        Button play = primaryButton("재생");
+        play.setOnClickListener(view -> {
+            selectedTrack = track;
+            dialog.dismiss();
+            playTrack(track);
+        });
+        Button open = secondaryButton("열기");
+        open.setOnClickListener(view -> {
+            selectedTrack = track;
+            dialog.dismiss();
+            openSelectedTrack();
+        });
+        firstActions.addView(play, weightedButtonParams(8));
+        firstActions.addView(open, new LinearLayout.LayoutParams(0, dp(44), 1f));
+        body.addView(firstActions, marginBottom(8));
+
+        LinearLayout secondActions = new LinearLayout(this);
+        secondActions.setOrientation(LinearLayout.HORIZONTAL);
+        Button share = secondaryButton("공유");
+        share.setOnClickListener(view -> {
+            selectedTrack = track;
+            dialog.dismiss();
+            shareSelectedTrack();
+        });
+        Button delete = dangerButton("삭제");
+        delete.setOnClickListener(view -> {
+            selectedTrack = track;
+            dialog.dismiss();
+            deleteSelectedTrack();
+        });
+        secondActions.addView(share, weightedButtonParams(8));
+        secondActions.addView(delete, new LinearLayout.LayoutParams(0, dp(44), 1f));
+        body.addView(secondActions, matchWrap());
+        dialog.show();
+    }
+
+    private View trackDetailItem(String title, String value) {
+        LinearLayout item = new LinearLayout(this);
+        item.setOrientation(LinearLayout.VERTICAL);
+        item.addView(muted(title, 11), marginBottom(2));
+        TextView content = text(value == null || value.trim().isEmpty() ? "-" : value, 13, R.color.ytet_text, false);
+        content.setMaxLines(3);
+        content.setEllipsize(TextUtils.TruncateAt.END);
+        item.addView(content, matchWrap());
+        return item;
     }
 
     private View buildExtractorTab() {
@@ -924,6 +1325,18 @@ public final class MainActivity extends Activity {
         urlInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         styleInput(urlInput);
         root.addView(urlInput, controlParams(58, 18));
+
+        playlistCheck = new CheckBox(this);
+        playlistCheck.setText("list URL이면 전체 플레이리스트를 순서대로 추출");
+        playlistCheck.setTextColor(color(R.color.ytet_text));
+        playlistCheck.setChecked(extractorIncludePlaylist);
+        root.addView(playlistCheck, marginBottom(10));
+
+        metadataEnhanceCheck = new CheckBox(this);
+        metadataEnhanceCheck.setText("MusicBrainz로 실제 앨범/아티스트 보정");
+        metadataEnhanceCheck.setTextColor(color(R.color.ytet_text));
+        metadataEnhanceCheck.setChecked(extractorEnhanceMetadata);
+        root.addView(metadataEnhanceCheck, marginBottom(16));
 
         root.addView(label("모드"), marginBottom(8));
         mediaGroup = new RadioGroup(this);
@@ -945,6 +1358,7 @@ public final class MainActivity extends Activity {
                     ? VideoQuality.BEST.value()
                     : AudioFormat.M4A.value();
             updateModeOptions();
+            updateFolderLabel();
         });
         root.addView(mediaGroup, marginBottom(16));
 
@@ -961,9 +1375,15 @@ public final class MainActivity extends Activity {
         root.addView(subtitlesCheck, marginBottom(18));
 
         root.addView(label("저장 폴더"), marginBottom(8));
-        chooseFolderButton = secondaryButton("폴더 선택");
+        LinearLayout folderActions = new LinearLayout(this);
+        folderActions.setOrientation(LinearLayout.HORIZONTAL);
+        chooseFolderButton = secondaryButton("사용자 지정 폴더 선택");
         chooseFolderButton.setOnClickListener(view -> chooseOutputFolder());
-        root.addView(chooseFolderButton, marginBottom(8));
+        folderActions.addView(chooseFolderButton, weightedControlParams(8, 8));
+        resetOutputButton = secondaryButton("기본값");
+        resetOutputButton.setOnClickListener(view -> resetOutputFolder());
+        folderActions.addView(resetOutputButton, weightedControlParams(2, 0));
+        root.addView(folderActions, marginBottom(8));
 
         folderText = muted("", 13);
         root.addView(folderText, marginBottom(20));
@@ -991,94 +1411,9 @@ public final class MainActivity extends Activity {
         return root;
     }
 
-    private View buildSettingsTab() {
-        LinearLayout root = screenRoot();
-
-        LinearLayout playback = panel();
-        playback.addView(label("재생"), marginBottom(10));
-        playback.addView(settingCheckBox(
-                "짧은 오디오 숨김",
-                "45초 미만 파일은 음악 목록에서 제외합니다.",
-                hideShortAudio,
-                checked -> {
-                    hideShortAudio = checked;
-                    saveBooleanPref(PREF_HIDE_SHORT_AUDIO, checked);
-                    startLibraryRefresh(false);
-                }
-        ), marginBottom(8));
-        playback.addView(settingCheckBox(
-                "녹음/알림 폴더 숨김",
-                "녹음, 벨소리, 알림음 폴더는 기본 음악 라이브러리에서 제외합니다.",
-                hideSystemAudioFolders,
-                checked -> {
-                    hideSystemAudioFolders = checked;
-                    saveBooleanPref(PREF_HIDE_SYSTEM_AUDIO_FOLDERS, checked);
-                    startLibraryRefresh(false);
-                }
-        ), matchWrap());
-        root.addView(playback, marginBottom(18));
-
-        LinearLayout extraction = panel();
-        extraction.addView(label("추출 저장 폴더"), marginBottom(10));
-        extraction.addView(muted(outputTreeUri == null ? "선택 안 됨" : outputTreeUri, 13), marginBottom(12));
-        Button chooseFolder = secondaryButton("저장 폴더 변경");
-        chooseFolder.setOnClickListener(view -> chooseOutputFolder());
-        extraction.addView(chooseFolder, matchWrap());
-        root.addView(extraction, marginBottom(18));
-
-        LinearLayout library = panel();
-        library.addView(label("라이브러리"), marginBottom(10));
-        library.addView(muted(librarySummary(), 13), marginBottom(12));
-        Button refresh = secondaryButton(libraryLoading ? "스캔 중" : "음악 다시 스캔");
-        refresh.setEnabled(!libraryLoading);
-        refresh.setOnClickListener(view -> startLibraryRefresh(true));
-        library.addView(refresh, matchWrap());
-        root.addView(library, marginBottom(18));
-
-        LinearLayout updates = panel();
-        updates.addView(label("업데이트"), marginBottom(10));
-        updates.addView(settingCheckBox(
-                "자동 확인",
-                "앱 시작 시 GitHub 정식 릴리즈만 확인합니다.",
-                autoUpdateCheck,
-                checked -> {
-                    autoUpdateCheck = checked;
-                    saveBooleanPref(PREF_AUTO_UPDATE_CHECK, checked);
-                    if (checked && !updateChecking && !updateChecked) {
-                        startUpdateCheck(true);
-                    }
-                }
-        ), marginBottom(12));
-        updateStatusText = text(updateStatus, 14, R.color.ytet_text, false);
-        updates.addView(updateStatusText, marginBottom(12));
-        updateActionButton = secondaryButton(updateActionLabel());
-        updateActionButton.setEnabled(!updateChecking && !updateDownloading);
-        updateActionButton.setOnClickListener(view -> handleUpdateAction());
-        updates.addView(updateActionButton, matchWrap());
-        root.addView(updates, marginBottom(18));
-
-        return root;
-    }
-
-    private View settingCheckBox(String title, String description, boolean checked, SettingChangeListener listener) {
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.VERTICAL);
-        row.setPadding(dp(12), dp(10), dp(12), dp(10));
-        row.setBackground(rounded(color(R.color.ytet_panel_alt), 8));
-        CheckBox checkBox = new CheckBox(this);
-        checkBox.setText(title);
-        checkBox.setTextColor(color(R.color.ytet_text));
-        checkBox.setTextSize(14);
-        checkBox.setChecked(checked);
-        checkBox.setOnCheckedChangeListener((button, isChecked) -> listener.onChanged(isChecked));
-        row.addView(checkBox, matchWrap());
-        row.addView(muted(description, 12), matchWrap());
-        row.setOnClickListener(view -> checkBox.setChecked(!checkBox.isChecked()));
-        return row;
-    }
-
-    private void saveBooleanPref(String key, boolean value) {
-        getPreferences().edit().putBoolean(key, value).apply();
+    private MusicStation firstHomeStation() {
+        List<MusicStation> stations = StationCatalog.recommendedStations(homeTracks);
+        return stations.isEmpty() ? null : stations.get(0);
     }
 
     private MusicStation firstStation() {
@@ -1100,11 +1435,15 @@ public final class MainActivity extends Activity {
     }
 
     private void playStation(MusicStation station) {
+        playStation(station, libraryTracks);
+    }
+
+    private void playStation(MusicStation station, List<DeviceAudioTrack> sourceTracks) {
         if (station == null) {
             toast("재생할 음악이 없습니다.");
             return;
         }
-        List<DeviceAudioTrack> queue = MusicLibrary.tracksForStation(libraryTracks, station);
+        List<DeviceAudioTrack> queue = MusicLibrary.tracksForStation(sourceTracks, station);
         if (queue.isEmpty()) {
             toast("이 믹스에 포함할 음악이 없습니다.");
             return;
@@ -1202,7 +1541,8 @@ public final class MainActivity extends Activity {
             }
             nowPlayingTitle.setText("로컬 재생 대기");
             nowPlayingMeta.setText("기기 음악을 스캔하면 재생할 수 있습니다.");
-            playPauseButton.setText("재생");
+            playPauseButton.setImageResource(R.drawable.ic_play_arrow);
+            playPauseButton.setContentDescription("재생");
             return;
         }
         if (nowPlayingCover != null) {
@@ -1211,7 +1551,9 @@ public final class MainActivity extends Activity {
         }
         nowPlayingTitle.setText(playbackTitle);
         nowPlayingMeta.setText(playbackPreparing || playbackError ? streamStatus : playbackMeta);
-        playPauseButton.setText(playbackPlaying || playbackWillPlay ? "일시정지" : "재생");
+        boolean waitingToPlay = playbackPlaying || playbackWillPlay;
+        playPauseButton.setImageResource(waitingToPlay ? R.drawable.ic_pause : R.drawable.ic_play_arrow);
+        playPauseButton.setContentDescription(waitingToPlay ? "일시정지" : "재생");
     }
 
     private void showExpandedPlayer() {
@@ -1223,7 +1565,7 @@ public final class MainActivity extends Activity {
             playerDialog = new Dialog(this);
             playerDialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
         }
-        updateExpandedPlayer();
+        playerDialog.setContentView(buildExpandedPlayerContent());
         playerDialog.show();
         Window window = playerDialog.getWindow();
         if (window != null) {
@@ -1233,34 +1575,34 @@ public final class MainActivity extends Activity {
     }
 
     private void updateExpandedPlayer() {
-        if (playerDialog == null || (playerDialog.isShowing() && playerDialog.getWindow() == null)) {
+        if (playerDialog == null || !playerDialog.isShowing() || suppressPlayerDragDismiss) {
             return;
         }
         playerDialog.setContentView(buildExpandedPlayerContent());
     }
 
     private View buildExpandedPlayerContent() {
-        LinearLayout root = new LinearLayout(this);
+        DragDismissLayout root = new DragDismissLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(18), dp(18), dp(18), dp(18));
+        root.setPadding(dp(20), dp(30), dp(20), dp(28));
         root.setBackgroundColor(color(R.color.ytet_background));
 
         LinearLayout top = new LinearLayout(this);
         top.setOrientation(LinearLayout.HORIZONTAL);
         top.setGravity(Gravity.CENTER_VERTICAL);
-        Button close = compactButton("닫기");
+        ImageButton close = iconButton(R.drawable.ic_keyboard_arrow_down, "플레이어 닫기", false);
         close.setOnClickListener(view -> {
             if (playerDialog != null) {
                 playerDialog.dismiss();
             }
         });
-        top.addView(close, new LinearLayout.LayoutParams(dp(78), dp(42)));
+        top.addView(close, new LinearLayout.LayoutParams(dp(44), dp(42)));
         TextView mix = text(playbackMix, 13, R.color.ytet_muted, true);
         mix.setGravity(Gravity.CENTER);
         top.addView(mix, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         View spacer = new View(this);
-        top.addView(spacer, new LinearLayout.LayoutParams(dp(78), dp(42)));
-        root.addView(top, marginBottom(16));
+        top.addView(spacer, new LinearLayout.LayoutParams(dp(44), dp(42)));
+        root.addView(top, marginBottom(20));
 
         root.addView(coverArtView(), coverParams());
         root.addView(text(playbackTitle, 23, R.color.ytet_text, true), marginBottom(6));
@@ -1276,28 +1618,43 @@ public final class MainActivity extends Activity {
         LinearLayout controls = new LinearLayout(this);
         controls.setOrientation(LinearLayout.HORIZONTAL);
         controls.setGravity(Gravity.CENTER_VERTICAL);
-        Button shuffle = playerControlButton("셔플", playbackShuffleEnabled);
+        ImageButton shuffle = iconButton(R.drawable.ic_shuffle, "셔플", playbackShuffleEnabled);
         shuffle.setOnClickListener(view -> toggleShuffle());
-        Button previous = playerControlButton("이전", false);
+        ImageButton previous = iconButton(R.drawable.ic_skip_previous, "이전 곡", false);
         previous.setOnClickListener(view -> previousTrack());
-        Button play = primaryButton(playbackPlaying || playbackWillPlay ? "일시정지" : "재생");
+        ImageButton play = iconButton(playbackPlaying || playbackWillPlay ? R.drawable.ic_pause : R.drawable.ic_play_arrow,
+                playbackPlaying || playbackWillPlay ? "일시정지" : "재생",
+                true);
         play.setOnClickListener(view -> toggleStreamPlayback());
-        Button next = playerControlButton("다음", false);
+        ImageButton next = iconButton(R.drawable.ic_skip_next, "다음 곡", false);
         next.setOnClickListener(view -> nextTrack());
-        Button repeat = playerControlButton(repeatLabel(), playbackRepeatMode != PlaybackService.REPEAT_OFF);
+        ImageButton repeat = iconButton(
+                playbackRepeatMode == PlaybackService.REPEAT_ONE ? R.drawable.ic_repeat_one : R.drawable.ic_repeat,
+                repeatDescription(),
+                playbackRepeatMode != PlaybackService.REPEAT_OFF
+        );
         repeat.setOnClickListener(view -> toggleRepeat());
         controls.addView(shuffle, playerControlParams(5));
         controls.addView(previous, playerControlParams(5));
         controls.addView(play, playerControlParams(5));
         controls.addView(next, playerControlParams(5));
         controls.addView(repeat, playerControlParams(0));
-        root.addView(controls, marginBottom(20));
+        root.addView(controls, marginBottom(14));
 
-        root.addView(queuePreviewPanel(), new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
+        LinearLayout tools = new LinearLayout(this);
+        tools.setOrientation(LinearLayout.HORIZONTAL);
+        tools.setGravity(Gravity.TOP);
+        tools.addView(sleepTimerPanel(), new LinearLayout.LayoutParams(
                 0,
+                dp(136),
                 1f
         ));
+        ImageButton queue = iconButton(R.drawable.ic_queue_music, "재생목록", false);
+        queue.setOnClickListener(view -> showQueueDialog());
+        LinearLayout.LayoutParams queueParams = new LinearLayout.LayoutParams(dp(58), dp(58));
+        queueParams.setMargins(dp(12), dp(39), 0, 0);
+        tools.addView(queue, queueParams);
+        root.addView(tools, matchWrap());
         return root;
     }
 
@@ -1383,26 +1740,283 @@ public final class MainActivity extends Activity {
         return "반복";
     }
 
+    private String repeatDescription() {
+        if (playbackRepeatMode == PlaybackService.REPEAT_ONE) {
+            return "한 곡 반복";
+        }
+        if (playbackRepeatMode == PlaybackService.REPEAT_ALL) {
+            return "전체 반복";
+        }
+        return "반복 꺼짐";
+    }
+
+    private View sleepTimerPanel() {
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.HORIZONTAL);
+        panel.setGravity(Gravity.CENTER_VERTICAL);
+        panel.setPadding(dp(12), dp(10), dp(12), dp(10));
+        panel.setBackground(rounded(color(R.color.ytet_panel), 8));
+
+        ImageView icon = new ImageView(this);
+        icon.setImageResource(R.drawable.ic_timer);
+        icon.setColorFilter(isSleepTimerActive() ? color(R.color.ytet_accent) : color(R.color.ytet_muted));
+        panel.addView(icon, new LinearLayout.LayoutParams(dp(26), dp(26)));
+
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        copy.setPadding(dp(12), 0, dp(8), 0);
+        copy.addView(label("슬립 타이머"), marginBottom(2));
+        copy.addView(muted(sleepTimerStatusText(), 12), matchWrap());
+        panel.addView(copy, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        SleepTimerDialView dial = new SleepTimerDialView(this);
+        dial.setSelectedMinutes(isSleepTimerActive() ? remainingSleepTimerMinutes() : sleepTimerMinutes);
+        dial.setTimerActive(isSleepTimerActive());
+        dial.setOnTimerChangeListener((minutes, committed) -> {
+            sleepTimerMinutes = minutes;
+            if (committed) {
+                applySleepTimer(minutes);
+            }
+        });
+        panel.addView(dial, new LinearLayout.LayoutParams(dp(116), LinearLayout.LayoutParams.MATCH_PARENT));
+        return panel;
+    }
+
+    private void applySleepTimer(int minutes) {
+        startPlayback(PlaybackService.sleepTimerIntent(this, minutes));
+        toast(minutes <= 0 ? "슬립 타이머를 껐습니다." : minutes + "분 뒤 재생을 멈춥니다.");
+    }
+
+    private boolean isSleepTimerActive() {
+        return sleepTimerEndAtMs > System.currentTimeMillis();
+    }
+
+    private int remainingSleepTimerMinutes() {
+        long remainingMs = Math.max(0L, sleepTimerEndAtMs - System.currentTimeMillis());
+        if (remainingMs <= 0L) {
+            return 0;
+        }
+        return Math.max(1, (int) Math.ceil(remainingMs / 60_000.0));
+    }
+
+    private String sleepTimerStatusText() {
+        if (isSleepTimerActive()) {
+            return remainingSleepTimerMinutes() + "분 뒤 종료";
+        }
+        return "다이얼을 드래그해서 설정";
+    }
+
+    private void showQueueDialog() {
+        if (queueDialog == null) {
+            queueDialog = new Dialog(this);
+            queueDialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        }
+        queueDialog.setContentView(buildQueueDialogContent());
+        queueDialog.show();
+        Window window = queueDialog.getWindow();
+        if (window != null) {
+            window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            window.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT);
+        }
+    }
+
+    private void updateQueueDialog() {
+        if (queueDialog != null && queueDialog.isShowing()) {
+            queueDialog.setContentView(buildQueueDialogContent());
+        }
+    }
+
+    private View buildQueueDialogContent() {
+        DragDismissLayout root = new DragDismissLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(20), dp(30), dp(20), dp(28));
+        root.setBackgroundColor(color(R.color.ytet_background));
+
+        LinearLayout top = new LinearLayout(this);
+        top.setOrientation(LinearLayout.HORIZONTAL);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        ImageButton close = iconButton(R.drawable.ic_keyboard_arrow_down, "재생목록 닫기", false);
+        close.setOnClickListener(view -> {
+            if (queueDialog != null) {
+                queueDialog.dismiss();
+            }
+        });
+        top.addView(close, new LinearLayout.LayoutParams(dp(44), dp(42)));
+        TextView title = text("재생목록", 17, R.color.ytet_text, true);
+        title.setGravity(Gravity.CENTER);
+        top.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        View spacer = new View(this);
+        top.addView(spacer, new LinearLayout.LayoutParams(dp(44), dp(42)));
+        root.addView(top, marginBottom(18));
+
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        if (activeQueuePreview.isEmpty()) {
+            list.addView(muted("재생목록을 불러오는 중입니다.", 14), matchWrap());
+        } else {
+            addQueueSection(list, "이전 곡", 0, Math.max(0, playbackQueueIndex), true);
+            addQueueSection(list, "현재 곡", Math.max(0, playbackQueueIndex), Math.min(activeQueuePreview.size(), playbackQueueIndex + 1), false);
+            addQueueSection(list, "다음 곡", Math.max(0, playbackQueueIndex + 1), activeQueuePreview.size(), false);
+        }
+        scroll.addView(list, matchWrap());
+        root.addView(scroll, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+        ));
+        return root;
+    }
+
+    private void addQueueSection(LinearLayout list, String title, int from, int to, boolean compactPrevious) {
+        if (from >= to || from >= activeQueuePreview.size()) {
+            return;
+        }
+        list.addView(sectionTitle(title), marginBottom(10));
+        int start = compactPrevious ? Math.max(from, to - 5) : from;
+        int end = Math.min(to, activeQueuePreview.size());
+        for (int index = start; index < end; index++) {
+            list.addView(queueRow(activeQueuePreview.get(index), index), marginBottom(8));
+        }
+        if (compactPrevious && start > from) {
+            list.addView(muted("이전 " + (start - from) + "곡은 접혀 있습니다.", 12), marginBottom(12));
+        }
+    }
+
+    private void updateQueuePreviewFromIds(long[] ids) {
+        if (ids == null) {
+            return;
+        }
+        playbackQueueTrackIds = ids.clone();
+        if (ids.length == 0) {
+            activeQueuePreview = new ArrayList<>();
+            return;
+        }
+
+        Map<Long, DeviceAudioTrack> byId = new HashMap<>();
+        for (DeviceAudioTrack track : activeQueuePreview) {
+            byId.put(track.id(), track);
+        }
+        List<DeviceAudioTrack> ordered = new ArrayList<>();
+        boolean hasAllTracks = true;
+        for (long id : ids) {
+            DeviceAudioTrack track = byId.get(id);
+            if (track == null) {
+                hasAllTracks = false;
+                break;
+            }
+            ordered.add(track);
+        }
+        if (hasAllTracks) {
+            activeQueuePreview = ordered;
+            return;
+        }
+        loadQueuePreview(ids);
+    }
+
+    private void loadQueuePreview(long[] ids) {
+        if (queuePreviewLoading || ids.length == 0) {
+            return;
+        }
+        queuePreviewLoading = true;
+        long[] requestedIds = ids.clone();
+        libraryExecutor.execute(() -> {
+            try {
+                List<DeviceAudioTrack> tracks = deviceMusicLibrary.loadTracksByIds(this, requestedIds);
+                runOnUiThread(() -> {
+                    queuePreviewLoading = false;
+                    if (!Arrays.equals(playbackQueueTrackIds, requestedIds)) {
+                        return;
+                    }
+                    activeQueuePreview = tracks;
+                    updateExpandedPlayer();
+                    updateQueueDialog();
+                });
+            } catch (Exception exception) {
+                runOnUiThread(() -> queuePreviewLoading = false);
+            }
+        });
+    }
+
+    private void closeAfterSleepTimer() {
+        if (queueDialog != null) {
+            queueDialog.dismiss();
+        }
+        if (playerDialog != null) {
+            playerDialog.dismiss();
+        }
+        toast("슬립 타이머로 재생을 종료했습니다.");
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            finishAndRemoveTask();
+        } else {
+            finish();
+        }
+    }
+
+    private void startHomeRefresh(boolean renderImmediately) {
+        if (!hasAudioPermission()) {
+            requestAudioPermission();
+            return;
+        }
+        if (homeLoading) {
+            return;
+        }
+        homeLoading = true;
+        homeStatus = "보관함 " + DefaultMediaPaths.displayPath(MediaType.AUDIO) + " 경로를 스캔하는 중입니다.";
+        if (renderImmediately && currentTab == Tab.HOME) {
+            renderCurrentTab();
+        }
+        libraryExecutor.execute(() -> {
+            try {
+                List<DeviceAudioTrack> tracks = deviceMusicLibrary.loadTracks(
+                        this,
+                        Arrays.asList(DefaultMediaPaths.musicRelativePath())
+                );
+                runOnUiThread(() -> {
+                    homeTracks = tracks;
+                    homeLoaded = true;
+                    homeLoading = false;
+                    homeStatus = tracks.isEmpty()
+                            ? "보관함에 음악이 없습니다. 추출한 음원은 기본적으로 "
+                            + DefaultMediaPaths.displayPath(MediaType.AUDIO)
+                            + "에 저장됩니다."
+                            : "보관함 스캔 완료";
+                    renderLibraryDependentTabs();
+                });
+            } catch (Exception exception) {
+                runOnUiThread(() -> {
+                    homeLoaded = true;
+                    homeLoading = false;
+                    homeTracks = new ArrayList<>();
+                    homeStatus = "보관함 스캔 실패: " + exception.getMessage();
+                    renderLibraryDependentTabs();
+                });
+            }
+        });
+    }
+
     private void startLibraryRefresh(boolean renderImmediately) {
         if (!hasAudioPermission()) {
             requestAudioPermission();
             return;
         }
         libraryLoading = true;
-        libraryStatus = "기기 음악을 스캔하는 중입니다.";
-        if (renderImmediately && (currentTab == Tab.HOME || currentTab == Tab.LIBRARY || currentTab == Tab.SETTINGS)) {
+        libraryStatus = isDeviceFileSource()
+                ? "기기 파일의 음악을 스캔하는 중입니다."
+                : "보관함 " + DefaultMediaPaths.displayPath(MediaType.AUDIO) + " 경로를 스캔하는 중입니다.";
+        if (renderImmediately && (currentTab == Tab.HOME || currentTab == Tab.LIBRARY)) {
             renderCurrentTab();
         }
         libraryExecutor.execute(() -> {
             try {
-                List<DeviceAudioTrack> tracks = filteredLibraryTracks(deviceMusicLibrary.loadTracks(this));
+                List<DeviceAudioTrack> tracks = deviceMusicLibrary.loadTracks(this, libraryScanRelativePaths());
                 runOnUiThread(() -> {
                     libraryTracks = tracks;
                     libraryLoaded = true;
                     libraryLoading = false;
                     libraryStatus = tracks.isEmpty()
-                            ? "기기에서 음악 파일을 찾지 못했습니다."
-                            : "스캔 완료";
+                            ? emptyLibraryStatus()
+                            : librarySourceLabel() + " 스캔 완료";
                     renderLibraryDependentTabs();
                 });
             } catch (Exception exception) {
@@ -1418,50 +2032,40 @@ public final class MainActivity extends Activity {
         });
     }
 
-    private List<DeviceAudioTrack> filteredLibraryTracks(List<DeviceAudioTrack> tracks) {
-        List<DeviceAudioTrack> filtered = new ArrayList<>();
-        if (tracks == null) {
-            return filtered;
+    private List<String> libraryScanRelativePaths() {
+        if (isDeviceFileSource()) {
+            return null;
         }
-        for (DeviceAudioTrack track : tracks) {
-            if (hideShortAudio && track.durationMs() > 0L && track.durationMs() < MINIMUM_MUSIC_DURATION_MS) {
-                continue;
-            }
-            if (hideSystemAudioFolders && isSystemAudioFolder(track.folder())) {
-                continue;
-            }
-            filtered.add(track);
-        }
-        return filtered;
+        return Arrays.asList(DefaultMediaPaths.musicRelativePath());
     }
 
-    private boolean isSystemAudioFolder(String folder) {
-        if (folder == null) {
-            return false;
+    private String emptyLibraryStatus() {
+        if (isDeviceFileSource()) {
+            return "기기 파일에서 음악 파일을 찾지 못했습니다.";
         }
-        String normalized = folder.trim().toLowerCase();
-        return normalized.contains("ringtone")
-                || normalized.contains("notification")
-                || normalized.contains("alarm")
-                || normalized.contains("recording")
-                || normalized.contains("voice recorder")
-                || normalized.contains("voice notes")
-                || normalized.contains("call recording")
-                || normalized.contains("녹음")
-                || normalized.contains("통화")
-                || normalized.contains("알림")
-                || normalized.contains("벨소리");
+        return "보관함에 음악이 없습니다. 추출한 음원은 기본적으로 "
+                + DefaultMediaPaths.displayPath(MediaType.AUDIO)
+                + "에 저장됩니다.";
+    }
+
+    private String emptyLibraryHint() {
+        if (isDeviceFileSource()) {
+            return "다른 폴더를 선택하거나 화면 맨 위에서 아래로 당겨 다시 스캔하세요.";
+        }
+        return "추출기에서 음원을 저장하면 "
+                + DefaultMediaPaths.displayPath(MediaType.AUDIO)
+                + " 보관함에 표시됩니다. 상단에서 기기 파일로 전환하면 전체 음악을 볼 수 있습니다.";
     }
 
     private void renderLibraryDependentTabs() {
-        if (currentTab == Tab.HOME || currentTab == Tab.LIBRARY || currentTab == Tab.SETTINGS) {
+        if (currentTab == Tab.HOME || currentTab == Tab.LIBRARY) {
             renderCurrentTab();
         }
     }
 
-    private String librarySummary() {
-        int folderCount = Math.max(0, MusicLibrary.folderNames(libraryTracks).size() - 1);
-        return folderCount + "개 폴더 · " + libraryTracks.size() + "개 파일";
+    private String homeSummary() {
+        int folderCount = Math.max(0, MusicLibrary.folderNames(homeTracks).size() - 1);
+        return folderCount + "개 보관함 폴더 · " + homeTracks.size() + "개 파일";
     }
 
     private boolean hasAudioPermission() {
@@ -1592,6 +2196,13 @@ public final class MainActivity extends Activity {
         updateFolderLabel();
     }
 
+    private void resetOutputFolder() {
+        outputTreeUri = null;
+        getPreferences().edit().remove(PREF_OUTPUT_TREE).apply();
+        updateFolderLabel();
+        renderCurrentTab();
+    }
+
     private String progressStatus(String stage, String message) {
         String safeStage = stage == null || stage.trim().isEmpty() ? "진행 중" : stage.trim();
         if (message == null || message.trim().isEmpty()) {
@@ -1610,7 +2221,7 @@ public final class MainActivity extends Activity {
     }
 
     private void updateModeOptions() {
-        if (optionSpinner == null || subtitlesCheck == null) {
+        if (optionSpinner == null || subtitlesCheck == null || playlistCheck == null || metadataEnhanceCheck == null) {
             return;
         }
         boolean isVideo = selectedMediaType() == MediaType.VIDEO;
@@ -1621,6 +2232,11 @@ public final class MainActivity extends Activity {
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         optionSpinner.setAdapter(adapter);
         subtitlesCheck.setVisibility(isVideo ? View.VISIBLE : View.GONE);
+        playlistCheck.setVisibility(isVideo ? View.GONE : View.VISIBLE);
+        playlistCheck.setEnabled(!extractionBusy && !isVideo);
+        metadataEnhanceCheck.setVisibility(isVideo ? View.GONE : View.VISIBLE);
+        metadataEnhanceCheck.setEnabled(!extractionBusy && !isVideo);
+        updateFolderLabel();
     }
 
     private ArrayAdapter<String> darkSpinnerAdapter(String[] labels) {
@@ -1660,10 +2276,6 @@ public final class MainActivity extends Activity {
 
     private void startExtraction() {
         saveExtractorInputs();
-        if (outputTreeUri == null || outputTreeUri.trim().isEmpty()) {
-            toast("저장 폴더를 선택하세요.");
-            return;
-        }
 
         MediaType mediaType = selectedMediaType();
         String option = selectedOption(mediaType);
@@ -1671,13 +2283,21 @@ public final class MainActivity extends Activity {
         try {
             request = new ExtractionRequest(
                     urlInput.getText().toString(),
-                    outputTreeUri,
+                    extractionOutputUri(),
                     mediaType,
                     option,
-                    mediaType == MediaType.VIDEO && subtitlesCheck.isChecked()
+                    mediaType == MediaType.VIDEO && subtitlesCheck.isChecked(),
+                    mediaType == MediaType.AUDIO && playlistCheck.isChecked(),
+                    mediaType == MediaType.AUDIO && metadataEnhanceCheck.isChecked()
             );
         } catch (IllegalArgumentException exception) {
             toast(exception.getMessage());
+            return;
+        }
+
+        if (!hasNotificationPermission()) {
+            extractionPendingNotificationPermission = true;
+            showExtractionNotificationPermissionRationale();
             return;
         }
 
@@ -1695,6 +2315,12 @@ public final class MainActivity extends Activity {
         } else {
             startService(intent);
         }
+    }
+
+    private String extractionOutputUri() {
+        return outputTreeUri == null || outputTreeUri.trim().isEmpty()
+                ? DefaultMediaPaths.DEFAULT_OUTPUT_URI
+                : outputTreeUri;
     }
 
     private MediaType selectedMediaType() {
@@ -1723,7 +2349,10 @@ public final class MainActivity extends Activity {
         videoRadio.setEnabled(!busy);
         optionSpinner.setEnabled(!busy);
         subtitlesCheck.setEnabled(!busy);
+        playlistCheck.setEnabled(!busy && selectedMediaType() == MediaType.AUDIO);
+        metadataEnhanceCheck.setEnabled(!busy && selectedMediaType() == MediaType.AUDIO);
         chooseFolderButton.setEnabled(!busy);
+        resetOutputButton.setEnabled(!busy);
         extractButton.setEnabled(!busy);
     }
 
@@ -1745,6 +2374,12 @@ public final class MainActivity extends Activity {
         }
         if (subtitlesCheck != null) {
             extractorIncludeSubtitles = subtitlesCheck.isChecked();
+        }
+        if (playlistCheck != null) {
+            extractorIncludePlaylist = playlistCheck.isChecked();
+        }
+        if (metadataEnhanceCheck != null) {
+            extractorEnhanceMetadata = metadataEnhanceCheck.isChecked();
         }
     }
 
@@ -1781,16 +2416,39 @@ public final class MainActivity extends Activity {
         if (folderText == null) {
             return;
         }
-        folderText.setText(outputTreeUri == null ? "선택 안 됨" : outputTreeUri);
+        folderText.setText(outputPathLabel(selectedMediaType()));
     }
 
-    private void requestNotificationPermissionIfNeeded() {
+    private String outputPathLabel(MediaType mediaType) {
+        if (outputTreeUri == null || outputTreeUri.trim().isEmpty()) {
+            return "기본 저장: " + DefaultMediaPaths.displayPath(mediaType);
+        }
+        return "사용자 지정 저장: " + outputTreeUri;
+    }
+
+    private boolean hasNotificationPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            return true;
+        }
+        return checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private void showExtractionNotificationPermissionRationale() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
             return;
         }
-        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQUEST_NOTIFICATIONS);
-        }
+        new AlertDialog.Builder(this)
+                .setTitle("추출 알림 허용")
+                .setMessage("추출은 앱을 나가도 백그라운드에서 계속 진행됩니다. 진행률과 성공/실패 결과를 알림바에서 확인하려면 알림 권한이 필요합니다.")
+                .setPositiveButton("권한 허용", (dialog, which) ->
+                        requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQUEST_NOTIFICATIONS))
+                .setNegativeButton("취소", (dialog, which) -> {
+                    extractionPendingNotificationPermission = false;
+                    extractionStatus = "대기 중";
+                    extractionResult = "추출을 시작하려면 알림 권한을 허용하세요.";
+                    applyExtractionStateToViews();
+                })
+                .show();
     }
 
     private SharedPreferences getPreferences() {
@@ -1800,7 +2458,7 @@ public final class MainActivity extends Activity {
     private LinearLayout screenRoot() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(20), dp(24), dp(20), dp(24));
+        root.setPadding(dp(20), dp(32), dp(20), dp(34));
         return root;
     }
 
@@ -1877,6 +2535,36 @@ public final class MainActivity extends Activity {
         return button;
     }
 
+    private ImageButton iconButton(int iconRes, String description, boolean selected) {
+        ImageButton button = new ImageButton(this);
+        button.setImageResource(iconRes);
+        button.setContentDescription(description);
+        button.setColorFilter(selected ? Color.WHITE : color(R.color.ytet_text));
+        button.setBackground(rounded(selected ? color(R.color.ytet_accent) : color(R.color.ytet_panel_alt), 8));
+        button.setPadding(dp(11), dp(11), dp(11), dp(11));
+        button.setScaleType(ImageView.ScaleType.CENTER);
+        return button;
+    }
+
+    private ImageButton toolbarIconButton(int iconRes, String description, boolean selected) {
+        ImageButton button = new ImageButton(this);
+        button.setImageResource(iconRes);
+        button.setContentDescription(description);
+        button.setColorFilter(selected ? color(R.color.ytet_accent) : color(R.color.ytet_text));
+        button.setBackground(rounded(color(R.color.ytet_background), 8));
+        button.setPadding(dp(10), dp(10), dp(10), dp(10));
+        button.setScaleType(ImageView.ScaleType.CENTER);
+        return button;
+    }
+
+    private Button toolbarTextButton(String text) {
+        Button button = baseButton(text);
+        button.setTextColor(color(R.color.ytet_text));
+        button.setGravity(Gravity.CENTER_VERTICAL);
+        button.setBackground(rounded(color(R.color.ytet_background), 8));
+        return button;
+    }
+
     private Button baseButton(String text) {
         Button button = new Button(this);
         button.setText(text);
@@ -1908,7 +2596,6 @@ public final class MainActivity extends Activity {
         styleTab(homeTabButton, currentTab == Tab.HOME);
         styleTab(libraryTabButton, currentTab == Tab.LIBRARY);
         styleTab(extractorTabButton, currentTab == Tab.EXTRACTOR);
-        styleTab(settingsTabButton, currentTab == Tab.SETTINGS);
     }
 
     private void styleTab(Button button, boolean selected) {
@@ -1940,6 +2627,22 @@ public final class MainActivity extends Activity {
 
     private LinearLayout.LayoutParams weightedButtonParams(int rightDp) {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(44), 1f);
+        params.setMargins(0, 0, dp(rightDp), 0);
+        return params;
+    }
+
+    private LinearLayout.LayoutParams weightedControlParams(int weight, int rightDp) {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(48), weight);
+        params.setMargins(0, 0, dp(rightDp), 0);
+        return params;
+    }
+
+    private LinearLayout.LayoutParams cardColumnParams(int rightDp) {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                0,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                1f
+        );
         params.setMargins(0, 0, dp(rightDp), 0);
         return params;
     }
@@ -1996,14 +2699,181 @@ public final class MainActivity extends Activity {
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
     }
 
-    private interface SettingChangeListener {
-        void onChanged(boolean checked);
+    private final class PullRefreshScrollView extends ScrollView {
+        PullRefreshScrollView(Context context) {
+            super(context);
+        }
+
+        @Override
+        public boolean dispatchTouchEvent(MotionEvent event) {
+            if (handleLibraryPullToRefresh(event)) {
+                return true;
+            }
+            return super.dispatchTouchEvent(event);
+        }
+    }
+
+    private final class SquareFrameLayout extends FrameLayout {
+        SquareFrameLayout(Context context) {
+            super(context);
+        }
+
+        @Override
+        protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+            int width = MeasureSpec.getSize(widthMeasureSpec);
+            int squareSpec = MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY);
+            super.onMeasure(widthMeasureSpec, squareSpec);
+        }
+    }
+
+    private final class DragDismissLayout extends LinearLayout {
+        private float startX;
+        private float startY;
+
+        DragDismissLayout(Context context) {
+            super(context);
+        }
+
+        @Override
+        public boolean dispatchTouchEvent(MotionEvent event) {
+            if (event.getAction() == MotionEvent.ACTION_DOWN) {
+                startX = event.getRawX();
+                startY = event.getRawY();
+            } else if (event.getAction() == MotionEvent.ACTION_MOVE && !suppressPlayerDragDismiss) {
+                float dx = event.getRawX() - startX;
+                float dy = event.getRawY() - startY;
+                if (dy > dp(112) && dy > Math.abs(dx) * 1.25f) {
+                    if (queueDialog != null && queueDialog.isShowing()) {
+                        queueDialog.dismiss();
+                    } else if (playerDialog != null && playerDialog.isShowing()) {
+                        playerDialog.dismiss();
+                    }
+                    return true;
+                }
+            }
+            return super.dispatchTouchEvent(event);
+        }
+    }
+
+    private final class SleepTimerDialView extends View {
+        private static final int MAX_MINUTES = 120;
+        private static final int STEP_MINUTES = 5;
+
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Rect textBounds = new Rect();
+        private final RectF wheel = new RectF();
+        private TimerChangeListener listener;
+        private int selectedMinutes = 30;
+        private int dragStartMinutes = 30;
+        private float dragStartY;
+        private boolean timerActive;
+
+        SleepTimerDialView(Context context) {
+            super(context);
+            setWillNotDraw(false);
+        }
+
+        void setSelectedMinutes(int minutes) {
+            selectedMinutes = clampTimerMinutes(minutes);
+            invalidate();
+        }
+
+        void setTimerActive(boolean active) {
+            timerActive = active;
+            invalidate();
+        }
+
+        void setOnTimerChangeListener(TimerChangeListener timerChangeListener) {
+            listener = timerChangeListener;
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            int width = getWidth();
+            int height = getHeight();
+            wheel.set(dp(4), dp(8), width - dp(4), height - dp(8));
+
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(color(R.color.ytet_panel_alt));
+            canvas.drawRoundRect(wheel, dp(18), dp(18), paint);
+
+            paint.setColor(timerActive ? color(R.color.ytet_accent_dark) : color(R.color.ytet_panel));
+            RectF centerBand = new RectF(dp(8), height * 0.34f, width - dp(8), height * 0.66f);
+            canvas.drawRoundRect(centerBand, dp(14), dp(14), paint);
+
+            drawDialValue(canvas, timerText(previousTimerValue()), width / 2f, height * 0.24f, 15, 0x88FFFFFF);
+            drawDialValue(canvas, timerText(selectedMinutes), width / 2f, height * 0.53f, 24, Color.WHITE);
+            drawDialValue(canvas, timerText(nextTimerValue()), width / 2f, height * 0.82f, 15, 0x88FFFFFF);
+        }
+
+        @Override
+        public boolean onTouchEvent(MotionEvent event) {
+            if (event.getAction() == MotionEvent.ACTION_DOWN) {
+                suppressPlayerDragDismiss = true;
+                dragStartY = event.getRawY();
+                dragStartMinutes = selectedMinutes;
+                getParent().requestDisallowInterceptTouchEvent(true);
+                return true;
+            }
+            if (event.getAction() == MotionEvent.ACTION_MOVE) {
+                int steps = Math.round((dragStartY - event.getRawY()) / dp(18));
+                int nextMinutes = clampTimerMinutes(dragStartMinutes + steps * STEP_MINUTES);
+                if (nextMinutes != selectedMinutes) {
+                    selectedMinutes = nextMinutes;
+                    if (listener != null) {
+                        listener.onChanged(selectedMinutes, false);
+                    }
+                    invalidate();
+                }
+                return true;
+            }
+            if (event.getAction() == MotionEvent.ACTION_UP || event.getAction() == MotionEvent.ACTION_CANCEL) {
+                suppressPlayerDragDismiss = false;
+                getParent().requestDisallowInterceptTouchEvent(false);
+                if (listener != null && event.getAction() == MotionEvent.ACTION_UP) {
+                    listener.onChanged(selectedMinutes, true);
+                }
+                return true;
+            }
+            return super.onTouchEvent(event);
+        }
+
+        private void drawDialValue(Canvas canvas, String text, float x, float y, int sizeSp, int textColor) {
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(textColor);
+            paint.setTextAlign(Paint.Align.CENTER);
+            paint.setTypeface(Typeface.DEFAULT_BOLD);
+            paint.setTextSize(sizeSp * getResources().getDisplayMetrics().scaledDensity);
+            paint.getTextBounds(text, 0, text.length(), textBounds);
+            canvas.drawText(text, x, y + textBounds.height() / 2f, paint);
+        }
+
+        private int previousTimerValue() {
+            return clampTimerMinutes(selectedMinutes - STEP_MINUTES);
+        }
+
+        private int nextTimerValue() {
+            return clampTimerMinutes(selectedMinutes + STEP_MINUTES);
+        }
+
+        private String timerText(int minutes) {
+            return minutes <= 0 ? "OFF" : minutes + "m";
+        }
+
+        private int clampTimerMinutes(int minutes) {
+            int stepped = Math.round(minutes / (float) STEP_MINUTES) * STEP_MINUTES;
+            return Math.max(0, Math.min(MAX_MINUTES, stepped));
+        }
+    }
+
+    private interface TimerChangeListener {
+        void onChanged(int minutes, boolean committed);
     }
 
     private enum Tab {
         HOME,
         LIBRARY,
-        EXTRACTOR,
-        SETTINGS
+        EXTRACTOR
     }
 }

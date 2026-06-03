@@ -3,6 +3,7 @@ package com.ytet.android.extract;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
@@ -11,6 +12,7 @@ import android.os.IBinder;
 
 import com.ytet.android.R;
 import com.ytet.android.core.ExtractionRequest;
+import com.ytet.android.ui.MainActivity;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -87,8 +89,9 @@ public final class ExtractionService extends Service {
     }
 
     private void publishDone(String result) {
+        detachForegroundNotification();
         NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-        manager.notify(NOTIFICATION_ID, notification(100, "완료", "저장 완료"));
+        manager.notify(NOTIFICATION_ID, notification(100, "완료", "저장 완료", true, false));
 
         Intent intent = new Intent(ACTION_PROGRESS);
         intent.setPackage(getPackageName());
@@ -101,16 +104,25 @@ public final class ExtractionService extends Service {
     }
 
     private void sendError(String message) {
+        String safeMessage = message == null ? "알 수 없는 오류가 발생했습니다." : message;
+        detachForegroundNotification();
+        NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        manager.notify(NOTIFICATION_ID, notification(0, "실패", safeMessage, true, true));
+
         Intent intent = new Intent(ACTION_PROGRESS);
         intent.setPackage(getPackageName());
         intent.putExtra(EXTRA_PERCENT, 0);
         intent.putExtra(EXTRA_STAGE, "오류");
-        intent.putExtra(EXTRA_ERROR, message == null ? "알 수 없는 오류가 발생했습니다." : message);
+        intent.putExtra(EXTRA_ERROR, safeMessage);
         intent.putExtra(EXTRA_DONE, true);
         sendBroadcast(intent);
     }
 
     private Notification notification(int percent, String stage, String message) {
+        return notification(percent, stage, message, percent >= 100, false);
+    }
+
+    private Notification notification(int percent, String stage, String message, boolean finished, boolean failed) {
         Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
                 ? new Notification.Builder(this, CHANNEL_ID)
                 : new Notification.Builder(this);
@@ -118,16 +130,35 @@ public final class ExtractionService extends Service {
         builder.setSmallIcon(R.drawable.ic_stat_extract)
                 .setContentTitle("YTET - " + stage)
                 .setContentText(message)
-                .setOngoing(percent < 100)
-                .setOnlyAlertOnce(true);
+                .setContentIntent(contentIntent())
+                .setAutoCancel(finished)
+                .setOngoing(!finished)
+                .setOnlyAlertOnce(!finished);
 
-        if (percent > 0 && percent < 100) {
+        if (failed) {
+            builder.setProgress(0, 0, false);
+        } else if (percent > 0 && percent < 100) {
             builder.setProgress(100, percent, false);
         } else {
-            builder.setProgress(0, 0, percent == 0);
+            builder.setProgress(0, 0, percent == 0 && !finished);
         }
 
         return builder.build();
+    }
+
+    private PendingIntent contentIntent() {
+        Intent intent = new Intent(this, MainActivity.class);
+        intent.setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        return PendingIntent.getActivity(
+                this,
+                0,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+    }
+
+    private void detachForegroundNotification() {
+        stopForeground(STOP_FOREGROUND_DETACH);
     }
 
     private void ensureNotificationChannel() {

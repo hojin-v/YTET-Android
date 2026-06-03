@@ -77,6 +77,10 @@ public final class MusicStation {
         return "폴더 믹스".equals(category);
     }
 
+    public boolean isPlaylist() {
+        return "플레이리스트".equals(category);
+    }
+
     private static String requireText(String value, String fieldName) {
         if (value == null || value.trim().isEmpty()) {
             throw new IllegalArgumentException(fieldName + " must not be blank.");

@@ -49,6 +49,12 @@ final class ExtractionOutputs {
         builder.append("저장 완료\n");
         builder.append("검증: Android 저장소에 복사된 파일 확인\n");
         builder.append("요청: ").append(requestLabel(request)).append('\n');
+        if (request.includePlaylist()) {
+            builder.append("플레이리스트: 전체 항목 순서대로 추출\n");
+        }
+        if (request.enhanceMetadata()) {
+            builder.append("메타데이터 보정: MusicBrainz 검색 사용\n");
+        }
         if (request.mediaType() == MediaType.VIDEO) {
             builder.append("자막 요청: ").append(yesNo(request.includeSubtitles())).append('\n');
         }

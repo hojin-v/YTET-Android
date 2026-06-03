@@ -38,9 +38,33 @@ public final class StationCatalog {
                 ACCENTS[0]
         ));
 
+        addLongPlaylistStations(stations, tracks);
         addTopArtistStations(stations, tracks);
         addTopFolderStations(stations, tracks);
         return stations;
+    }
+
+    private static void addLongPlaylistStations(List<MusicStation> stations, List<DeviceAudioTrack> tracks) {
+        int added = 0;
+        for (DeviceAudioTrack track : tracks) {
+            if (!MusicLibrary.isLongSinglePlaylistTrack(track)) {
+                continue;
+            }
+            stations.add(new MusicStation(
+                    "playlist-track-" + track.id(),
+                    MusicLibrary.playlistTitle(track),
+                    "플레이리스트",
+                    MusicLibrary.formatDuration(track.durationMs()) + " 단일 파일",
+                    "긴 단일 영상 플레이리스트로 저장된 파일을 그대로 재생합니다.",
+                    MusicStation.MixType.TRACK,
+                    Long.toString(track.id()),
+                    ACCENTS[stations.size() % ACCENTS.length]
+            ));
+            added++;
+            if (added >= 3) {
+                return;
+            }
+        }
     }
 
     private static void addTopArtistStations(List<MusicStation> stations, List<DeviceAudioTrack> tracks) {

@@ -11,6 +11,7 @@ import com.ytet.android.stream.MusicStation;
 
 public final class MusicLibrary {
     public static final String ALL_FOLDERS = "전체";
+    public static final long LONG_PLAYLIST_MIN_DURATION_MS = 20 * 60 * 1000L;
 
     private MusicLibrary() {
     }
@@ -70,6 +71,55 @@ public final class MusicLibrary {
         }
         int slash = clean.lastIndexOf('/');
         return slash > -1 && slash < clean.length() - 1 ? clean.substring(slash + 1) : clean;
+    }
+
+    public static boolean isLongSinglePlaylistTrack(DeviceAudioTrack track) {
+        if (track == null || track.durationMs() < LONG_PLAYLIST_MIN_DURATION_MS) {
+            return false;
+        }
+        return hasPlaylistMarker(track.title())
+                || hasPlaylistMarker(track.displayName())
+                || hasPlaylistMarker(track.album())
+                || hasPlaylistMarker(track.folder());
+    }
+
+    public static String playlistTitle(DeviceAudioTrack track) {
+        if (track == null) {
+            return "긴 플레이리스트";
+        }
+        String title = cleanPlaylistTitle(track.title());
+        if (title.isEmpty() || "제목 없음".equals(title)) {
+            title = cleanPlaylistTitle(track.displayName());
+        }
+        return title.isEmpty() ? "긴 플레이리스트" : title;
+    }
+
+    public static String cleanPlaylistTitle(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return "";
+        }
+        String text = value.trim();
+        int dot = text.lastIndexOf('.');
+        if (dot > 0 && dot < text.length() - 1) {
+            String extension = text.substring(dot + 1).toLowerCase(Locale.ROOT);
+            if ("m4a".equals(extension) || "mp3".equals(extension) || "opus".equals(extension)
+                    || "ogg".equals(extension) || "webm".equals(extension) || "wav".equals(extension)) {
+                text = text.substring(0, dot);
+            }
+        }
+        text = text.replaceAll("(?i)^\\s*[\\[(（【]\\s*playlist\\s*[\\])）】]\\s*", "");
+        text = text.replaceAll("(?i)^\\s*playlist\\s*([|:：\\-–—]+)\\s*", "");
+        text = text.replaceAll("\\s+", " ").trim();
+        return text;
+    }
+
+    private static boolean hasPlaylistMarker(String value) {
+        if (value == null) {
+            return false;
+        }
+        String normalized = value.toLowerCase(Locale.ROOT);
+        return normalized.matches(".*(^|[\\s\\[({【|:：\\-–—])playlist([\\s\\])}】|:：\\-–—]|$).*")
+                || normalized.contains("플레이리스트");
     }
 
     public static String formatDuration(long durationMs) {

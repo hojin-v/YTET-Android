@@ -48,6 +48,8 @@ public final class YtDlpPythonEngine implements ExtractorEngine {
                     request.mediaType().value(),
                     request.option(),
                     request.includeSubtitles(),
+                    request.includePlaylist(),
+                    request.enhanceMetadata(),
                     progressListener,
                     Build.VERSION.SDK_INT
             );
@@ -57,12 +59,12 @@ public final class YtDlpPythonEngine implements ExtractorEngine {
             progressListener.onProgress(92, "저장", "결과 파일 정리 중");
             List<File> outputFiles = ExtractionOutputs.collectOutputFiles(workspace);
 
-            progressListener.onProgress(95, "저장", "선택한 Android 폴더로 복사 중");
-            List<StorageWriter.CopiedFile> copiedFiles = storageWriter.copyToTree(
-                    context,
-                    Uri.parse(request.outputTreeUri()),
-                    outputFiles
-            );
+            progressListener.onProgress(95, "저장", request.usesDefaultOutput()
+                    ? "기본 YTET 폴더로 복사 중"
+                    : "선택한 Android 폴더로 복사 중");
+            List<StorageWriter.CopiedFile> copiedFiles = request.usesDefaultOutput()
+                    ? storageWriter.copyToDefaultPublicFolder(context, request.mediaType(), workspace, outputFiles)
+                    : storageWriter.copyToTree(context, Uri.parse(request.outputTreeUri()), workspace, outputFiles);
             progressListener.onProgress(100, "완료", "저장 완료");
 
             return new ExtractionResult(copiedFiles, ExtractionOutputs.buildSummary(request, copiedFiles));

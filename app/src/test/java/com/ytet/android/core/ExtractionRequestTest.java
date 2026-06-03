@@ -53,6 +53,37 @@ public final class ExtractionRequestTest {
     }
 
     @Test
+    public void preservesPlaylistMode() {
+        ExtractionRequest request = new ExtractionRequest(
+                "https://youtube.com/watch?v=abc123&list=PL123",
+                "content://tree/output",
+                MediaType.AUDIO,
+                AudioFormat.M4A.value(),
+                false,
+                true,
+                true
+        );
+
+        assertTrue(request.includePlaylist());
+        assertTrue(request.enhanceMetadata());
+        assertFalse(request.includeSubtitles());
+    }
+
+    @Test
+    public void defaultsBlankOutputToYtetPublicFolder() {
+        ExtractionRequest request = new ExtractionRequest(
+                "https://youtube.com/watch?v=abc123",
+                "",
+                MediaType.AUDIO,
+                AudioFormat.M4A.value(),
+                false
+        );
+
+        assertEquals(DefaultMediaPaths.DEFAULT_OUTPUT_URI, request.outputTreeUri());
+        assertTrue(request.usesDefaultOutput());
+    }
+
+    @Test
     public void rejectsInvalidUrlBeforeWorkStarts() {
         assertThrows(
                 IllegalArgumentException.class,

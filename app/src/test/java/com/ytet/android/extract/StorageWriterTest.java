@@ -1,5 +1,7 @@
 package com.ytet.android.extract;
 
+import com.ytet.android.core.MediaType;
+
 import org.junit.Test;
 
 import java.io.File;
@@ -17,9 +19,45 @@ public final class StorageWriterTest {
         assertEquals("application/octet-stream", mimeType("download"));
     }
 
+    @Test
+    public void relativeDisplayNamePreservesPlaylistFolder() throws Exception {
+        File workspace = new File("/tmp/workspace");
+        File output = new File(workspace, "Album/001 - Song.m4a");
+
+        assertEquals("Album/001 - Song.m4a", relativeDisplayName(workspace, output));
+    }
+
+    @Test
+    public void defaultAudioPathPreservesPlaylistFolderUnderYtetMusic() throws Exception {
+        File workspace = new File("/tmp/workspace");
+        File output = new File(workspace, "Album/001 - Song.m4a");
+
+        assertEquals("Download/YTET/Music/Album/", targetRelativePath(MediaType.AUDIO, workspace, output));
+    }
+
+    @Test
+    public void defaultVideoPathUsesYtetVideo() throws Exception {
+        File workspace = new File("/tmp/workspace");
+        File output = new File(workspace, "Clip.mp4");
+
+        assertEquals("Download/YTET/Video/", targetRelativePath(MediaType.VIDEO, workspace, output));
+    }
+
     private String mimeType(String fileName) throws Exception {
         Method method = StorageWriter.class.getDeclaredMethod("guessMimeType", File.class);
         method.setAccessible(true);
         return (String) method.invoke(new StorageWriter(), new File(fileName));
+    }
+
+    private String relativeDisplayName(File baseDir, File file) throws Exception {
+        Method method = StorageWriter.class.getDeclaredMethod("relativeDisplayName", File.class, File.class);
+        method.setAccessible(true);
+        return (String) method.invoke(new StorageWriter(), baseDir, file);
+    }
+
+    private String targetRelativePath(MediaType mediaType, File baseDir, File file) throws Exception {
+        Method method = StorageWriter.class.getDeclaredMethod("targetRelativePath", MediaType.class, File.class, File.class);
+        method.setAccessible(true);
+        return (String) method.invoke(new StorageWriter(), mediaType, baseDir, file);
     }
 }

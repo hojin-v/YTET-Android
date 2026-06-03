@@ -58,6 +58,33 @@ public final class StationCatalogTest {
     }
 
     @Test
+    public void recommendsLongSinglePlaylistTracksFromLocalFiles() {
+        DeviceAudioTrack playlist = new DeviceAudioTrack(
+                10,
+                "[Playlist] 퇴근 후 나만의 시간",
+                "essential;",
+                "Album",
+                "[Playlist] 퇴근 후 나만의 시간.m4a",
+                "YTET",
+                "content://audio/10",
+                2_807_000,
+                10_000
+        );
+
+        List<MusicStation> stations = StationCatalog.recommendedStations(List.of(
+                playlist,
+                track(1, "Alpha", "Artist One", "Camera")
+        ));
+
+        assertTrue(stations.stream().anyMatch(station ->
+                station.isPlaylist()
+                        && station.mixType() == MusicStation.MixType.TRACK
+                        && "10".equals(station.mixValue())
+                        && "퇴근 후 나만의 시간".equals(station.title())
+        ));
+    }
+
+    @Test
     public void returnsNoStationsForEmptyLibrary() {
         assertTrue(StationCatalog.recommendedStations(List.of()).isEmpty());
     }

@@ -8,6 +8,8 @@ import android.net.Uri;
 import android.os.Build;
 import android.provider.MediaStore;
 
+import com.ytet.android.core.DefaultMediaPaths;
+
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -18,13 +20,18 @@ public final class DeviceMusicLibrary {
     private static final Uri ALBUM_ART_URI = Uri.parse("content://media/external/audio/albumart");
 
     public List<DeviceAudioTrack> loadTracks(Context context) {
+        return loadTracks(context, null);
+    }
+
+    public List<DeviceAudioTrack> loadTracks(Context context, List<String> relativePathPrefixes) {
         ContentResolver resolver = context.getContentResolver();
         List<DeviceAudioTrack> tracks = new ArrayList<>();
+        PathSelection pathSelection = pathSelection(relativePathPrefixes);
         try (Cursor cursor = resolver.query(
                 MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
                 projection().toArray(new String[0]),
-                MediaStore.Audio.Media.IS_MUSIC + " != 0",
-                null,
+                pathSelection.selection,
+                pathSelection.args,
                 MediaStore.Audio.Media.TITLE + " COLLATE NOCASE ASC"
         )) {
             if (cursor == null) {
@@ -103,6 +110,44 @@ public final class DeviceMusicLibrary {
         return projection;
     }
 
+    private PathSelection pathSelection(List<String> relativePathPrefixes) {
+        List<String> prefixes = normalizedPathPrefixes(relativePathPrefixes);
+        String pathColumn = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+                ? MediaStore.Audio.Media.RELATIVE_PATH
+                : MediaStore.Audio.Media.DATA;
+        if (prefixes.isEmpty()) {
+            return new PathSelection(MediaStore.Audio.Media.IS_MUSIC + " != 0", null);
+        }
+
+        StringBuilder selection = new StringBuilder(MediaStore.Audio.Media.IS_MUSIC + " != 0 AND (");
+        String[] args = new String[prefixes.size()];
+        for (int index = 0; index < prefixes.size(); index++) {
+            if (index > 0) {
+                selection.append(" OR ");
+            }
+            selection.append(pathColumn).append(" LIKE ?");
+            args[index] = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+                    ? prefixes.get(index) + "%"
+                    : "%/" + prefixes.get(index) + "%";
+        }
+        selection.append(')');
+        return new PathSelection(selection.toString(), args);
+    }
+
+    private List<String> normalizedPathPrefixes(List<String> relativePathPrefixes) {
+        List<String> prefixes = new ArrayList<>();
+        if (relativePathPrefixes == null) {
+            return prefixes;
+        }
+        for (String path : relativePathPrefixes) {
+            String normalized = DefaultMediaPaths.normalizeRelativePath(path);
+            if (!normalized.isEmpty() && !prefixes.contains(normalized)) {
+                prefixes.add(normalized);
+            }
+        }
+        return prefixes;
+    }
+
     private DeviceAudioTrack trackFromCursor(Cursor cursor) {
         long id = getLong(cursor, MediaStore.Audio.Media._ID);
         Uri contentUri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id);
@@ -164,5 +209,15 @@ public final class DeviceMusicLibrary {
             return 0;
         }
         return cursor.getLong(index);
+    }
+
+    private static final class PathSelection {
+        private final String selection;
+        private final String[] args;
+
+        PathSelection(String selection, String[] args) {
+            this.selection = selection;
+            this.args = args;
+        }
     }
 }

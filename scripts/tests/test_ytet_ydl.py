@@ -56,7 +56,7 @@ class YtetYdlOptionsTest(unittest.TestCase):
         self.listener = FakeProgressListener()
         self.logger = ytet_ydl.YtetLogger()
 
-    def build(self, media_type="audio", option="m4a", subtitles=False):
+    def build(self, media_type="audio", option="m4a", subtitles=False, playlist=False):
         return ytet_ydl.build_options(
             "/tmp/workspace",
             media_type,
@@ -64,6 +64,7 @@ class YtetYdlOptionsTest(unittest.TestCase):
             subtitles,
             self.listener,
             self.logger,
+            include_playlist=playlist,
         )
 
     def test_audio_m4a_uses_direct_audio_stream_without_ffmpeg_postprocessing(self):
@@ -75,6 +76,15 @@ class YtetYdlOptionsTest(unittest.TestCase):
         self.assertNotIn("ffmpeg_location", options)
         self.assertEqual(1, len(options["progress_hooks"]))
 
+    def test_audio_playlist_keeps_playlist_order_in_output_names(self):
+        options = self.build(option="m4a", playlist=True)
+
+        self.assertFalse(options["noplaylist"])
+        self.assertEqual(
+            "/tmp/workspace/%(playlist)s/%(playlist_index)03d - %(uploader)s - %(title)s.%(ext)s",
+            options["outtmpl"],
+        )
+
     def test_audio_original_uses_best_audio_without_conversion(self):
         options = self.build(option="original")
 
@@ -84,6 +94,11 @@ class YtetYdlOptionsTest(unittest.TestCase):
     def test_mp3_is_rejected_until_ffmpeg_runtime_exists(self):
         with self.assertRaisesRegex(ytet_ydl.YtetExtractionError, "MP3 변환"):
             self.build(option="mp3")
+
+    def test_video_playlist_is_rejected_until_batch_muxing_exists(self):
+        with tempfile.TemporaryDirectory() as workspace:
+            with self.assertRaisesRegex(ytet_ydl.YtetExtractionError, "영상 플레이리스트"):
+                ytet_ydl.extract(workspace, "https://youtu.be/video", "video", "best", False, True, self.listener)
 
     def test_video_plan_selects_separate_high_quality_tracks(self):
         plan = ytet_ydl.video_track_plan(fake_video_info(), "best")
@@ -139,6 +154,116 @@ class YtetYdlOptionsTest(unittest.TestCase):
         self.assertEqual("다운로드", self.listener.events[0][1])
         self.assertIn("file.m4a", self.listener.events[0][2])
         self.assertEqual((88, "정리", "file.m4a"), self.listener.events[1])
+
+    def test_progress_hook_reports_playlist_position_when_available(self):
+        hook = ytet_ydl.progress_hook(self.listener)
+
+        hook({
+            "status": "downloading",
+            "filename": "/tmp/workspace/002 - file.m4a",
+            "downloaded_bytes": 512,
+            "total_bytes": 1024,
+            "info_dict": {
+                "playlist_index": 2,
+                "n_entries": 6,
+            },
+        })
+        hook({
+            "status": "finished",
+            "filename": "/tmp/workspace/002 - file.m4a",
+            "info_dict": {
+                "playlist_index": 2,
+                "n_entries": 6,
+            },
+        })
+
+        self.assertEqual(27, self.listener.events[0][0])
+        self.assertEqual("다운로드", self.listener.events[0][1])
+        self.assertIn("2/6", self.listener.events[0][2])
+        self.assertEqual((34, "정리", "2/6 002 - file.m4a"), self.listener.events[1])
+
+    def test_playlist_metadata_uses_playlist_as_album(self):
+        info = {
+            "title": "Song",
+            "uploader": "Artist",
+            "playlist": "Album Name",
+            "playlist_index": 3,
+            "n_entries": 6,
+        }
+
+        self.assertEqual("Song", ytet_ydl.metadata_title(info))
+        self.assertEqual("Artist", ytet_ydl.metadata_artist(info))
+        self.assertEqual("Album Name", ytet_ydl.metadata_album(info))
+        self.assertEqual((3, 6), ytet_ydl.metadata_track_number(info))
+
+    def test_playlist_album_can_fallback_to_parent_title(self):
+        self.assertEqual("Parent Playlist", ytet_ydl.metadata_album({"title": "Song"}, "Parent Playlist"))
+
+    def test_title_candidates_strip_upload_descriptors(self):
+        self.assertEqual("LOVE SONG", ytet_ydl.title_candidates("LOVE SONG (Lyric Video/Eng)")[0])
+        self.assertEqual("LOVE SONG", ytet_ydl.title_candidates("[Official Audio] LOVE SONG")[0])
+
+    def test_playlist_title_splits_artist_and_album_candidates(self):
+        info = {"title": "Bill Evans Trio / Waltz For Debby [Full Album]"}
+
+        self.assertEqual(("Bill Evans Trio", "Waltz For Debby"), ytet_ydl.playlist_artist_album_candidates(info))
+
+    def test_release_metadata_overrides_playlist_entries(self):
+        entries = [
+            {"title": "LOVE SONG (Lyric Video/Eng)", "duration": 180, "playlist_index": 1},
+            {"title": "Next Song", "duration": 200, "playlist_index": 2},
+        ]
+        release = {
+            "title": "Album Title",
+            "date": "2024-01-01",
+            "artist-credit": [{"name": "매미"}],
+            "media": [{
+                "track-count": 2,
+                "tracks": [
+                    {"title": "LOVE SONG", "position": 1, "length": 180000, "artist-credit": [{"name": "매미"}]},
+                    {"title": "Next Song", "position": 2, "length": 200000, "artist-credit": [{"name": "매미"}]},
+                ],
+            }],
+        }
+
+        matched = ytet_ydl.apply_release_metadata(entries, release)
+
+        self.assertEqual(2, matched)
+        self.assertEqual("LOVE SONG", ytet_ydl.metadata_title(entries[0]))
+        self.assertEqual("매미", ytet_ydl.metadata_artist(entries[0]))
+        self.assertEqual("Album Title", ytet_ydl.metadata_album(entries[0]))
+        self.assertEqual((1, 2), ytet_ydl.metadata_track_number(entries[0]))
+
+    def test_high_score_recording_result_allows_artist_alias_difference(self):
+        info = {"title": "LOVE SONG (Lyric Video/Eng)", "artist": "매미"}
+        results = [{
+            "score": "100",
+            "title": "LOVE SONG",
+            "artist-credit": [{"name": "MEMI"}],
+            "releases": [{
+                "title": "LOVE SONG",
+                "date": "2024-10-30",
+                "artist-credit": [{"name": "MEMI"}],
+                "media": [{"track-count": 1}],
+            }],
+        }]
+
+        best, score = ytet_ydl.best_recording_result(info, results, ytet_ydl.title_candidates(info["title"]), "매미")
+
+        self.assertEqual("LOVE SONG", best["title"])
+        self.assertGreaterEqual(score, 0.80)
+
+    def test_long_single_video_playlist_skips_musicbrainz_and_cleans_title(self):
+        info = {
+            "title": "[Playlist] 퇴근 후 나만의 시간 | 잔잔하게 틀어두기 좋은 재즈 BGM",
+            "duration": 2807,
+        }
+
+        ytet_ydl.mark_single_video_playlist(info)
+
+        self.assertTrue(ytet_ydl.is_single_video_playlist(info))
+        self.assertEqual("퇴근 후 나만의 시간 | 잔잔하게 틀어두기 좋은 재즈 BGM", ytet_ydl.metadata_title(info))
+        self.assertEqual("퇴근 후 나만의 시간 | 잔잔하게 틀어두기 좋은 재즈 BGM", ytet_ydl.metadata_album(info))
 
     def test_clean_error_strips_ansi_and_includes_logger_tail(self):
         self.logger.warning("\x1b[31mfirst warning\x1b[0m")

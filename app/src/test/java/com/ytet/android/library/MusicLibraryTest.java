@@ -33,6 +33,26 @@ public final class MusicLibraryTest {
     }
 
     @Test
+    public void detectsAndCleansLongSinglePlaylistTitles() {
+        DeviceAudioTrack track = new DeviceAudioTrack(
+                1,
+                "[Playlist] 퇴근 후 나만의 시간",
+                "essential;",
+                "Album",
+                "[Playlist] 퇴근 후 나만의 시간.m4a",
+                "YTET",
+                "content://audio/1",
+                2_807_000,
+                10_000
+        );
+
+        assertTrue(MusicLibrary.isLongSinglePlaylistTrack(track));
+        assertEquals("퇴근 후 나만의 시간", MusicLibrary.playlistTitle(track));
+        assertEquals("퇴근 후 나만의 시간", MusicLibrary.cleanPlaylistTitle("[Playlist] 퇴근 후 나만의 시간.m4a"));
+        assertEquals("퇴근 후 나만의 시간", MusicLibrary.cleanPlaylistTitle("playlist | 퇴근 후 나만의 시간"));
+    }
+
+    @Test
     public void selectsStationQueuesFromExactLocalFields() {
         DeviceAudioTrack first = track(1, "Alpha", "Artist A", "Camera");
         DeviceAudioTrack second = track(2, "Beta", "Artist A", "Downloads");

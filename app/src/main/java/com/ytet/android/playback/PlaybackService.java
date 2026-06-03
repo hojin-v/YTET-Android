@@ -43,6 +43,9 @@ public final class PlaybackService extends Service {
     public static final String ACTION_STOP = "com.ytet.android.action.PLAYBACK_STOP";
     public static final String ACTION_TOGGLE_SHUFFLE = "com.ytet.android.action.PLAYBACK_TOGGLE_SHUFFLE";
     public static final String ACTION_TOGGLE_REPEAT = "com.ytet.android.action.PLAYBACK_TOGGLE_REPEAT";
+    public static final String ACTION_SET_SLEEP_TIMER = "com.ytet.android.action.PLAYBACK_SET_SLEEP_TIMER";
+    public static final String ACTION_CANCEL_SLEEP_TIMER = "com.ytet.android.action.PLAYBACK_CANCEL_SLEEP_TIMER";
+    public static final String ACTION_SLEEP_TIMER_FINISHED = "com.ytet.android.action.PLAYBACK_SLEEP_TIMER_FINISHED";
     public static final String ACTION_REQUEST_STATE = "com.ytet.android.action.PLAYBACK_REQUEST_STATE";
     public static final String ACTION_STATE = "com.ytet.android.action.PLAYBACK_STATE";
 
@@ -70,6 +73,9 @@ public final class PlaybackService extends Service {
     public static final String EXTRA_MIX = "com.ytet.android.extra.PLAYBACK_MIX";
     public static final String EXTRA_SHUFFLE_ENABLED = "com.ytet.android.extra.PLAYBACK_SHUFFLE_ENABLED";
     public static final String EXTRA_REPEAT_MODE = "com.ytet.android.extra.PLAYBACK_REPEAT_MODE";
+    public static final String EXTRA_QUEUE_TRACK_IDS = "com.ytet.android.extra.PLAYBACK_QUEUE_TRACK_IDS";
+    public static final String EXTRA_SLEEP_TIMER_MINUTES = "com.ytet.android.extra.PLAYBACK_SLEEP_TIMER_MINUTES";
+    public static final String EXTRA_SLEEP_TIMER_END_AT_MS = "com.ytet.android.extra.PLAYBACK_SLEEP_TIMER_END_AT_MS";
 
     private static final String EXTRA_MIX_TITLE = "com.ytet.android.extra.MIX_TITLE";
     private static final String EXTRA_MIX_SUBTITLE = "com.ytet.android.extra.MIX_SUBTITLE";
@@ -90,6 +96,16 @@ public final class PlaybackService extends Service {
             }
         }
     };
+    private final Runnable sleepTimerRunnable = new Runnable() {
+        @Override
+        public void run() {
+            sleepTimerEndAtMs = 0L;
+            stopPlayback();
+            Intent finished = new Intent(ACTION_SLEEP_TIMER_FINISHED);
+            finished.setPackage(getPackageName());
+            sendBroadcast(finished);
+        }
+    };
 
     private MediaPlayer mediaPlayer;
     private MediaSession mediaSession;
@@ -106,6 +122,7 @@ public final class PlaybackService extends Service {
     private boolean resumeOnAudioFocusGain;
     private boolean shuffleEnabled;
     private int repeatMode = REPEAT_OFF;
+    private long sleepTimerEndAtMs;
     private String errorStatus;
 
     public static Intent playQueueIntent(Context context, MusicStation station, List<DeviceAudioTrack> tracks) {
@@ -132,6 +149,13 @@ public final class PlaybackService extends Service {
     public static Intent commandIntent(Context context, String action) {
         Intent intent = new Intent(context, PlaybackService.class);
         intent.setAction(action);
+        return intent;
+    }
+
+    public static Intent sleepTimerIntent(Context context, int minutes) {
+        Intent intent = new Intent(context, PlaybackService.class);
+        intent.setAction(minutes <= 0 ? ACTION_CANCEL_SLEEP_TIMER : ACTION_SET_SLEEP_TIMER);
+        intent.putExtra(EXTRA_SLEEP_TIMER_MINUTES, minutes);
         return intent;
     }
 
@@ -195,6 +219,10 @@ public final class PlaybackService extends Service {
             toggleShuffle();
         } else if (ACTION_TOGGLE_REPEAT.equals(action)) {
             toggleRepeat();
+        } else if (ACTION_SET_SLEEP_TIMER.equals(action)) {
+            setSleepTimer(intent.getIntExtra(EXTRA_SLEEP_TIMER_MINUTES, 0));
+        } else if (ACTION_CANCEL_SLEEP_TIMER.equals(action)) {
+            cancelSleepTimer(true);
         } else if (ACTION_REQUEST_STATE.equals(action)) {
             broadcastState();
             if (queue.isEmpty()) {
@@ -215,6 +243,7 @@ public final class PlaybackService extends Service {
     public void onDestroy() {
         queueExecutor.shutdownNow();
         mainHandler.removeCallbacks(stateTick);
+        mainHandler.removeCallbacks(sleepTimerRunnable);
         releasePlayer();
         abandonAudioFocus();
         if (mediaSession != null) {
@@ -495,6 +524,7 @@ public final class PlaybackService extends Service {
     }
 
     private void stopPlayback() {
+        cancelSleepTimer(false);
         queueLoadVersion++;
         playbackVersion++;
         queue.clear();
@@ -510,6 +540,26 @@ public final class PlaybackService extends Service {
         broadcastState();
         stopForeground(STOP_FOREGROUND_REMOVE);
         stopSelf();
+    }
+
+    private void setSleepTimer(int minutes) {
+        if (minutes <= 0) {
+            cancelSleepTimer(true);
+            return;
+        }
+        long delayMs = minutes * 60_000L;
+        sleepTimerEndAtMs = System.currentTimeMillis() + delayMs;
+        mainHandler.removeCallbacks(sleepTimerRunnable);
+        mainHandler.postDelayed(sleepTimerRunnable, delayMs);
+        broadcastState();
+    }
+
+    private void cancelSleepTimer(boolean broadcast) {
+        mainHandler.removeCallbacks(sleepTimerRunnable);
+        sleepTimerEndAtMs = 0L;
+        if (broadcast) {
+            broadcastState();
+        }
     }
 
     private void toggleShuffle() {
@@ -770,8 +820,18 @@ public final class PlaybackService extends Service {
         intent.putExtra(EXTRA_MIX, mixTitle);
         intent.putExtra(EXTRA_SHUFFLE_ENABLED, shuffleEnabled);
         intent.putExtra(EXTRA_REPEAT_MODE, repeatMode);
+        intent.putExtra(EXTRA_QUEUE_TRACK_IDS, queueTrackIds());
+        intent.putExtra(EXTRA_SLEEP_TIMER_END_AT_MS, sleepTimerEndAtMs);
         sendBroadcast(intent);
         scheduleStateTick();
+    }
+
+    private long[] queueTrackIds() {
+        long[] ids = new long[queue.size()];
+        for (int index = 0; index < queue.size(); index++) {
+            ids[index] = queue.get(index).id();
+        }
+        return ids;
     }
 
     private void scheduleStateTick() {

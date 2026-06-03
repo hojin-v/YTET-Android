@@ -1,6 +1,10 @@
 import os
 import json
 import re
+import time
+import unicodedata
+from difflib import SequenceMatcher
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from yt_dlp import YoutubeDL
@@ -10,6 +14,9 @@ from yt_dlp.utils import DownloadError
 SUBTITLE_LANGUAGES = ["ko", "ko-KR", "en", "en-US", "en-GB"]
 AUDIO_EXTENSIONS = {".m4a", ".aac", ".flac", ".mp3", ".opus", ".ogg", ".wav", ".webm"}
 DEFAULT_ANDROID_SDK = 36
+MUSICBRAINZ_API_ROOT = "https://musicbrainz.org/ws/2"
+MUSICBRAINZ_USER_AGENT = "YTET-Android/0.1 (https://github.com/hojin/youtube-audio-extractor-android)"
+MUSICBRAINZ_MIN_INTERVAL = 1.05
 
 
 class YtetExtractionError(Exception):
@@ -42,13 +49,40 @@ class YtetLogger:
         return "\n".join(self.messages)
 
 
-def extract(workspace, url, media_type, option, include_subtitles, progress_listener, android_sdk=DEFAULT_ANDROID_SDK):
+def extract(
+    workspace,
+    url,
+    media_type,
+    option,
+    include_subtitles,
+    include_playlist=False,
+    enhance_metadata=False,
+    progress_listener=None,
+    android_sdk=DEFAULT_ANDROID_SDK,
+):
+    if not isinstance(include_playlist, bool):
+        old_progress_listener = include_playlist
+        old_android_sdk = progress_listener
+        progress_listener = old_progress_listener
+        include_playlist = False
+        if old_android_sdk is not None:
+            android_sdk = old_android_sdk
+    elif not isinstance(enhance_metadata, bool):
+        old_progress_listener = enhance_metadata
+        old_android_sdk = progress_listener
+        progress_listener = old_progress_listener
+        enhance_metadata = False
+        if old_android_sdk is not None:
+            android_sdk = old_android_sdk
+
     os.makedirs(workspace, exist_ok=True)
     logger = YtetLogger()
     media_type = str(media_type or "audio")
     android_sdk = as_int(android_sdk) or DEFAULT_ANDROID_SDK
 
     if media_type == "video":
+        if include_playlist:
+            raise YtetExtractionError("영상 플레이리스트 전체 추출은 아직 지원하지 않습니다. 음원 모드에서 전체 플레이리스트를 사용하세요.")
         extract_video(
             workspace,
             url,
@@ -67,11 +101,16 @@ def extract(workspace, url, media_type, option, include_subtitles, progress_list
         bool(include_subtitles),
         progress_listener,
         logger,
+        include_playlist=bool(include_playlist),
     )
 
     try:
         with YoutubeDL(options) as ydl:
             info = ydl.extract_info(url, download=True)
+            mark_single_video_playlist(info)
+            if enhance_metadata and not is_single_video_playlist(info):
+                info = enhance_music_metadata(info, progress_listener, logger)
+            embed_audio_covers(workspace, info, logger, ydl)
     except YtetExtractionError:
         raise
     except DownloadError as error:
@@ -79,16 +118,21 @@ def extract(workspace, url, media_type, option, include_subtitles, progress_list
     except Exception as error:
         raise YtetExtractionError(clean_error(str(error), logger)) from error
 
-    embed_audio_cover(workspace, info, logger)
-
-
-def build_options(workspace, media_type, option, include_subtitles, progress_listener, logger):
+def build_options(
+    workspace,
+    media_type,
+    option,
+    include_subtitles,
+    progress_listener,
+    logger,
+    include_playlist=False,
+):
     options = {
         "cachedir": False,
         "logger": logger,
         "no_warnings": False,
-        "noplaylist": True,
-        "outtmpl": os.path.join(workspace, "%(uploader)s - %(title)s.%(ext)s"),
+        "noplaylist": not bool(include_playlist),
+        "outtmpl": output_template(workspace, include_playlist),
         "overwrites": True,
         "progress_hooks": [progress_hook(progress_listener)],
         "quiet": True,
@@ -104,6 +148,12 @@ def build_options(workspace, media_type, option, include_subtitles, progress_lis
     else:
         options["format"] = "ba[ext=m4a]/ba/best"
     return options
+
+
+def output_template(workspace, include_playlist=False):
+    if include_playlist:
+        return os.path.join(workspace, "%(playlist)s", "%(playlist_index)03d - %(uploader)s - %(title)s.%(ext)s")
+    return os.path.join(workspace, "%(uploader)s - %(title)s.%(ext)s")
 
 
 def extract_video(
@@ -445,23 +495,607 @@ def first_text(*values):
     return None
 
 
-def embed_audio_cover(workspace, info, logger):
-    audio_path = find_audio_file(workspace)
-    if not audio_path or os.path.splitext(audio_path)[1].lower() != ".m4a":
+def enhance_music_metadata(info, progress_listener, logger):
+    if not isinstance(info, dict):
+        return info
+    if is_single_video_playlist(info):
+        logger.info("MusicBrainz 보정 건너뜀: 긴 단일 플레이리스트 영상")
+        return info
+    try:
+        notify(progress_listener, 91, "메타데이터", "MusicBrainz 앨범 정보 검색 중")
+        client = MusicBrainzClient(logger)
+        entries = [entry for entry in info.get("entries") or [] if isinstance(entry, dict)]
+        if entries:
+            enhance_playlist_metadata(info, entries, client, logger)
+        else:
+            metadata = match_recording_metadata(info, client)
+            if metadata:
+                apply_metadata_override(info, metadata)
+    except Exception as error:
+        logger.warning(f"MusicBrainz 보정 실패: {error}")
+    return info
+
+
+def mark_single_video_playlist(info):
+    if isinstance(info, dict) and is_single_video_playlist_candidate(info):
+        info["__ytet_single_video_playlist"] = True
+
+
+def is_single_video_playlist(info):
+    return isinstance(info, dict) and bool(info.get("__ytet_single_video_playlist"))
+
+
+def is_single_video_playlist_candidate(info):
+    if not isinstance(info, dict) or info.get("entries"):
+        return False
+    duration = as_int(info.get("duration"))
+    if not duration or duration < 20 * 60:
+        return False
+    return has_playlist_title_marker(info.get("title"))
+
+
+def has_playlist_title_marker(value):
+    text = normalize_text(value).casefold()
+    if not text:
+        return False
+    return re.search(r"(^|[\s\[(（【|:：\-–—])playlist([\s\])）】|:：\-–—]|$)", text) is not None \
+        or "플레이리스트" in text
+
+
+def clean_single_video_playlist_title(value):
+    text = normalize_text(value)
+    text = re.sub(r"(?i)^\s*[\[(（【]\s*playlist\s*[\])）】]\s*", "", text)
+    text = re.sub(r"(?i)^\s*playlist\s*([|:：\-–—]+)\s*", "", text)
+    return clean_music_title(text)
+
+
+class MusicBrainzClient:
+    def __init__(self, logger):
+        self.logger = logger
+        self.last_request_at = 0
+        self.cache = {}
+
+    def search(self, entity, query, limit=5):
+        return self.get(f"/{entity}", {"query": query, "fmt": "json", "limit": str(limit)})
+
+    def lookup_release(self, release_id):
+        return self.get(f"/release/{release_id}", {"inc": "recordings+artist-credits+media+release-groups", "fmt": "json"})
+
+    def get(self, path, params):
+        url = MUSICBRAINZ_API_ROOT + path + "?" + urlencode(params)
+        if url in self.cache:
+            return self.cache[url]
+        elapsed = time.monotonic() - self.last_request_at
+        if self.last_request_at and elapsed < MUSICBRAINZ_MIN_INTERVAL:
+            time.sleep(MUSICBRAINZ_MIN_INTERVAL - elapsed)
+        request = Request(url, headers={
+            "Accept": "application/json",
+            "User-Agent": MUSICBRAINZ_USER_AGENT,
+        })
+        try:
+            with urlopen(request, timeout=20) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        finally:
+            self.last_request_at = time.monotonic()
+        self.cache[url] = data
+        return data
+
+
+def enhance_playlist_metadata(info, entries, client, logger):
+    artist_candidate, album_candidate = playlist_artist_album_candidates(info)
+    release = match_release_for_playlist(entries, artist_candidate, album_candidate, client)
+    if release:
+        matched = apply_release_metadata(entries, release)
+        logger.info(f"MusicBrainz release matched {matched}/{len(entries)} tracks")
+
+    for entry in entries:
+        if entry.get("__ytet_metadata"):
+            continue
+        metadata = match_recording_metadata(entry, client, artist_candidate=artist_candidate, album_candidate=album_candidate)
+        if metadata:
+            apply_metadata_override(entry, metadata)
+
+
+def playlist_artist_album_candidates(info):
+    title = first_text(info.get("playlist"), info.get("playlist_title"), info.get("title"))
+    if not title:
+        return None, None
+    cleaned = remove_bracket_descriptors(normalize_text(title))
+    for separator in (" / ", " - ", " – ", " — ", " | ", " : "):
+        if separator in cleaned:
+            left, right = cleaned.split(separator, 1)
+            artist = clean_music_title(left)
+            album = clean_music_title(right)
+            if artist and album:
+                return artist, album
+    return None, clean_music_title(cleaned)
+
+
+def match_release_for_playlist(entries, artist_candidate, album_candidate, client):
+    if not album_candidate:
+        return None
+    clauses = [f'release:"{mb_escape(album_candidate)}"']
+    if artist_candidate:
+        clauses.append(f'artist:"{mb_escape(artist_candidate)}"')
+    results = client.search("release", " AND ".join(clauses), limit=5).get("releases") or []
+    best = None
+    best_score = 0
+    for release in results:
+        release_score = as_int(release.get("score")) or 0
+        title_score = similarity(album_candidate, release.get("title"))
+        artist_score = similarity(artist_candidate, artist_credit_name(release.get("artist-credit"))) if artist_candidate else 0.7
+        score = release_score / 100 * 0.45 + title_score * 0.35 + artist_score * 0.20
+        if score > best_score and release.get("id"):
+            best = release
+            best_score = score
+    if not best or best_score < 0.72:
+        return None
+    release = client.lookup_release(best["id"])
+    matches = release_track_matches(entries, release)
+    if len(entries) > 1 and matches < max(2, int(round(len(entries) * 0.5))):
+        return None
+    return release
+
+
+def release_track_matches(entries, release):
+    tracks = release_tracks(release)
+    matches = 0
+    for entry in entries:
+        track, score = best_track_match(entry, tracks)
+        if track is not None and score >= 0.82:
+            matches += 1
+    return matches
+
+
+def apply_release_metadata(entries, release):
+    tracks = release_tracks(release)
+    release_title = first_text(release.get("title"))
+    release_artist = artist_credit_name(release.get("artist-credit"))
+    release_date = first_text(release.get("date"))
+    total = len(tracks)
+    matched = 0
+    used = set()
+    for entry in entries:
+        track, score = best_track_match(entry, tracks, used)
+        if not track or score < 0.82:
+            continue
+        used.add(track["index"])
+        metadata = {
+            "title": track["title"],
+            "artist": track["artist"] or release_artist,
+            "album": release_title,
+            "album_artist": release_artist,
+            "date": release_date,
+            "track_number": track["position"],
+            "track_total": total,
+        }
+        apply_metadata_override(entry, metadata)
+        matched += 1
+    return matched
+
+
+def release_tracks(release):
+    tracks = []
+    for medium in release.get("media") or []:
+        for track in medium.get("tracks") or []:
+            recording = track.get("recording") or {}
+            title = first_text(track.get("title"), recording.get("title"))
+            if not title:
+                continue
+            tracks.append({
+                "index": len(tracks),
+                "title": title,
+                "artist": artist_credit_name(track.get("artist-credit")) or artist_credit_name(recording.get("artist-credit")),
+                "position": as_int(track.get("position") or track.get("number")) or len(tracks) + 1,
+                "duration": as_int(track.get("length") or recording.get("length")),
+            })
+    return tracks
+
+
+def best_track_match(entry, tracks, used=None):
+    used = used or set()
+    candidates = title_candidates(metadata_title(entry))
+    entry_duration = duration_ms(entry)
+    best = None
+    best_score = 0
+    for track in tracks:
+        if track["index"] in used:
+            continue
+        title_score = max((similarity(candidate, track["title"]) for candidate in candidates), default=0)
+        duration_score = duration_similarity(entry_duration, track.get("duration"))
+        score = title_score * 0.82 + duration_score * 0.18
+        if score > best_score:
+            best = track
+            best_score = score
+    return best, best_score
+
+
+def match_recording_metadata(info, client, artist_candidate=None, album_candidate=None):
+    titles = title_candidates(metadata_title(info))
+    if not titles:
+        return None
+    artist = artist_candidate or metadata_artist(info)
+    query_title = titles[0]
+    clauses = [f'recording:"{mb_escape(query_title)}"']
+    if artist:
+        clauses.append(f'artistname:"{mb_escape(artist)}"')
+    if album_candidate:
+        clauses.append(f'release:"{mb_escape(album_candidate)}"')
+    results = client.search("recording", " AND ".join(clauses), limit=5).get("recordings") or []
+    if not results and artist and len(titles) > 1:
+        results = client.search("recording", f'recording:"{mb_escape(titles[1])}" AND artistname:"{mb_escape(artist)}"', limit=5).get("recordings") or []
+    best, score = best_recording_result(info, results, titles, artist)
+    if not best or score < 0.80:
+        return None
+    release = best_recording_release(best, album_candidate)
+    return {
+        "title": first_text(best.get("title"), query_title),
+        "artist": artist_credit_name(best.get("artist-credit")) or artist,
+        "album": release.get("title") if release else album_candidate,
+        "album_artist": artist_credit_name(release.get("artist-credit")) if release else None,
+        "date": release.get("date") if release else first_text(best.get("first-release-date")),
+        "track_number": release_track_position(release),
+        "track_total": release_track_count(release),
+    }
+
+
+def best_recording_result(info, results, title_candidates_list, artist_candidate):
+    entry_duration = duration_ms(info)
+    best = None
+    best_score = 0
+    for item in results:
+        api_score = (as_int(item.get("score")) or 0) / 100
+        title_score = max((similarity(candidate, item.get("title")) for candidate in title_candidates_list), default=0)
+        artist_score = similarity(artist_candidate, artist_credit_name(item.get("artist-credit"))) if artist_candidate else 0.7
+        if artist_candidate and api_score >= 0.95:
+            artist_score = max(artist_score, 0.75)
+        duration_score = duration_similarity(entry_duration, as_int(item.get("length")))
+        release_score = 0.1 if item.get("releases") else 0
+        score = api_score * 0.35 + title_score * 0.30 + artist_score * 0.20 + duration_score * 0.10 + release_score
+        if score > best_score:
+            best = item
+            best_score = score
+    return best, best_score
+
+
+def best_recording_release(recording, album_candidate=None):
+    releases = recording.get("releases") or []
+    if not releases:
+        return None
+    if album_candidate:
+        return sorted(releases, key=lambda release: similarity(album_candidate, release.get("title")), reverse=True)[0]
+    return releases[0]
+
+
+def release_track_position(release):
+    if not release:
+        return None
+    for medium in release.get("media") or []:
+        for track in medium.get("tracks") or []:
+            position = as_int(track.get("position") or track.get("number"))
+            if position:
+                return position
+    return None
+
+
+def release_track_count(release):
+    if not release:
+        return None
+    for medium in release.get("media") or []:
+        count = as_int(medium.get("track-count"))
+        if count:
+            return count
+    return None
+
+
+def apply_metadata_override(info, metadata):
+    clean = {key: value for key, value in (metadata or {}).items() if value}
+    if clean:
+        info["__ytet_metadata"] = clean
+
+
+def artist_credit_name(artist_credit):
+    if not isinstance(artist_credit, list):
+        return None
+    parts = []
+    for item in artist_credit:
+        if isinstance(item, str):
+            parts.append(item)
+        elif isinstance(item, dict):
+            parts.append(first_text(item.get("name"), (item.get("artist") or {}).get("name")))
+            if item.get("joinphrase"):
+                parts.append(item.get("joinphrase"))
+    return "".join(part for part in parts if part).strip() or None
+
+
+def title_candidates(title):
+    base = clean_music_title(title)
+    if not base:
+        return []
+    variants = [base, remove_bracket_descriptors(base), remove_media_descriptors(base)]
+    variants.append(remove_media_descriptors(remove_bracket_descriptors(base)))
+    out = []
+    seen = set()
+    for variant in variants:
+        clean = clean_music_title(variant)
+        key = comparable_text(clean)
+        if clean and key and key not in seen:
+            out.append(clean)
+            seen.add(key)
+    return sorted(out, key=lambda item: (descriptor_penalty(item), len(item)))
+
+
+def clean_music_title(value):
+    text = normalize_text(value)
+    text = re.sub(r"^[\[(（【][^\])）】]{0,40}[\])）】]\s*", "", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip(" -_|:;.,")
+
+
+def normalize_text(value):
+    text = unicodedata.normalize("NFKC", str(value or ""))
+    text = text.replace("\u200b", " ").replace("\ufeff", " ")
+    text = text.replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'")
+    text = text.replace("＿", "_").replace("_", " ")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def remove_bracket_descriptors(value):
+    text = normalize_text(value)
+
+    def replace(match):
+        content = match.group(1)
+        return "" if is_descriptor_text(content) else " " + content + " "
+
+    text = re.sub(r"[\[(（【](.*?)[\])）】]", replace, text)
+    return clean_music_title(text)
+
+
+def remove_media_descriptors(value):
+    text = normalize_text(value)
+    patterns = [
+        r"official\s*(music\s*)?video",
+        r"official\s*audio",
+        r"lyric\s*video",
+        r"lyrics?",
+        r"visuali[sz]er",
+        r"music\s*video",
+        r"m\s*/\s*v",
+        r"mv",
+        r"audio",
+        r"eng\s*sub",
+        r"kor\s*sub",
+        r"\beng\b",
+        r"\bkor\b",
+        r"한글\s*자막",
+        r"가사\s*(해석)?",
+        r"뮤직비디오",
+        r"뮤비",
+    ]
+    for pattern in patterns:
+        text = re.sub(pattern, " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"[\[(（【]\s*[/|,;:-]*\s*[\])）】]", " ", text)
+    return clean_music_title(text)
+
+
+def is_descriptor_text(value):
+    comparable = comparable_text(value)
+    if not comparable:
+        return True
+    descriptor_tokens = {
+        "official", "video", "musicvideo", "audio", "lyrics", "lyricvideo",
+        "visualizer", "visualiser", "mv", "eng", "english", "sub", "subtitle",
+        "remaster", "remastered", "fullalbum", "album", "live", "teaser",
+        "한글자막", "가사", "뮤비", "뮤직비디오", "라이브",
+    }
+    compact = comparable.replace(" ", "")
+    if compact in descriptor_tokens:
+        return True
+    return any(token in compact for token in descriptor_tokens)
+
+
+def descriptor_penalty(value):
+    comparable = comparable_text(value)
+    return sum(1 for token in ("official", "video", "lyric", "audio", "visualizer", "remaster") if token in comparable)
+
+
+def comparable_text(value):
+    text = normalize_text(value).casefold()
+    text = re.sub(r"[^\w가-힣ぁ-ゟ゠-ヿ一-龯]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def similarity(left, right):
+    left_key = comparable_text(left)
+    right_key = comparable_text(right)
+    if not left_key or not right_key:
+        return 0
+    if left_key == right_key:
+        return 1
+    return SequenceMatcher(None, left_key, right_key).ratio()
+
+
+def duration_ms(info):
+    if not isinstance(info, dict):
+        return None
+    duration = info.get("duration")
+    if duration is None:
+        return None
+    try:
+        return int(float(duration) * 1000)
+    except (TypeError, ValueError):
+        return None
+
+
+def duration_similarity(left_ms, right_ms):
+    if not left_ms or not right_ms:
+        return 0.5
+    delta = abs(left_ms - right_ms)
+    if delta <= 2000:
+        return 1
+    if delta >= 30000:
+        return 0
+    return max(0, 1 - delta / 30000)
+
+
+def mb_escape(value):
+    return str(value or "").replace("\\", "\\\\").replace('"', '\\"')
+
+
+def embed_audio_covers(workspace, info, logger, ydl=None):
+    entries = info.get("entries") if isinstance(info, dict) else None
+    album_fallback = metadata_album(info, first_text(info.get("title")) if entries else None)
+    if entries:
+        for entry in entries:
+            if isinstance(entry, dict):
+                embed_audio_cover(workspace, entry, logger, ydl, fallback_to_first=False, album_fallback=album_fallback)
         return
-    cover = download_cover_image(info, workspace, logger)
-    if not cover:
+    embed_audio_cover(workspace, info, logger, ydl, fallback_to_first=True, album_fallback=album_fallback)
+
+
+def embed_audio_cover(workspace, info, logger, ydl=None, fallback_to_first=True, album_fallback=None):
+    audio_path = audio_path_for_info(workspace, info, ydl)
+    if not audio_path and fallback_to_first:
+        audio_path = find_audio_file(workspace)
+    if not audio_path or os.path.splitext(audio_path)[1].lower() != ".m4a":
         return
     try:
         from mutagen.mp4 import MP4, MP4Cover
         audio = MP4(audio_path)
         if audio.tags is None:
             audio.add_tags()
-        image_format = MP4Cover.FORMAT_PNG if cover["mime"] == "image/png" else MP4Cover.FORMAT_JPEG
-        audio.tags["covr"] = [MP4Cover(cover["data"], imageformat=image_format)]
+        write_mp4_metadata(audio, info, album_fallback)
+        cover = download_cover_image(info, workspace, logger)
+        if cover:
+            image_format = MP4Cover.FORMAT_PNG if cover["mime"] == "image/png" else MP4Cover.FORMAT_JPEG
+            audio.tags["covr"] = [MP4Cover(cover["data"], imageformat=image_format)]
         audio.save()
     except Exception as error:
-        logger.warning(f"커버 이미지 임베딩 실패: {error}")
+        logger.warning(f"오디오 메타데이터 임베딩 실패: {error}")
+
+
+def write_mp4_metadata(audio, info, album_fallback=None):
+    if audio.tags is None:
+        audio.add_tags()
+    tags = audio.tags
+    set_mp4_text(tags, "\xa9nam", metadata_title(info))
+    set_mp4_text(tags, "\xa9ART", metadata_artist(info))
+    set_mp4_text(tags, "aART", metadata_album_artist(info))
+    set_mp4_text(tags, "\xa9alb", metadata_album(info, album_fallback))
+    set_mp4_text(tags, "\xa9day", metadata_date(info))
+    track = metadata_track_number(info)
+    if track:
+        tags["trkn"] = [track]
+
+
+def set_mp4_text(tags, key, value):
+    if value:
+        tags[key] = [value]
+
+
+def metadata_title(info):
+    if not isinstance(info, dict):
+        return None
+    if is_single_video_playlist(info):
+        return first_text(clean_single_video_playlist_title(info.get("title")), info.get("title"), info.get("id"))
+    return first_text(metadata_override(info, "title"), info.get("track"), info.get("title"), info.get("id"))
+
+
+def metadata_artist(info):
+    if not isinstance(info, dict):
+        return None
+    return first_text(metadata_override(info, "artist"), info.get("artist"), info.get("creator"), info.get("uploader"), info.get("channel"))
+
+
+def metadata_album_artist(info):
+    if not isinstance(info, dict):
+        return None
+    return first_text(
+        metadata_override(info, "album_artist"),
+        info.get("album_artist"),
+        metadata_override(info, "artist"),
+        info.get("artist"),
+        info.get("creator"),
+        info.get("uploader"),
+        info.get("channel"),
+    )
+
+
+def metadata_album(info, fallback=None):
+    if not isinstance(info, dict):
+        return fallback
+    if is_single_video_playlist(info):
+        return first_text(clean_single_video_playlist_title(info.get("title")), fallback)
+    return first_text(metadata_override(info, "album"), info.get("album"), info.get("playlist"), info.get("playlist_title"), fallback)
+
+
+def metadata_date(info):
+    if not isinstance(info, dict):
+        return None
+    override = metadata_override(info, "date")
+    if override:
+        return override
+    release_year = first_text(info.get("release_year"))
+    if release_year:
+        return release_year
+    upload_date = first_text(info.get("upload_date"))
+    if upload_date and len(upload_date) >= 4:
+        return upload_date[:4]
+    return None
+
+
+def metadata_track_number(info):
+    if not isinstance(info, dict):
+        return None
+    override_index = as_int(metadata_override(info, "track_number"))
+    if override_index:
+        override_total = as_int(metadata_override(info, "track_total"))
+        return (override_index, override_total if override_total and override_total > 0 else 0)
+    index = as_int(info.get("playlist_index") or info.get("track_number"))
+    total = as_int(info.get("n_entries") or info.get("playlist_count") or info.get("track_total"))
+    if not index or index < 1:
+        return None
+    return (index, total if total and total > 0 else 0)
+
+
+def metadata_override(info, key):
+    metadata = info.get("__ytet_metadata") if isinstance(info, dict) else None
+    if not isinstance(metadata, dict):
+        return None
+    return metadata.get(key)
+
+
+def audio_path_for_info(workspace, info, ydl=None):
+    if not isinstance(info, dict):
+        return None
+
+    requested_downloads = info.get("requested_downloads")
+    if isinstance(requested_downloads, list):
+        for item in requested_downloads:
+            if not isinstance(item, dict):
+                continue
+            path = first_text(item.get("filepath"), item.get("_filename"), item.get("filename"))
+            if is_existing_audio_path(path):
+                return path
+
+    path = first_text(info.get("filepath"), info.get("_filename"), info.get("filename"))
+    if is_existing_audio_path(path):
+        return path
+
+    if ydl is not None:
+        try:
+            path = ydl.prepare_filename(info)
+            if is_existing_audio_path(path):
+                return path
+        except Exception:
+            return None
+    return None
+
+
+def is_existing_audio_path(path):
+    if not path:
+        return False
+    return os.path.isfile(path) and os.path.splitext(path)[1].lower() in AUDIO_EXTENSIONS
 
 
 def download_cover_image(info, workspace, logger):
@@ -530,17 +1164,45 @@ def progress_hook(progress_listener):
             notify(progress_listener, download_percent(data), "다운로드", download_message(data))
         elif status == "finished":
             filename = os.path.basename(str(data.get("filename") or ""))
-            notify(progress_listener, 88, "정리", filename or "다운로드 완료")
+            notify(progress_listener, cleanup_percent(data), "정리", playlist_message(data, filename or "다운로드 완료"))
 
     return hook
 
 
 def download_percent(data):
+    fraction = download_fraction(data)
+    playlist_progress = playlist_percent(data, fraction if fraction is not None else 0)
+    if playlist_progress is not None:
+        return playlist_progress
+    if fraction is not None:
+        return min(90, max(6, int(round(6 + fraction * 84))))
+    return 20
+
+
+def cleanup_percent(data):
+    playlist_progress = playlist_percent(data, 1)
+    return playlist_progress if playlist_progress is not None else 88
+
+
+def download_fraction(data):
     total = data.get("total_bytes") or data.get("total_bytes_estimate")
     downloaded = data.get("downloaded_bytes")
     if total and downloaded:
-        return min(90, max(6, int(round(6 + (downloaded / total) * 84))))
-    return 20
+        return min(1, max(0, downloaded / total))
+    return None
+
+
+def playlist_percent(data, item_fraction):
+    info = data.get("info_dict") if isinstance(data, dict) else None
+    if not isinstance(info, dict):
+        return None
+    index = as_int(info.get("playlist_index") or info.get("playlist_autonumber"))
+    total = as_int(info.get("n_entries") or info.get("playlist_count"))
+    if not index or not total or index < 1 or total < 1:
+        return None
+    bounded_index = min(index, total)
+    progress = ((bounded_index - 1) + min(1, max(0, item_fraction))) / total
+    return min(90, max(6, int(round(6 + progress * 84))))
 
 
 def download_message(data):
@@ -549,8 +1211,21 @@ def download_message(data):
     downloaded = data.get("downloaded_bytes")
     if total and downloaded:
         size = f"{format_bytes(downloaded)} / {format_bytes(total)}"
-        return f"{filename} {size}".strip()
-    return filename or "다운로드 중"
+        return playlist_message(data, f"{filename} {size}".strip())
+    return playlist_message(data, filename or "다운로드 중")
+
+
+def playlist_message(data, message):
+    info = data.get("info_dict") if isinstance(data, dict) else None
+    if not isinstance(info, dict):
+        return message
+    index = as_int(info.get("playlist_index") or info.get("playlist_autonumber"))
+    total = as_int(info.get("n_entries") or info.get("playlist_count"))
+    if index and total:
+        return f"{index}/{total} {message}"
+    if index:
+        return f"{index}번째 {message}"
+    return message
 
 
 def notify(listener, percent, stage, message):
