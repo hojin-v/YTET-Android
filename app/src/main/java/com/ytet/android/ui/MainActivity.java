@@ -2627,8 +2627,15 @@ public final class MainActivity extends Activity {
         } catch (SecurityException ignored) {
             // Some providers grant temporary access only; extraction can still use it in this session.
         }
-        outputTreeUri = uri.toString();
-        getPreferences().edit().putString(PREF_OUTPUT_TREE, outputTreeUri).apply();
+        String selectedTreeUri = uri.toString();
+        if (DefaultMediaPaths.isDefaultTreeUriFor(selectedMediaType(), selectedTreeUri)) {
+            outputTreeUri = null;
+            getPreferences().edit().remove(PREF_OUTPUT_TREE).apply();
+            toast("기본 저장 폴더를 사용합니다.");
+        } else {
+            outputTreeUri = selectedTreeUri;
+            getPreferences().edit().putString(PREF_OUTPUT_TREE, outputTreeUri).apply();
+        }
         updateFolderLabel();
     }
 
@@ -2859,7 +2866,7 @@ public final class MainActivity extends Activity {
         if (outputTreeUri == null || outputTreeUri.trim().isEmpty()) {
             return "기본 저장: " + DefaultMediaPaths.displayPath(mediaType);
         }
-        return "사용자 지정 저장: " + outputTreeUri;
+        return "사용자 지정 저장: " + DefaultMediaPaths.displayTreePath(outputTreeUri);
     }
 
     private boolean hasNotificationPermission() {

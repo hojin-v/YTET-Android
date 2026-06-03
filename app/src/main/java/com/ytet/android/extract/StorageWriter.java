@@ -55,6 +55,8 @@ public final class StorageWriter {
         String treeDocumentId = DocumentsContract.getTreeDocumentId(treeUri);
         Uri parentUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, treeDocumentId);
         List<CopiedFile> copiedFiles = new ArrayList<>();
+        List<String> scanPaths = new ArrayList<>();
+        List<String> scanMimeTypes = new ArrayList<>();
         Map<String, Uri> folderCache = new HashMap<>();
 
         for (File file : files) {
@@ -81,9 +83,15 @@ public final class StorageWriter {
                 throw new ExtractionException("파일 저장 중 오류가 발생했습니다: " + displayName, exception);
             }
 
+            String scanPath = scanPathForDocumentUri(targetUri);
+            if (!scanPath.isEmpty()) {
+                scanPaths.add(scanPath);
+                scanMimeTypes.add(mimeType);
+            }
             copiedFiles.add(new CopiedFile(displayName, mimeType, file.length(), targetUri.toString()));
         }
 
+        scanCopiedFiles(context, scanPaths, scanMimeTypes);
         return copiedFiles;
     }
 
@@ -217,6 +225,26 @@ public final class StorageWriter {
             folderCache.put(key, currentUri);
         }
         return currentUri;
+    }
+
+    private void scanCopiedFiles(Context context, List<String> scanPaths, List<String> scanMimeTypes) {
+        if (scanPaths.isEmpty()) {
+            return;
+        }
+        MediaScannerConnection.scanFile(
+                context,
+                scanPaths.toArray(new String[0]),
+                scanMimeTypes.toArray(new String[0]),
+                null
+        );
+    }
+
+    private String scanPathForDocumentUri(Uri documentUri) {
+        String relativePath = DefaultMediaPaths.primaryExternalStorageRelativePathFromDocumentUri(documentUri.toString());
+        if (relativePath.isEmpty()) {
+            return "";
+        }
+        return new File(Environment.getExternalStorageDirectory(), relativePath).getAbsolutePath();
     }
 
     private Uri collectionUriFor(MediaType mediaType, String mimeType) {
