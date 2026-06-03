@@ -160,7 +160,9 @@ public final class MainActivity extends Activity {
     private long[] playbackQueueTrackIds = new long[0];
     private boolean queuePreviewLoading;
     private long sleepTimerEndAtMs;
+    private long sleepTimerRemainingMs;
     private int sleepTimerMinutes;
+    private boolean sleepTimerPaused;
     private boolean sleepTimerControlsVisible;
     private boolean suppressPlayerDragDismiss;
     private String extractorUrl = "";
@@ -284,6 +286,8 @@ public final class MainActivity extends Activity {
             playbackShuffleEnabled = intent.getBooleanExtra(PlaybackService.EXTRA_SHUFFLE_ENABLED, false);
             playbackRepeatMode = intent.getIntExtra(PlaybackService.EXTRA_REPEAT_MODE, PlaybackService.REPEAT_OFF);
             sleepTimerEndAtMs = intent.getLongExtra(PlaybackService.EXTRA_SLEEP_TIMER_END_AT_MS, 0L);
+            sleepTimerRemainingMs = intent.getLongExtra(PlaybackService.EXTRA_SLEEP_TIMER_REMAINING_MS, 0L);
+            sleepTimerPaused = intent.getBooleanExtra(PlaybackService.EXTRA_SLEEP_TIMER_PAUSED, false);
             updateQueuePreviewFromIds(intent.getLongArrayExtra(PlaybackService.EXTRA_QUEUE_TRACK_IDS));
             if (!playbackHasQueue) {
                 activeStation = null;
@@ -1897,6 +1901,9 @@ public final class MainActivity extends Activity {
         root.addView(top, marginBottom(20));
 
         root.addView(coverArtView(), coverParams());
+        if (hasSleepTimer()) {
+            root.addView(activeSleepTimerRow(), marginBottom(12));
+        }
         root.addView(text(playbackTitle, 23, R.color.ytet_text, true), marginBottom(6));
         root.addView(muted(playbackArtist + " · " + playbackAlbum, 14), marginBottom(4));
         root.addView(muted(queuePositionText(), 12), marginBottom(16));
@@ -1937,14 +1944,14 @@ public final class MainActivity extends Activity {
         LinearLayout tools = new LinearLayout(this);
         tools.setOrientation(LinearLayout.HORIZONTAL);
         tools.setGravity(Gravity.CENTER_VERTICAL);
-        boolean timerSelected = isSleepTimerActive() || (sleepTimerControlsVisible && sleepTimerMinutes > 0);
+        boolean timerSelected = hasSleepTimer() || (sleepTimerControlsVisible && sleepTimerMinutes > 0);
         ImageButton timer = playerIconButton(R.drawable.ic_timer, "슬립 타이머", timerSelected, true);
         timer.setOnClickListener(view -> {
             if (sleepTimerControlsVisible) {
                 applySleepTimer(sleepTimerMinutes);
                 sleepTimerControlsVisible = false;
             } else {
-                if (isSleepTimerActive()) {
+                if (hasSleepTimer()) {
                     sleepTimerMinutes = remainingSleepTimerMinutes();
                 }
                 sleepTimerControlsVisible = true;
@@ -1979,6 +1986,37 @@ public final class MainActivity extends Activity {
         placeholder.setGravity(Gravity.CENTER);
         placeholder.setBackground(rounded(color(R.color.ytet_accent_dark), 8));
         return placeholder;
+    }
+
+    private View activeSleepTimerRow() {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView remaining = muted(sleepTimerInlineText(), 14);
+        remaining.setGravity(Gravity.CENTER_VERTICAL);
+        row.addView(remaining, new LinearLayout.LayoutParams(0, dp(42), 1f));
+
+        ImageButton toggle = playerIconButton(
+                sleepTimerPaused ? R.drawable.ic_play_arrow : R.drawable.ic_pause,
+                sleepTimerPaused ? "슬립 타이머 재개" : "슬립 타이머 일시정지",
+                false,
+                true
+        );
+        toggle.setPadding(dp(9), dp(9), dp(9), dp(9));
+        toggle.setOnClickListener(view -> toggleSleepTimerPause());
+        row.addView(toggle, marginRight(4, dp(42), dp(42)));
+
+        ImageButton cancel = playerIconButton(R.drawable.ic_close, "슬립 타이머 끄기", false, true);
+        cancel.setPadding(dp(9), dp(9), dp(9), dp(9));
+        cancel.setOnClickListener(view -> cancelSleepTimer());
+        row.addView(cancel, new LinearLayout.LayoutParams(dp(42), dp(42)));
+        return row;
+    }
+
+    private String sleepTimerInlineText() {
+        String prefix = sleepTimerPaused ? "슬립 타이머 일시정지 · " : "슬립 타이머 · ";
+        return prefix + MusicLibrary.formatDuration(remainingSleepTimerMs());
     }
 
     private String coverInitials() {
@@ -2074,7 +2112,7 @@ public final class MainActivity extends Activity {
 
         SleepTimerDialView dial = new SleepTimerDialView(this);
         dial.setSelectedMinutes(sleepTimerMinutes);
-        dial.setTimerActive(isSleepTimerActive());
+        dial.setTimerActive(hasSleepTimer());
         dial.setOnTimerChangeListener((minutes, committed) -> {
             sleepTimerMinutes = minutes;
             if (committed) {
@@ -2088,14 +2126,51 @@ public final class MainActivity extends Activity {
     private void applySleepTimer(int minutes) {
         startPlayback(PlaybackService.sleepTimerIntent(this, minutes));
         sleepTimerEndAtMs = minutes <= 0 ? 0L : System.currentTimeMillis() + minutes * 60_000L;
+        sleepTimerRemainingMs = minutes <= 0 ? 0L : minutes * 60_000L;
+        sleepTimerPaused = false;
+    }
+
+    private void toggleSleepTimerPause() {
+        if (!hasSleepTimer()) {
+            return;
+        }
+        startPlayback(PlaybackService.toggleSleepTimerPauseIntent(this));
+        if (sleepTimerPaused) {
+            sleepTimerEndAtMs = System.currentTimeMillis() + Math.max(1_000L, sleepTimerRemainingMs);
+            sleepTimerPaused = false;
+        } else {
+            sleepTimerRemainingMs = remainingSleepTimerMs();
+            sleepTimerEndAtMs = 0L;
+            sleepTimerPaused = true;
+        }
+        updateExpandedPlayer();
+    }
+
+    private void cancelSleepTimer() {
+        startPlayback(PlaybackService.sleepTimerIntent(this, 0));
+        sleepTimerEndAtMs = 0L;
+        sleepTimerRemainingMs = 0L;
+        sleepTimerPaused = false;
+        updateExpandedPlayer();
+    }
+
+    private boolean hasSleepTimer() {
+        return sleepTimerPaused || isSleepTimerActive();
     }
 
     private boolean isSleepTimerActive() {
         return sleepTimerEndAtMs > System.currentTimeMillis();
     }
 
+    private long remainingSleepTimerMs() {
+        if (sleepTimerPaused) {
+            return Math.max(0L, sleepTimerRemainingMs);
+        }
+        return Math.max(0L, sleepTimerEndAtMs - System.currentTimeMillis());
+    }
+
     private int remainingSleepTimerMinutes() {
-        long remainingMs = Math.max(0L, sleepTimerEndAtMs - System.currentTimeMillis());
+        long remainingMs = remainingSleepTimerMs();
         if (remainingMs <= 0L) {
             return 0;
         }

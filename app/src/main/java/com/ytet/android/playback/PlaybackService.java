@@ -49,6 +49,7 @@ public final class PlaybackService extends Service {
     public static final String ACTION_TOGGLE_REPEAT = "com.ytet.android.action.PLAYBACK_TOGGLE_REPEAT";
     public static final String ACTION_SET_SLEEP_TIMER = "com.ytet.android.action.PLAYBACK_SET_SLEEP_TIMER";
     public static final String ACTION_CANCEL_SLEEP_TIMER = "com.ytet.android.action.PLAYBACK_CANCEL_SLEEP_TIMER";
+    public static final String ACTION_TOGGLE_SLEEP_TIMER_PAUSE = "com.ytet.android.action.PLAYBACK_TOGGLE_SLEEP_TIMER_PAUSE";
     public static final String ACTION_SLEEP_TIMER_FINISHED = "com.ytet.android.action.PLAYBACK_SLEEP_TIMER_FINISHED";
     public static final String ACTION_REQUEST_STATE = "com.ytet.android.action.PLAYBACK_REQUEST_STATE";
     public static final String ACTION_STATE = "com.ytet.android.action.PLAYBACK_STATE";
@@ -80,6 +81,8 @@ public final class PlaybackService extends Service {
     public static final String EXTRA_QUEUE_TRACK_IDS = "com.ytet.android.extra.PLAYBACK_QUEUE_TRACK_IDS";
     public static final String EXTRA_SLEEP_TIMER_MINUTES = "com.ytet.android.extra.PLAYBACK_SLEEP_TIMER_MINUTES";
     public static final String EXTRA_SLEEP_TIMER_END_AT_MS = "com.ytet.android.extra.PLAYBACK_SLEEP_TIMER_END_AT_MS";
+    public static final String EXTRA_SLEEP_TIMER_REMAINING_MS = "com.ytet.android.extra.PLAYBACK_SLEEP_TIMER_REMAINING_MS";
+    public static final String EXTRA_SLEEP_TIMER_PAUSED = "com.ytet.android.extra.PLAYBACK_SLEEP_TIMER_PAUSED";
 
     private static final String EXTRA_MIX_TITLE = "com.ytet.android.extra.MIX_TITLE";
     private static final String EXTRA_MIX_SUBTITLE = "com.ytet.android.extra.MIX_SUBTITLE";
@@ -96,7 +99,7 @@ public final class PlaybackService extends Service {
     private final Runnable stateTick = new Runnable() {
         @Override
         public void run() {
-            if (playing || preparing) {
+            if (playing || preparing || isSleepTimerRunning()) {
                 broadcastState();
             }
         }
@@ -105,6 +108,8 @@ public final class PlaybackService extends Service {
         @Override
         public void run() {
             sleepTimerEndAtMs = 0L;
+            sleepTimerRemainingMs = 0L;
+            sleepTimerPaused = false;
             stopPlayback();
             Intent finished = new Intent(ACTION_SLEEP_TIMER_FINISHED);
             finished.setPackage(getPackageName());
@@ -128,6 +133,8 @@ public final class PlaybackService extends Service {
     private boolean shuffleEnabled;
     private int repeatMode = REPEAT_OFF;
     private long sleepTimerEndAtMs;
+    private long sleepTimerRemainingMs;
+    private boolean sleepTimerPaused;
     private String errorStatus;
     private String cachedArtworkUri = "";
     private Bitmap cachedArtwork;
@@ -168,6 +175,12 @@ public final class PlaybackService extends Service {
         Intent intent = new Intent(context, PlaybackService.class);
         intent.setAction(minutes <= 0 ? ACTION_CANCEL_SLEEP_TIMER : ACTION_SET_SLEEP_TIMER);
         intent.putExtra(EXTRA_SLEEP_TIMER_MINUTES, minutes);
+        return intent;
+    }
+
+    public static Intent toggleSleepTimerPauseIntent(Context context) {
+        Intent intent = new Intent(context, PlaybackService.class);
+        intent.setAction(ACTION_TOGGLE_SLEEP_TIMER_PAUSE);
         return intent;
     }
 
@@ -244,6 +257,8 @@ public final class PlaybackService extends Service {
             setSleepTimer(intent.getIntExtra(EXTRA_SLEEP_TIMER_MINUTES, 0));
         } else if (ACTION_CANCEL_SLEEP_TIMER.equals(action)) {
             cancelSleepTimer(true);
+        } else if (ACTION_TOGGLE_SLEEP_TIMER_PAUSE.equals(action)) {
+            toggleSleepTimerPause();
         } else if (ACTION_REQUEST_STATE.equals(action)) {
             broadcastState();
             if (queue.isEmpty()) {
@@ -595,6 +610,8 @@ public final class PlaybackService extends Service {
         }
         long delayMs = minutes * 60_000L;
         sleepTimerEndAtMs = System.currentTimeMillis() + delayMs;
+        sleepTimerRemainingMs = delayMs;
+        sleepTimerPaused = false;
         mainHandler.removeCallbacks(sleepTimerRunnable);
         mainHandler.postDelayed(sleepTimerRunnable, delayMs);
         broadcastState();
@@ -603,9 +620,48 @@ public final class PlaybackService extends Service {
     private void cancelSleepTimer(boolean broadcast) {
         mainHandler.removeCallbacks(sleepTimerRunnable);
         sleepTimerEndAtMs = 0L;
+        sleepTimerRemainingMs = 0L;
+        sleepTimerPaused = false;
         if (broadcast) {
             broadcastState();
         }
+    }
+
+    private void toggleSleepTimerPause() {
+        if (sleepTimerPaused) {
+            long remainingMs = Math.max(1_000L, sleepTimerRemainingMs);
+            sleepTimerEndAtMs = System.currentTimeMillis() + remainingMs;
+            sleepTimerRemainingMs = remainingMs;
+            sleepTimerPaused = false;
+            mainHandler.removeCallbacks(sleepTimerRunnable);
+            mainHandler.postDelayed(sleepTimerRunnable, remainingMs);
+            broadcastState();
+            return;
+        }
+
+        long remainingMs = sleepTimerRemainingMs();
+        if (remainingMs <= 0L) {
+            return;
+        }
+        sleepTimerRemainingMs = remainingMs;
+        sleepTimerEndAtMs = 0L;
+        sleepTimerPaused = true;
+        mainHandler.removeCallbacks(sleepTimerRunnable);
+        broadcastState();
+    }
+
+    private long sleepTimerRemainingMs() {
+        if (sleepTimerPaused) {
+            return Math.max(0L, sleepTimerRemainingMs);
+        }
+        if (sleepTimerEndAtMs <= 0L) {
+            return 0L;
+        }
+        return Math.max(0L, sleepTimerEndAtMs - System.currentTimeMillis());
+    }
+
+    private boolean isSleepTimerRunning() {
+        return !sleepTimerPaused && sleepTimerRemainingMs() > 0L;
     }
 
     private void toggleShuffle() {
@@ -944,6 +1000,8 @@ public final class PlaybackService extends Service {
         intent.putExtra(EXTRA_REPEAT_MODE, repeatMode);
         intent.putExtra(EXTRA_QUEUE_TRACK_IDS, queueTrackIds());
         intent.putExtra(EXTRA_SLEEP_TIMER_END_AT_MS, sleepTimerEndAtMs);
+        intent.putExtra(EXTRA_SLEEP_TIMER_REMAINING_MS, sleepTimerRemainingMs());
+        intent.putExtra(EXTRA_SLEEP_TIMER_PAUSED, sleepTimerPaused);
         sendBroadcast(intent);
         scheduleStateTick();
     }
@@ -958,7 +1016,7 @@ public final class PlaybackService extends Service {
 
     private void scheduleStateTick() {
         mainHandler.removeCallbacks(stateTick);
-        if (playing || preparing) {
+        if (playing || preparing || isSleepTimerRunning()) {
             mainHandler.postDelayed(stateTick, 1000);
         }
     }
