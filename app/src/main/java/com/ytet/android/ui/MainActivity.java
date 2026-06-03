@@ -490,7 +490,10 @@ public final class MainActivity extends Activity {
         ));
 
         nowPlayingBar = buildNowPlayingBar();
-        app.addView(nowPlayingBar, matchWrap());
+        app.addView(nowPlayingBar, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(64)
+        ));
         app.addView(buildBottomTabs(), matchWrap());
 
         renderCurrentTab();
@@ -511,11 +514,18 @@ public final class MainActivity extends Activity {
 
         LinearLayout copy = new LinearLayout(this);
         copy.setOrientation(LinearLayout.VERTICAL);
-        nowPlayingTitle = text("로컬 재생 대기", 14, R.color.ytet_text, true);
-        nowPlayingMeta = text("기기 음악을 스캔하면 재생할 수 있습니다.", 12, R.color.ytet_muted, false);
-        copy.addView(nowPlayingTitle, matchWrap());
-        copy.addView(nowPlayingMeta, matchWrap());
-        bar.addView(copy, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        copy.setGravity(Gravity.CENTER_VERTICAL);
+        nowPlayingTitle = marqueeText("로컬 재생 대기", 14, R.color.ytet_text, true);
+        nowPlayingMeta = marqueeText("기기 음악을 스캔하면 재생할 수 있습니다.", 12, R.color.ytet_muted, false);
+        copy.addView(nowPlayingTitle, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(22)
+        ));
+        copy.addView(nowPlayingMeta, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(20)
+        ));
+        bar.addView(copy, new LinearLayout.LayoutParams(0, dp(44), 1f));
 
         playPauseButton = iconButton(R.drawable.ic_play_arrow, "재생", true);
         playPauseButton.setOnClickListener(view -> toggleStreamPlayback());
@@ -2218,8 +2228,8 @@ public final class MainActivity extends Activity {
             updatePlaybackThemeColor(true);
             nowPlayingBar.setBackground(nowPlayingBarBackground(true));
             setNowPlayingCover(true);
-            nowPlayingTitle.setText("로컬 재생 대기");
-            nowPlayingMeta.setText("기기 음악을 스캔하면 재생할 수 있습니다.");
+            setMarqueeText(nowPlayingTitle, "로컬 재생 대기");
+            setMarqueeText(nowPlayingMeta, "기기 음악을 스캔하면 재생할 수 있습니다.");
             playPauseButton.setImageResource(R.drawable.ic_play_arrow);
             playPauseButton.setContentDescription("재생");
             return;
@@ -2227,11 +2237,25 @@ public final class MainActivity extends Activity {
         updatePlaybackThemeColor(false);
         nowPlayingBar.setBackground(nowPlayingBarBackground(false));
         setNowPlayingCover(false);
-        nowPlayingTitle.setText(playbackTitle);
-        nowPlayingMeta.setText(playbackPreparing || playbackError ? streamStatus : miniPlaybackMeta());
+        setMarqueeText(nowPlayingTitle, playbackTitle);
+        setMarqueeText(nowPlayingMeta, playbackPreparing || playbackError ? streamStatus : miniPlaybackMeta());
         boolean waitingToPlay = playbackPlaying || playbackWillPlay;
         playPauseButton.setImageResource(waitingToPlay ? R.drawable.ic_pause : R.drawable.ic_play_arrow);
         playPauseButton.setContentDescription(waitingToPlay ? "일시정지" : "재생");
+    }
+
+    private void setMarqueeText(TextView view, String value) {
+        if (view == null) {
+            return;
+        }
+        String nextValue = value == null ? "" : value;
+        if (TextUtils.equals(view.getText(), nextValue)) {
+            view.setSelected(true);
+            return;
+        }
+        view.setText(nextValue);
+        view.setSelected(false);
+        view.post(() -> view.setSelected(true));
     }
 
     private void setNowPlayingCover(boolean idle) {
@@ -3686,6 +3710,18 @@ public final class MainActivity extends Activity {
 
     private TextView muted(String text, int sizeSp) {
         return text(text, sizeSp, R.color.ytet_muted, false);
+    }
+
+    private TextView marqueeText(String text, int sizeSp, int colorRes, boolean bold) {
+        TextView view = text(text, sizeSp, colorRes, bold);
+        view.setSingleLine(true);
+        view.setEllipsize(TextUtils.TruncateAt.MARQUEE);
+        view.setMarqueeRepeatLimit(-1);
+        view.setHorizontallyScrolling(true);
+        view.setIncludeFontPadding(false);
+        view.setGravity(Gravity.CENTER_VERTICAL);
+        view.setSelected(true);
+        return view;
     }
 
     private TextView text(String text, int sizeSp, int colorRes, boolean bold) {
