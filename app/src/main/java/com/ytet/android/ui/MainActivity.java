@@ -418,6 +418,14 @@ public final class MainActivity extends Activity {
     }
 
     @Override
+    public void onBackPressed() {
+        if (handleLibraryBackNavigation()) {
+            return;
+        }
+        super.onBackPressed();
+    }
+
+    @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == REQUEST_OUTPUT_TREE) {
@@ -1931,6 +1939,31 @@ public final class MainActivity extends Activity {
         playLibraryGroup(group);
     }
 
+    private boolean handleLibraryBackNavigation() {
+        if (currentTab != Tab.LIBRARY) {
+            return false;
+        }
+        if (focusedLibraryGroup != null) {
+            if (focusedLibraryGroupFilter == LibraryFilter.ALBUM && focusedParentArtistGroup != null) {
+                focusedLibraryGroup = focusedParentArtistGroup;
+                focusedLibraryGroupFilter = LibraryFilter.ARTIST;
+                focusedParentArtistGroup = null;
+            } else {
+                focusedLibraryGroup = null;
+                focusedLibraryGroupFilter = null;
+                focusedParentArtistGroup = null;
+            }
+            selectedTrack = null;
+            renderCurrentTab();
+            return true;
+        }
+        if (librarySearchVisible || !librarySearchQuery.trim().isEmpty()) {
+            closeLibrarySearch();
+            return true;
+        }
+        return false;
+    }
+
     private void buildLibraryGroupDetail(LinearLayout root, LibraryGroup group) {
         LibraryFilter detailFilter = focusedLibraryGroupFilter == null ? libraryFilter : focusedLibraryGroupFilter;
         boolean artistDetail = detailFilter == LibraryFilter.ARTIST;
@@ -1939,19 +1972,7 @@ public final class MainActivity extends Activity {
         top.setOrientation(LinearLayout.HORIZONTAL);
         top.setGravity(Gravity.CENTER_VERTICAL);
         ImageButton back = toolbarIconButton(R.drawable.ic_arrow_back, artistDetail ? "아티스트 목록" : "앨범 목록", false);
-        back.setOnClickListener(view -> {
-            if (detailFilter == LibraryFilter.ALBUM && focusedParentArtistGroup != null) {
-                focusedLibraryGroup = focusedParentArtistGroup;
-                focusedLibraryGroupFilter = LibraryFilter.ARTIST;
-                focusedParentArtistGroup = null;
-                renderCurrentTab();
-                return;
-            }
-            focusedLibraryGroup = null;
-            focusedLibraryGroupFilter = null;
-            focusedParentArtistGroup = null;
-            renderCurrentTab();
-        });
+        back.setOnClickListener(view -> handleLibraryBackNavigation());
         top.addView(back, new LinearLayout.LayoutParams(dp(44), dp(44)));
         View spacer = new View(this);
         top.addView(spacer, new LinearLayout.LayoutParams(0, dp(44), 1f));
