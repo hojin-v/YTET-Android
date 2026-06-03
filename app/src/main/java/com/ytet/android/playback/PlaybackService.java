@@ -849,7 +849,7 @@ public final class PlaybackService extends Service {
         }
 
         boolean waitingToPlay = preparing && startWhenPrepared;
-        builder.addAction(R.drawable.ic_shuffle, shuffleEnabled ? "셔플 켜짐" : "셔플", serviceAction(ACTION_TOGGLE_SHUFFLE, 1));
+        builder.addAction(shuffleIcon(), shuffleEnabled ? "셔플 켜짐" : "셔플", serviceAction(ACTION_TOGGLE_SHUFFLE, 1));
         builder.addAction(R.drawable.ic_skip_previous, "이전", serviceAction(ACTION_PREVIOUS, 2));
         builder.addAction(
                 playing || waitingToPlay ? R.drawable.ic_pause : R.drawable.ic_play_arrow,
@@ -858,7 +858,7 @@ public final class PlaybackService extends Service {
         );
         builder.addAction(R.drawable.ic_skip_next, "다음", serviceAction(ACTION_NEXT, 4));
         builder.addAction(
-                repeatMode == REPEAT_ONE ? R.drawable.ic_repeat_one : R.drawable.ic_repeat,
+                repeatIcon(),
                 repeatNotificationLabel(),
                 serviceAction(ACTION_TOGGLE_REPEAT, 5)
         );
@@ -947,18 +947,32 @@ public final class PlaybackService extends Service {
             builder.addCustomAction(new PlaybackState.CustomAction.Builder(
                     ACTION_TOGGLE_SHUFFLE,
                     shuffleEnabled ? "셔플 켜짐" : "셔플",
-                    R.drawable.ic_shuffle
+                    shuffleIcon()
             ).build());
             builder.addCustomAction(new PlaybackState.CustomAction.Builder(
                     ACTION_TOGGLE_REPEAT,
                     repeatNotificationLabel(),
-                    repeatMode == REPEAT_ONE ? R.drawable.ic_repeat_one : R.drawable.ic_repeat
+                    repeatIcon()
             ).build());
         }
         if (errorStatus != null) {
             builder.setErrorMessage(errorStatus);
         }
         mediaSession.setPlaybackState(builder.build());
+    }
+
+    private int shuffleIcon() {
+        return shuffleEnabled ? R.drawable.ic_shuffle_active : R.drawable.ic_shuffle;
+    }
+
+    private int repeatIcon() {
+        if (repeatMode == REPEAT_ONE) {
+            return R.drawable.ic_repeat_one;
+        }
+        if (repeatMode == REPEAT_ALL) {
+            return R.drawable.ic_repeat_active;
+        }
+        return R.drawable.ic_repeat;
     }
 
     private Bitmap artworkFor(DeviceAudioTrack track) {
