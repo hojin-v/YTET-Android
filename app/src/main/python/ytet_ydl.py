@@ -111,6 +111,8 @@ def extract(
             if enhance_metadata and not is_single_video_playlist(info):
                 info = enhance_music_metadata(info, progress_listener, logger)
             embed_audio_covers(workspace, info, logger, ydl)
+            if include_playlist:
+                relocate_playlist_folder_for_metadata(workspace, info, logger)
     except YtetExtractionError:
         raise
     except DownloadError as error:
@@ -977,6 +979,95 @@ def embed_audio_cover(workspace, info, logger, ydl=None, fallback_to_first=True,
         audio.save()
     except Exception as error:
         logger.warning(f"오디오 메타데이터 임베딩 실패: {error}")
+
+
+def relocate_playlist_folder_for_metadata(workspace, info, logger):
+    folder_name = matched_playlist_folder_name(info)
+    if not folder_name:
+        return
+    source = downloaded_playlist_folder(workspace)
+    if not source:
+        return
+    desired = os.path.join(workspace, folder_name)
+    if os.path.abspath(source) == os.path.abspath(desired):
+        return
+    target = unique_workspace_path(desired)
+    try:
+        os.replace(source, target)
+        logger.info(f"MusicBrainz 앨범 폴더명 적용: {os.path.basename(target)}")
+    except Exception as error:
+        logger.warning(f"앨범 폴더명 적용 실패: {error}")
+
+
+def matched_playlist_folder_name(info):
+    entries = [entry for entry in (info.get("entries") if isinstance(info, dict) else None) or [] if isinstance(entry, dict)]
+    if not entries:
+        return None
+    album, album_count = most_common_metadata_text(entries, "album")
+    artist, artist_count = most_common_album_artist(entries)
+    minimum = 1 if len(entries) == 1 else max(2, (len(entries) + 1) // 2)
+    if not album or not artist or album_count < minimum or artist_count < minimum:
+        return None
+    return sanitize_filename(f"{artist} - {album}")
+
+
+def most_common_album_artist(entries):
+    values = []
+    for entry in entries:
+        values.append(metadata_override(entry, "album_artist") or metadata_override(entry, "artist"))
+    return most_common_text(values)
+
+
+def most_common_metadata_text(entries, key):
+    return most_common_text(metadata_override(entry, key) for entry in entries)
+
+
+def most_common_text(values):
+    counts = {}
+    labels = {}
+    for value in values:
+        label = normalize_text(value)
+        key = comparable_text(label)
+        if not key:
+            continue
+        counts[key] = counts.get(key, 0) + 1
+        labels.setdefault(key, label)
+    if not counts:
+        return None, 0
+    key = max(counts, key=counts.get)
+    return labels[key], counts[key]
+
+
+def downloaded_playlist_folder(workspace):
+    try:
+        candidates = [
+            os.path.join(workspace, name)
+            for name in sorted(os.listdir(workspace))
+            if os.path.isdir(os.path.join(workspace, name)) and contains_audio_file(os.path.join(workspace, name))
+        ]
+    except OSError:
+        return None
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def contains_audio_file(path):
+    for root, _dirs, names in os.walk(path):
+        for name in names:
+            if os.path.splitext(name)[1].lower() in AUDIO_EXTENSIONS:
+                return True
+    return False
+
+
+def unique_workspace_path(path):
+    if not os.path.exists(path):
+        return path
+    parent = os.path.dirname(path)
+    stem = os.path.basename(path)
+    for index in range(2, 1000):
+        candidate = os.path.join(parent, f"{stem} ({index})")
+        if not os.path.exists(candidate):
+            return candidate
+    return os.path.join(parent, f"{stem} ({int(time.time())})")
 
 
 def write_mp4_metadata(audio, info, album_fallback=None):
