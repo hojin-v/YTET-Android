@@ -102,7 +102,6 @@ public final class MainActivity extends Activity {
     private static final String PREF_OUTPUT_TREE = "output_tree";
     private static final String PREF_UPDATE_DOWNLOAD_ID = "update_download_id";
     private static final String PREF_UPDATE_TAG = "update_tag";
-    private static final String PREF_AUTO_UPDATE_CHECK = "auto_update_check";
     private static final String PREF_LIBRARY_SOURCE = "library_source";
     private static final String LIBRARY_SOURCE_COLLECTION = "collection";
     private static final String LIBRARY_SOURCE_DEVICE = "device";
@@ -125,6 +124,7 @@ public final class MainActivity extends Activity {
     private Button updateActionButton;
     private Dialog playerDialog;
     private Dialog queueDialog;
+    private AlertDialog updateDialog;
 
     private EditText urlInput;
     private RadioGroup mediaGroup;
@@ -226,7 +226,6 @@ public final class MainActivity extends Activity {
     private String updateStatus = "정식 릴리즈 업데이트만 확인합니다.";
     private UpdateInfo availableUpdate;
     private long updateDownloadId = NO_DOWNLOAD_ID;
-    private boolean autoUpdateCheck = true;
     private boolean extractionPendingNotificationPermission;
 
     private final BroadcastReceiver progressReceiver = new BroadcastReceiver() {
@@ -335,13 +334,10 @@ public final class MainActivity extends Activity {
         outputTreeUri = getPreferences().getString(PREF_OUTPUT_TREE, null);
         librarySource = getPreferences().getString(PREF_LIBRARY_SOURCE, LIBRARY_SOURCE_COLLECTION);
         updateDownloadId = getPreferences().getLong(PREF_UPDATE_DOWNLOAD_ID, NO_DOWNLOAD_ID);
-        autoUpdateCheck = getPreferences().getBoolean(PREF_AUTO_UPDATE_CHECK, true);
         ensureDefaultMediaFolders();
         clearInstalledPendingUpdateIfNeeded();
         setContentView(buildContent());
-        if (autoUpdateCheck) {
-            startUpdateCheck(false);
-        }
+        startUpdateCheck(false);
     }
 
     @Override
@@ -405,6 +401,10 @@ public final class MainActivity extends Activity {
         if (queueDialog != null) {
             queueDialog.dismiss();
             queueDialog = null;
+        }
+        if (updateDialog != null) {
+            updateDialog.dismiss();
+            updateDialog = null;
         }
         libraryExecutor.shutdownNow();
         updateExecutor.shutdownNow();
@@ -795,6 +795,94 @@ public final class MainActivity extends Activity {
         startUpdateCheck(true);
     }
 
+    private void showUpdateAvailableDialog(UpdateInfo update) {
+        if (!canShowUpdateDialog() || update == null || update.apkUrl().isEmpty()) {
+            return;
+        }
+        dismissUpdateDialog();
+
+        AlertDialog dialog = new AlertDialog.Builder(this).create();
+        LinearLayout body = dialogBody("업데이트 사용 가능");
+        body.addView(muted("GitHub 정식 릴리즈에서 새 APK를 찾았습니다. Nightly와 prerelease는 제외됩니다.", 13), marginBottom(12));
+        body.addView(trackDetailItem("현재 버전", currentAppVersionName()), marginBottom(10));
+        body.addView(trackDetailItem("새 버전", update.tagName()), marginBottom(10));
+        if (!update.releaseName().isEmpty() && !update.releaseName().equals(update.tagName())) {
+            body.addView(trackDetailItem("릴리즈", update.releaseName()), marginBottom(10));
+        }
+        body.addView(trackDetailItem("파일", update.apkName()), marginBottom(14));
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setGravity(Gravity.END);
+        Button later = detailActionButton("나중에");
+        later.setOnClickListener(view -> dialog.dismiss());
+        Button download = detailActionButton("다운로드");
+        download.setOnClickListener(view -> {
+            dialog.dismiss();
+            downloadUpdate(update);
+        });
+        actions.addView(later, fixedButtonParams(82, 38, 8));
+        actions.addView(download, fixedButtonParams(94, 38, 0));
+        body.addView(actions, matchWrap());
+
+        dialog.setView(body);
+        updateDialog = dialog;
+        dialog.setOnDismissListener(view -> {
+            if (updateDialog == dialog) {
+                updateDialog = null;
+            }
+        });
+        dialog.show();
+        styleDetailDialog(dialog);
+    }
+
+    private void showDownloadedUpdateDialog(String tag) {
+        if (!canShowUpdateDialog() || !isDownloadedUpdateReady()) {
+            return;
+        }
+        dismissUpdateDialog();
+
+        String updateTag = tag == null || tag.trim().isEmpty() ? "다운로드한 업데이트" : tag.trim();
+        AlertDialog dialog = new AlertDialog.Builder(this).create();
+        LinearLayout body = dialogBody("업데이트 설치 준비 완료");
+        body.addView(muted(updateTag + " APK 다운로드가 완료되었습니다. Android 설치 화면을 열어 업데이트를 승인할 수 있습니다.", 13), marginBottom(14));
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setGravity(Gravity.END);
+        Button close = detailActionButton("닫기");
+        close.setOnClickListener(view -> dialog.dismiss());
+        Button install = detailActionButton("설치");
+        install.setOnClickListener(view -> {
+            dialog.dismiss();
+            installDownloadedUpdate(updateDownloadId);
+        });
+        actions.addView(close, fixedButtonParams(76, 38, 8));
+        actions.addView(install, fixedButtonParams(76, 38, 0));
+        body.addView(actions, matchWrap());
+
+        dialog.setView(body);
+        updateDialog = dialog;
+        dialog.setOnDismissListener(view -> {
+            if (updateDialog == dialog) {
+                updateDialog = null;
+            }
+        });
+        dialog.show();
+        styleDetailDialog(dialog);
+    }
+
+    private boolean canShowUpdateDialog() {
+        return !isFinishing() && !isDestroyed();
+    }
+
+    private void dismissUpdateDialog() {
+        if (updateDialog != null) {
+            updateDialog.dismiss();
+            updateDialog = null;
+        }
+    }
+
     private void startUpdateCheck(boolean manual) {
         if (updateChecking) {
             return;
@@ -814,6 +902,7 @@ public final class MainActivity extends Activity {
                         updateStatus = "현재 설치된 " + currentVersionName + " 버전이 최신 정식 버전입니다.";
                     } else {
                         updateStatus = update.tagName() + " 정식 업데이트를 사용할 수 있습니다.";
+                        showUpdateAvailableDialog(update);
                     }
                     renderUpdateState();
                 });
@@ -837,6 +926,7 @@ public final class MainActivity extends Activity {
             toast("다운로드할 업데이트 파일이 없습니다.");
             return;
         }
+        dismissUpdateDialog();
         try {
             DownloadManager manager = downloadManager();
             DownloadManager.Request request = new DownloadManager.Request(Uri.parse(update.apkUrl()));
@@ -883,6 +973,7 @@ public final class MainActivity extends Activity {
             toast("설치할 업데이트 APK가 아직 준비되지 않았습니다.");
             return;
         }
+        dismissUpdateDialog();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !getPackageManager().canRequestPackageInstalls()) {
             updateStatus = "설치를 계속하려면 YTET의 알 수 없는 앱 설치를 허용한 뒤 설치를 다시 누르세요.";
             renderUpdateState();
@@ -932,6 +1023,7 @@ public final class MainActivity extends Activity {
             String tag = getPreferences().getString(PREF_UPDATE_TAG, "다운로드한 업데이트");
             updateStatus = tag + " APK 다운로드가 완료되었습니다. 설치할 수 있습니다.";
             renderUpdateState();
+            showDownloadedUpdateDialog(tag);
         } else if (status == DownloadManager.STATUS_FAILED) {
             clearPendingUpdateDownload();
             updateDownloading = false;
