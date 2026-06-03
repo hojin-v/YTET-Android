@@ -2356,10 +2356,10 @@ public final class MainActivity extends Activity {
             updateExpandedPlayer();
         });
         tools.addView(timer, new LinearLayout.LayoutParams(dp(58), dp(58)));
-        View timerControls = sleepTimerControlsVisible ? sleepTimerControlsPanel() : new View(this);
+        View timerControls = sleepTimerControlsVisible ? sleepTimerControlsPanel() : nextTrackInfoPanel();
         LinearLayout.LayoutParams timerParams = new LinearLayout.LayoutParams(
                 0,
-                dp(60),
+                LinearLayout.LayoutParams.MATCH_PARENT,
                 1f
         );
         timerParams.setMargins(dp(8), 0, dp(8), 0);
@@ -2369,7 +2369,7 @@ public final class MainActivity extends Activity {
         tools.addView(queue, new LinearLayout.LayoutParams(dp(58), dp(58)));
         root.addView(tools, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(60)
+                dp(76)
         ));
         return root;
     }
@@ -2412,6 +2412,52 @@ public final class MainActivity extends Activity {
         cancel.setOnClickListener(view -> cancelSleepTimer());
         row.addView(cancel, new LinearLayout.LayoutParams(dp(42), dp(42)));
         return row;
+    }
+
+    private View nextTrackInfoPanel() {
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setGravity(Gravity.CENTER_VERTICAL);
+        panel.setPadding(0, 0, 0, 0);
+
+        DeviceAudioTrack nextTrack = nextQueueTrack();
+        TextView label = muted("다음 곡", 11);
+        label.setSingleLine(true);
+        label.setEllipsize(TextUtils.TruncateAt.END);
+        panel.addView(label, marginBottom(3));
+
+        if (nextTrack == null) {
+            TextView empty = muted("재생목록 끝", 13);
+            empty.setSingleLine(true);
+            empty.setEllipsize(TextUtils.TruncateAt.END);
+            panel.addView(empty, matchWrap());
+            return panel;
+        }
+
+        TextView title = text(nextTrack.title(), 13, R.color.ytet_text, true);
+        title.setSingleLine(true);
+        title.setEllipsize(TextUtils.TruncateAt.END);
+        panel.addView(title, marginBottom(2));
+
+        TextView meta = muted(nextTrack.artist() + " · " + MusicLibrary.formatDuration(nextTrack.durationMs()), 12);
+        meta.setSingleLine(true);
+        meta.setEllipsize(TextUtils.TruncateAt.END);
+        panel.addView(meta, matchWrap());
+        return panel;
+    }
+
+    private DeviceAudioTrack nextQueueTrack() {
+        if (activeQueuePreview.isEmpty() || !hasNextTrack()) {
+            return null;
+        }
+        int nextIndex = playbackQueueIndex + 1;
+        if (nextIndex >= activeQueuePreview.size() && playbackRepeatMode == PlaybackService.REPEAT_ALL) {
+            nextIndex = 0;
+        }
+        if (nextIndex < 0 || nextIndex >= activeQueuePreview.size()) {
+            return null;
+        }
+        return activeQueuePreview.get(nextIndex);
     }
 
     private String sleepTimerInlineText() {
@@ -3885,7 +3931,6 @@ public final class MainActivity extends Activity {
         private static final int STEP_MINUTES = 5;
 
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Rect textBounds = new Rect();
         private final RectF wheel = new RectF();
         private TimerChangeListener listener;
         private int selectedMinutes = 30;
@@ -3925,7 +3970,7 @@ public final class MainActivity extends Activity {
             wheel.set(dp(4), dp(8), width - dp(4), height - dp(8));
 
             paint.setStyle(Paint.Style.FILL);
-            paint.setColor(Color.argb(38, 0, 0, 0));
+            paint.setColor(Color.TRANSPARENT);
             canvas.drawRoundRect(wheel, dp(16), dp(16), paint);
 
             paint.setColor(timerActive
@@ -3997,7 +4042,7 @@ public final class MainActivity extends Activity {
         }
 
         private float dialValueY(int height, float distance) {
-            return height * 0.53f + distance * height * 0.33f;
+            return height * 0.5f + distance * height * 0.33f;
         }
 
         private int dialTextSize(float distance) {
@@ -4016,8 +4061,8 @@ public final class MainActivity extends Activity {
             paint.setTextAlign(Paint.Align.CENTER);
             paint.setTypeface(Typeface.DEFAULT_BOLD);
             paint.setTextSize(sizeSp * getResources().getDisplayMetrics().scaledDensity);
-            paint.getTextBounds(text, 0, text.length(), textBounds);
-            canvas.drawText(text, x, y + textBounds.height() / 2f, paint);
+            Paint.FontMetrics metrics = paint.getFontMetrics();
+            canvas.drawText(text, x, y - (metrics.ascent + metrics.descent) / 2f, paint);
         }
 
         private String timerText(int minutes) {
