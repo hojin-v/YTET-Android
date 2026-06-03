@@ -1749,13 +1749,13 @@ public final class MainActivity extends Activity {
         root.addView(optionSpinner, controlParams(56, 14));
 
         playlistCheck = new CheckBox(this);
-        playlistCheck.setText("list URL이면 전체 플레이리스트를 순서대로 추출");
+        playlistCheck.setText("전체 플레이리스트 추출");
         playlistCheck.setTextColor(color(R.color.ytet_text));
         playlistCheck.setChecked(extractorIncludePlaylist);
         root.addView(playlistCheck, marginBottom(10));
 
         metadataEnhanceCheck = new CheckBox(this);
-        metadataEnhanceCheck.setText("MusicBrainz로 실제 앨범/아티스트 보정");
+        metadataEnhanceCheck.setText("실제 제목/아티스트 보정");
         metadataEnhanceCheck.setTextColor(color(R.color.ytet_text));
         metadataEnhanceCheck.setChecked(extractorEnhanceMetadata);
         root.addView(metadataEnhanceCheck, marginBottom(10));
