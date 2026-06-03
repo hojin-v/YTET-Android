@@ -76,6 +76,7 @@ import com.ytet.android.library.DeviceAudioTrack;
 import com.ytet.android.library.DeviceMusicLibrary;
 import com.ytet.android.library.MusicLibrary;
 import com.ytet.android.playback.PlaybackService;
+import com.ytet.android.playback.PlaybackStats;
 import com.ytet.android.stream.MusicStation;
 import com.ytet.android.stream.StationCatalog;
 import com.ytet.android.update.UpdateChecker;
@@ -1227,11 +1228,12 @@ public final class MainActivity extends Activity {
         shelf.addView(row, matchWrap());
         bar.addView(shelf, new LinearLayout.LayoutParams(0, dp(38), 1f));
 
-        Button sort = compactButton(librarySort.label + " ▾");
-        sort.setGravity(Gravity.CENTER);
+        Button sort = compactButton(librarySort.shortLabel + " ▾");
+        sort.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
+        sort.setPadding(0, 0, dp(1), 0);
         sort.setOnClickListener(view -> showLibrarySortDialog());
-        LinearLayout.LayoutParams sortParams = new LinearLayout.LayoutParams(dp(92), dp(38));
-        sortParams.setMargins(dp(10), 0, 0, 0);
+        LinearLayout.LayoutParams sortParams = new LinearLayout.LayoutParams(dp(70), dp(38));
+        sortParams.setMargins(dp(6), 0, 0, 0);
         bar.addView(sort, sortParams);
         return bar;
     }
@@ -1677,10 +1679,10 @@ public final class MainActivity extends Activity {
                 return compareByDate(first, second, true);
             case NAME:
                 return compareTrackName(first, second);
-            case PLAY_ORDER:
-                return filter == LibraryFilter.ALBUM
-                        ? compareAlbumTrackOrder(first, second)
-                        : comparePlaybackOrder(first, second);
+            case MOST_PLAYED:
+                return compareByPlayCount(first, second, false);
+            case LEAST_PLAYED:
+                return compareByPlayCount(first, second, true);
             case NEWEST:
             default:
                 return compareByDate(first, second, false);
@@ -1694,12 +1696,12 @@ public final class MainActivity extends Activity {
                 return oldest != 0 ? oldest : compareGroupName(first, second);
             case NAME:
                 return compareGroupName(first, second);
-            case PLAY_ORDER:
-                if (filter == LibraryFilter.ALBUM) {
-                    int playback = comparePlaybackOrder(firstPlayableTrack(first), firstPlayableTrack(second));
-                    return playback != 0 ? playback : compareGroupName(first, second);
-                }
-                return compareGroupName(first, second);
+            case MOST_PLAYED:
+                int mostPlayed = Long.compare(groupPlayCount(second), groupPlayCount(first));
+                return mostPlayed != 0 ? mostPlayed : compareGroupName(first, second);
+            case LEAST_PLAYED:
+                int leastPlayed = Long.compare(groupPlayCount(first), groupPlayCount(second));
+                return leastPlayed != 0 ? leastPlayed : compareGroupName(first, second);
             case NEWEST:
             default:
                 int newest = Long.compare(groupNewestTimestamp(second), groupNewestTimestamp(first));
@@ -1714,16 +1716,11 @@ public final class MainActivity extends Activity {
         return result != 0 ? result : compareTrackName(first, second);
     }
 
-    private int comparePlaybackOrder(DeviceAudioTrack first, DeviceAudioTrack second) {
-        int folder = compareTextValues(first == null ? "" : first.folder(), second == null ? "" : second.folder());
-        if (folder != 0) {
-            return folder;
-        }
-        int album = compareTextValues(first == null ? "" : first.album(), second == null ? "" : second.album());
-        if (album != 0) {
-            return album;
-        }
-        return compareAlbumTrackOrder(first, second);
+    private int compareByPlayCount(DeviceAudioTrack first, DeviceAudioTrack second, boolean leastFirst) {
+        int result = leastFirst
+                ? Integer.compare(trackPlayCount(first), trackPlayCount(second))
+                : Integer.compare(trackPlayCount(second), trackPlayCount(first));
+        return result != 0 ? result : compareTrackName(first, second);
     }
 
     private int compareAlbumTrackOrder(DeviceAudioTrack first, DeviceAudioTrack second) {
@@ -1744,6 +1741,10 @@ public final class MainActivity extends Activity {
             return 0L;
         }
         return track.dateAddedMs() > 0L ? track.dateAddedMs() : track.id();
+    }
+
+    private int trackPlayCount(DeviceAudioTrack track) {
+        return track == null ? 0 : PlaybackStats.playCount(this, track.id());
     }
 
     private int compareTrackName(DeviceAudioTrack first, DeviceAudioTrack second) {
@@ -1793,11 +1794,15 @@ public final class MainActivity extends Activity {
         return oldest == Long.MAX_VALUE ? 0L : oldest;
     }
 
-    private DeviceAudioTrack firstPlayableTrack(LibraryGroup group) {
-        if (group == null || group.tracks.isEmpty()) {
-            return null;
+    private long groupPlayCount(LibraryGroup group) {
+        if (group == null) {
+            return 0L;
         }
-        return group.tracks.get(0);
+        long count = 0L;
+        for (DeviceAudioTrack track : group.tracks) {
+            count += trackPlayCount(track);
+        }
+        return count;
     }
 
     private LibraryGroup currentFocusedLibraryGroup() {
@@ -5015,22 +5020,28 @@ public final class MainActivity extends Activity {
     }
 
     private enum LibrarySort {
-        NEWEST("newest", "최신순", "최근 추가된 음악부터 표시"),
-        OLDEST("oldest", "오래된순", "오래전에 추가된 음악부터 표시"),
-        NAME("name", "이름순", "이름을 기준으로 정렬"),
-        PLAY_ORDER("play_order", "재생순", "폴더와 앨범의 재생 흐름을 기준으로 정렬");
+        NEWEST("newest", "최신순", "최신순", "최근 추가된 음악부터 표시"),
+        OLDEST("oldest", "오래된순", "오래된순", "오래전에 추가된 음악부터 표시"),
+        NAME("name", "이름순", "이름순", "이름을 기준으로 정렬"),
+        MOST_PLAYED("most_played", "많이 재생한순", "많이순", "재생 횟수가 많은 음악부터 표시"),
+        LEAST_PLAYED("least_played", "적게 재생한순", "적게순", "재생 횟수가 적은 음악부터 표시");
 
         private final String key;
         private final String label;
+        private final String shortLabel;
         private final String description;
 
-        LibrarySort(String key, String label, String description) {
+        LibrarySort(String key, String label, String shortLabel, String description) {
             this.key = key;
             this.label = label;
+            this.shortLabel = shortLabel;
             this.description = description;
         }
 
         private static LibrarySort fromKey(String key) {
+            if ("play_order".equals(key)) {
+                return MOST_PLAYED;
+            }
             for (LibrarySort sort : values()) {
                 if (sort.key.equals(key)) {
                     return sort;

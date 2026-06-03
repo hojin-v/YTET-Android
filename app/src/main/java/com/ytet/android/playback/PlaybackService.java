@@ -127,6 +127,7 @@ public final class PlaybackService extends Service {
     private int queueIndex;
     private int playbackVersion;
     private int queueLoadVersion;
+    private int countedPlaybackVersion = -1;
     private int failedTrackSkips;
     private boolean preparing;
     private boolean playing;
@@ -414,6 +415,7 @@ public final class PlaybackService extends Service {
                 if (startWhenPrepared && requestAudioFocus()) {
                     prepared.start();
                     playing = true;
+                    recordCurrentTrackStarted();
                 } else if (startWhenPrepared) {
                     errorStatus = "오디오 포커스를 얻을 수 없습니다.";
                     playing = false;
@@ -489,6 +491,7 @@ public final class PlaybackService extends Service {
         try {
             mediaPlayer.start();
             playing = true;
+            recordCurrentTrackStarted();
             errorStatus = null;
             updateTransportState();
             showNotification();
@@ -496,6 +499,18 @@ public final class PlaybackService extends Service {
         } catch (IllegalStateException exception) {
             handlePlaybackError("재생을 다시 시작할 수 없습니다.");
         }
+    }
+
+    private void recordCurrentTrackStarted() {
+        if (countedPlaybackVersion == playbackVersion) {
+            return;
+        }
+        DeviceAudioTrack track = currentTrack();
+        if (track == null) {
+            return;
+        }
+        countedPlaybackVersion = playbackVersion;
+        PlaybackStats.recordTrackStarted(this, track.id());
     }
 
     private void pause(boolean resumeAfterFocusGain) {
