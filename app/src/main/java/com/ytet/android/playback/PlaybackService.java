@@ -594,6 +594,10 @@ public final class PlaybackService extends Service {
                 && (queueIndex > 0 || repeatMode == REPEAT_ALL);
     }
 
+    private boolean canShuffleQueue() {
+        return queue.size() > 1;
+    }
+
     private void handleTrackCompletion() {
         if (queue.isEmpty()) {
             finishQueuePlayback();
@@ -849,14 +853,29 @@ public final class PlaybackService extends Service {
         }
 
         boolean waitingToPlay = preparing && startWhenPrepared;
-        builder.addAction(shuffleIcon(), shuffleEnabled ? "셔플 켜짐" : "셔플", serviceAction(ACTION_TOGGLE_SHUFFLE, 1));
-        builder.addAction(R.drawable.ic_skip_previous, "이전", serviceAction(ACTION_PREVIOUS, 2));
+        boolean shuffleAvailable = canShuffleQueue();
+        boolean previousAvailable = canMoveToPreviousTrack();
+        boolean nextAvailable = canMoveToNextTrack();
+        builder.addAction(
+                shuffleIcon(),
+                shuffleAvailable ? (shuffleEnabled ? "셔플 켜짐" : "셔플") : "셔플 사용할 수 없음",
+                controlAction(ACTION_TOGGLE_SHUFFLE, shuffleAvailable, 1)
+        );
+        builder.addAction(
+                previousIcon(),
+                previousAvailable ? "이전" : "이전 없음",
+                controlAction(ACTION_PREVIOUS, previousAvailable, 2)
+        );
         builder.addAction(
                 playing || waitingToPlay ? R.drawable.ic_pause : R.drawable.ic_play_arrow,
                 playing || waitingToPlay ? "일시정지" : "재생",
                 serviceAction(ACTION_TOGGLE, 3)
         );
-        builder.addAction(R.drawable.ic_skip_next, "다음", serviceAction(ACTION_NEXT, 4));
+        builder.addAction(
+                nextIcon(),
+                nextAvailable ? "다음" : "다음 없음",
+                controlAction(ACTION_NEXT, nextAvailable, 4)
+        );
         builder.addAction(
                 repeatIcon(),
                 repeatNotificationLabel(),
@@ -891,6 +910,10 @@ public final class PlaybackService extends Service {
         Intent intent = new Intent(this, PlaybackService.class);
         intent.setAction(action);
         return PendingIntent.getService(this, requestCode, intent, pendingIntentFlags());
+    }
+
+    private PendingIntent controlAction(String action, boolean enabled, int requestCode) {
+        return serviceAction(enabled ? action : ACTION_REQUEST_STATE, requestCode);
     }
 
     private int pendingIntentFlags() {
@@ -936,9 +959,13 @@ public final class PlaybackService extends Service {
                 | PlaybackState.ACTION_PLAY_PAUSE
                 | PlaybackState.ACTION_STOP;
         if (track != null) {
-            actions |= PlaybackState.ACTION_SKIP_TO_PREVIOUS
-                    | PlaybackState.ACTION_SKIP_TO_NEXT
-                    | PlaybackState.ACTION_SEEK_TO;
+            actions |= PlaybackState.ACTION_SEEK_TO;
+            if (canMoveToPreviousTrack()) {
+                actions |= PlaybackState.ACTION_SKIP_TO_PREVIOUS;
+            }
+            if (canMoveToNextTrack()) {
+                actions |= PlaybackState.ACTION_SKIP_TO_NEXT;
+            }
         }
         PlaybackState.Builder builder = new PlaybackState.Builder()
                 .setActions(actions)
@@ -962,7 +989,18 @@ public final class PlaybackService extends Service {
     }
 
     private int shuffleIcon() {
+        if (!canShuffleQueue()) {
+            return R.drawable.ic_shuffle_disabled;
+        }
         return shuffleEnabled ? R.drawable.ic_shuffle_active : R.drawable.ic_shuffle;
+    }
+
+    private int previousIcon() {
+        return canMoveToPreviousTrack() ? R.drawable.ic_skip_previous : R.drawable.ic_skip_previous_disabled;
+    }
+
+    private int nextIcon() {
+        return canMoveToNextTrack() ? R.drawable.ic_skip_next : R.drawable.ic_skip_next_disabled;
     }
 
     private int repeatIcon() {
