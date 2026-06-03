@@ -1422,8 +1422,6 @@ public final class MainActivity extends Activity {
                 FrameLayout.LayoutParams.MATCH_PARENT
         ));
         ImageButton more = trackMoreButton(track);
-        more.setColorFilter(Color.WHITE);
-        more.setBackground(rounded(0x66000000, 8));
         FrameLayout.LayoutParams moreParams = new FrameLayout.LayoutParams(dp(36), dp(36), Gravity.TOP | Gravity.END);
         moreParams.setMargins(0, dp(6), dp(6), 0);
         coverFrame.addView(more, moreParams);
@@ -1479,7 +1477,8 @@ public final class MainActivity extends Activity {
     }
 
     private ImageButton trackMoreButton(DeviceAudioTrack track) {
-        ImageButton more = iconButton(R.drawable.ic_more_vert, "상세정보", false);
+        ImageButton more = playerIconButton(R.drawable.ic_more_vert, "상세정보", false, true);
+        more.setPadding(dp(9), dp(9), dp(9), dp(9));
         more.setOnClickListener(view -> showTrackDetails(track));
         return more;
     }
@@ -1522,45 +1521,35 @@ public final class MainActivity extends Activity {
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle("상세정보")
                 .setView(body)
-                .setNegativeButton("닫기", null)
                 .create();
 
-        LinearLayout firstActions = new LinearLayout(this);
-        firstActions.setOrientation(LinearLayout.HORIZONTAL);
-        Button play = primaryButton("재생");
-        play.setOnClickListener(view -> {
-            selectedTrack = track;
-            dialog.dismiss();
-            playTrack(track);
-        });
-        Button open = secondaryButton("열기");
-        open.setOnClickListener(view -> {
-            selectedTrack = track;
-            dialog.dismiss();
-            openSelectedTrack();
-        });
-        firstActions.addView(play, weightedButtonParams(8));
-        firstActions.addView(open, new LinearLayout.LayoutParams(0, dp(44), 1f));
-        body.addView(firstActions, marginBottom(8));
-
-        LinearLayout secondActions = new LinearLayout(this);
-        secondActions.setOrientation(LinearLayout.HORIZONTAL);
-        Button share = secondaryButton("공유");
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        Button share = detailActionButton("공유");
         share.setOnClickListener(view -> {
             selectedTrack = track;
             dialog.dismiss();
             shareSelectedTrack();
         });
-        Button delete = dangerButton("삭제");
+        Button delete = detailActionButton("삭제");
         delete.setOnClickListener(view -> {
             selectedTrack = track;
             dialog.dismiss();
             deleteSelectedTrack();
         });
-        secondActions.addView(share, weightedButtonParams(8));
-        secondActions.addView(delete, new LinearLayout.LayoutParams(0, dp(44), 1f));
-        body.addView(secondActions, matchWrap());
+        actions.addView(share, weightedButtonParams(8));
+        actions.addView(delete, new LinearLayout.LayoutParams(0, dp(44), 1f));
+        body.addView(actions, matchWrap());
         dialog.show();
+        styleDetailDialog(dialog);
+    }
+
+    private void styleDetailDialog(AlertDialog dialog) {
+        Window window = dialog.getWindow();
+        if (window == null) {
+            return;
+        }
+        window.setBackgroundDrawable(roundedStroke(0xEE101010, 0x33FFFFFF, 18, 1));
     }
 
     private View trackDetailItem(String title, String value) {
@@ -2947,6 +2936,13 @@ public final class MainActivity extends Activity {
         return button;
     }
 
+    private Button detailActionButton(String text) {
+        Button button = baseButton(text);
+        button.setTextColor(color(R.color.ytet_text));
+        button.setBackground(roundedStroke(0x55000000, 0x33FFFFFF, 12, 1));
+        return button;
+    }
+
     private Button dangerButton(String text) {
         Button button = baseButton(text);
         button.setTextColor(0xFFFFFFFF);
@@ -3039,6 +3035,12 @@ public final class MainActivity extends Activity {
         GradientDrawable drawable = new GradientDrawable();
         drawable.setColor(fillColor);
         drawable.setCornerRadius(dp(radiusDp));
+        return drawable;
+    }
+
+    private GradientDrawable roundedStroke(int fillColor, int strokeColor, int radiusDp, int strokeDp) {
+        GradientDrawable drawable = rounded(fillColor, radiusDp);
+        drawable.setStroke(dp(strokeDp), strokeColor);
         return drawable;
     }
 
