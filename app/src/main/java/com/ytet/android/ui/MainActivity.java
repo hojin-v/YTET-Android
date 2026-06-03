@@ -194,6 +194,7 @@ public final class MainActivity extends Activity {
     private String librarySource = LIBRARY_SOURCE_COLLECTION;
     private DeviceAudioTrack selectedTrack;
     private DeviceAudioTrack pendingDeleteTrack;
+    private final Map<Long, View> libraryTrackItemViews = new HashMap<>();
 
     private String outputTreeUri;
     private int extractionPercent;
@@ -500,7 +501,7 @@ public final class MainActivity extends Activity {
         copy.addView(nowPlayingMeta, matchWrap());
         bar.addView(copy, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
-        playPauseButton = iconButton(R.drawable.ic_play_arrow, "재생", false);
+        playPauseButton = iconButton(R.drawable.ic_play_arrow, "재생", true);
         playPauseButton.setOnClickListener(view -> toggleStreamPlayback());
         bar.addView(playPauseButton, new LinearLayout.LayoutParams(dp(48), dp(44)));
         return bar;
@@ -966,6 +967,7 @@ public final class MainActivity extends Activity {
 
     private View buildLibraryTab() {
         LinearLayout root = screenRoot();
+        libraryTrackItemViews.clear();
 
         if (!hasAudioPermission()) {
             LinearLayout permission = panel();
@@ -1161,16 +1163,55 @@ public final class MainActivity extends Activity {
     }
 
     private void showLibrarySourceDialog() {
-        String[] labels = {"보관함", "기기 파일"};
-        int checked = isDeviceFileSource() ? 1 : 0;
-        new AlertDialog.Builder(this)
-                .setTitle("내 콘텐츠 보기")
-                .setSingleChoiceItems(labels, checked, (dialog, which) -> {
-                    setLibrarySource(which == 1 ? LIBRARY_SOURCE_DEVICE : LIBRARY_SOURCE_COLLECTION);
+        AlertDialog dialog = new AlertDialog.Builder(this).create();
+        LinearLayout body = dialogBody("내 콘텐츠 보기");
+        body.addView(librarySourceOption(
+                "보관함",
+                "YTET/Music에 저장된 음악만 보기",
+                !isDeviceFileSource(),
+                () -> {
+                    setLibrarySource(LIBRARY_SOURCE_COLLECTION);
                     dialog.dismiss();
-                })
-                .setNegativeButton("닫기", null)
-                .show();
+                }
+        ), marginBottom(8));
+        body.addView(librarySourceOption(
+                "기기 파일",
+                "기기에서 음악으로 분류된 파일 전체 보기",
+                isDeviceFileSource(),
+                () -> {
+                    setLibrarySource(LIBRARY_SOURCE_DEVICE);
+                    dialog.dismiss();
+                }
+        ), marginBottom(16));
+        LinearLayout actions = new LinearLayout(this);
+        actions.setGravity(Gravity.END);
+        Button close = detailActionButton("닫기");
+        close.setOnClickListener(view -> dialog.dismiss());
+        actions.addView(close, fixedButtonParams(76, 38, 0));
+        body.addView(actions, matchWrap());
+        dialog.setView(body);
+        dialog.show();
+        styleDetailDialog(dialog);
+    }
+
+    private View librarySourceOption(String title, String subtitle, boolean selected, Runnable action) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(14), dp(12), dp(14), dp(12));
+        row.setBackground(rounded(selected ? selectedTrackBackgroundColor() : color(R.color.ytet_panel), 12));
+        row.setOnClickListener(view -> action.run());
+
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        copy.addView(text(title, 15, R.color.ytet_text, true), marginBottom(3));
+        copy.addView(muted(subtitle, 12), matchWrap());
+        row.addView(copy, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView state = text(selected ? "선택됨" : "", 12, R.color.ytet_muted, true);
+        state.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
+        row.addView(state, new LinearLayout.LayoutParams(dp(58), LinearLayout.LayoutParams.WRAP_CONTENT));
+        return row;
     }
 
     private void setLibrarySource(String source) {
@@ -1420,13 +1461,12 @@ public final class MainActivity extends Activity {
     private View trackCard(DeviceAudioTrack track) {
         LinearLayout card = panel();
         card.setPadding(dp(10), dp(10), dp(10), dp(12));
-        card.setBackground(rounded(selectedTrack != null && selectedTrack.id() == track.id()
-                ? color(R.color.ytet_panel_alt)
-                : color(R.color.ytet_panel), 8));
+        applyTrackSelectionBackground(card, track);
         card.setOnClickListener(view -> {
-            selectedTrack = track;
+            selectLibraryTrack(track);
             playTrack(track);
         });
+        registerLibraryTrackView(track, card);
 
         SquareFrameLayout coverFrame = new SquareFrameLayout(this);
         coverFrame.addView(trackCoverView(track), new FrameLayout.LayoutParams(
@@ -1457,13 +1497,12 @@ public final class MainActivity extends Activity {
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(10), dp(10), dp(10), dp(10));
-        row.setBackground(rounded(selectedTrack != null && selectedTrack.id() == track.id()
-                ? color(R.color.ytet_panel_alt)
-                : color(R.color.ytet_panel), 8));
+        applyTrackSelectionBackground(row, track);
         row.setOnClickListener(view -> {
-            selectedTrack = track;
+            selectLibraryTrack(track);
             playTrack(track);
         });
+        registerLibraryTrackView(track, row);
 
         LinearLayout.LayoutParams coverParams = new LinearLayout.LayoutParams(dp(58), dp(58));
         coverParams.setMargins(0, 0, dp(12), 0);
@@ -1495,6 +1534,41 @@ public final class MainActivity extends Activity {
         return more;
     }
 
+    private void selectLibraryTrack(DeviceAudioTrack track) {
+        selectedTrack = track;
+        refreshVisibleTrackSelection();
+    }
+
+    private void registerLibraryTrackView(DeviceAudioTrack track, View view) {
+        if (track == null || view == null) {
+            return;
+        }
+        libraryTrackItemViews.put(track.id(), view);
+    }
+
+    private void refreshVisibleTrackSelection() {
+        for (DeviceAudioTrack track : visibleLibraryTracks()) {
+            View view = libraryTrackItemViews.get(track.id());
+            if (view != null) {
+                applyTrackSelectionBackground(view, track);
+            }
+        }
+    }
+
+    private void applyTrackSelectionBackground(View view, DeviceAudioTrack track) {
+        view.setBackground(rounded(isSelectedTrack(track)
+                ? selectedTrackBackgroundColor()
+                : color(R.color.ytet_panel), 8));
+    }
+
+    private boolean isSelectedTrack(DeviceAudioTrack track) {
+        return selectedTrack != null && track != null && selectedTrack.id() == track.id();
+    }
+
+    private int selectedTrackBackgroundColor() {
+        return 0xFF30333B;
+    }
+
     private View trackCoverView(DeviceAudioTrack track) {
         if (track.albumArtUri() != null && !track.albumArtUri().trim().isEmpty()) {
             ImageView image = new ImageView(this);
@@ -1518,10 +1592,8 @@ public final class MainActivity extends Activity {
     }
 
     private void showTrackDetails(DeviceAudioTrack track) {
-        selectedTrack = track;
-        LinearLayout body = new LinearLayout(this);
-        body.setOrientation(LinearLayout.VERTICAL);
-        body.setPadding(dp(2), dp(8), dp(2), 0);
+        selectLibraryTrack(track);
+        LinearLayout body = dialogBody("상세정보");
         body.addView(trackDetailItem("제목", track.title()), marginBottom(10));
         body.addView(trackDetailItem("아티스트", track.artist()), marginBottom(10));
         body.addView(trackDetailItem("앨범", track.album()), marginBottom(10));
@@ -1531,12 +1603,12 @@ public final class MainActivity extends Activity {
         body.addView(trackDetailItem("용량", MusicLibrary.formatBytes(track.sizeBytes())), marginBottom(14));
 
         AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle("상세정보")
                 .setView(body)
                 .create();
 
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setGravity(Gravity.END);
         Button share = detailActionButton("공유");
         share.setOnClickListener(view -> {
             selectedTrack = track;
@@ -1549,11 +1621,19 @@ public final class MainActivity extends Activity {
             dialog.dismiss();
             deleteSelectedTrack();
         });
-        actions.addView(share, weightedButtonParams(8));
-        actions.addView(delete, new LinearLayout.LayoutParams(0, dp(44), 1f));
+        actions.addView(share, fixedButtonParams(76, 38, 8));
+        actions.addView(delete, fixedButtonParams(76, 38, 0));
         body.addView(actions, matchWrap());
         dialog.show();
         styleDetailDialog(dialog);
+    }
+
+    private LinearLayout dialogBody(String title) {
+        LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+        body.setPadding(dp(22), dp(18), dp(22), dp(18));
+        body.addView(text(title, 18, R.color.ytet_text, true), marginBottom(16));
+        return body;
     }
 
     private void styleDetailDialog(AlertDialog dialog) {
@@ -3098,6 +3178,12 @@ public final class MainActivity extends Activity {
 
     private LinearLayout.LayoutParams weightedButtonParams(int rightDp) {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(44), 1f);
+        params.setMargins(0, 0, dp(rightDp), 0);
+        return params;
+    }
+
+    private LinearLayout.LayoutParams fixedButtonParams(int widthDp, int heightDp, int rightDp) {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(widthDp), dp(heightDp));
         params.setMargins(0, 0, dp(rightDp), 0);
         return params;
     }
