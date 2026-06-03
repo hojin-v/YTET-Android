@@ -76,6 +76,7 @@ import com.ytet.android.update.UpdateInfo;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -172,11 +173,11 @@ public final class MainActivity extends Activity {
     private List<DeviceAudioTrack> homeTracks = new ArrayList<>();
     private boolean libraryLoaded;
     private boolean libraryLoading;
-    private String libraryStatus = "기기 음악 권한을 허용하면 폴더와 파일을 스캔합니다.";
+    private String libraryStatus = "기기 음악 권한을 허용하면 앨범과 아티스트를 정리합니다.";
     private boolean homeLoaded;
     private boolean homeLoading;
     private String homeStatus = "보관함 음악을 스캔하면 추천 믹스가 표시됩니다.";
-    private String selectedFolder = MusicLibrary.ALL_FOLDERS;
+    private LibraryFilter libraryFilter = LibraryFilter.ALL;
     private String librarySearchQuery = "";
     private boolean libraryGridView;
     private boolean librarySearchVisible;
@@ -907,7 +908,7 @@ public final class MainActivity extends Activity {
         if (!hasAudioPermission()) {
             LinearLayout permission = panel();
             permission.addView(label("오디오 권한 필요"), marginBottom(8));
-            permission.addView(muted("Android 미디어 저장소에서 음악 파일을 읽어 폴더별로 정리합니다.", 14), marginBottom(14));
+            permission.addView(muted("Android 미디어 저장소에서 음악 파일을 읽어 앨범과 아티스트로 정리합니다.", 14), marginBottom(14));
             Button request = primaryButton("권한 허용");
             request.setOnClickListener(view -> requestAudioPermission());
             permission.addView(request, matchWrap());
@@ -919,60 +920,99 @@ public final class MainActivity extends Activity {
             startLibraryRefresh(false);
         }
 
-        root.addView(librarySearchToolbar(), marginBottom(shouldShowLibrarySearchInput() ? 8 : 10));
+        root.addView(librarySearchToolbar(), marginBottom(8));
+        root.addView(libraryFilterBar(), marginBottom(shouldShowLibrarySearchInput() ? 8 : 12));
         if (shouldShowLibrarySearchInput()) {
             root.addView(librarySearchInputRow(), marginBottom(10));
         }
-        root.addView(libraryViewToolbar(), marginBottom(18));
+        root.addView(libraryViewToolbar(), marginBottom(14));
 
-        List<String> folders = MusicLibrary.folderNames(libraryTracks);
-        if (!folders.contains(selectedFolder)) {
-            selectedFolder = MusicLibrary.ALL_FOLDERS;
-        }
-        root.addView(sectionTitle("폴더"), marginBottom(10));
-        HorizontalScrollView folderShelf = new HorizontalScrollView(this);
-        folderShelf.setHorizontalScrollBarEnabled(false);
-        LinearLayout folderRow = new LinearLayout(this);
-        folderRow.setOrientation(LinearLayout.HORIZONTAL);
-        for (String folder : folders) {
-            Button chip = compactButton(folder);
-            chip.setTextColor(folder.equals(selectedFolder) ? 0xFFFFFFFF : color(R.color.ytet_text));
-            chip.setBackground(rounded(folder.equals(selectedFolder) ? color(R.color.ytet_accent) : color(R.color.ytet_panel_alt), 18));
-            chip.setOnClickListener(view -> {
-                selectedFolder = folder;
-                selectedTrack = null;
-                renderCurrentTab();
-            });
-            folderRow.addView(chip, marginRight(8, LinearLayout.LayoutParams.WRAP_CONTENT, dp(38)));
-        }
-        folderShelf.addView(folderRow, matchWrap());
-        root.addView(folderShelf, marginBottom(18));
-
-        root.addView(sectionTitle("파일"), marginBottom(10));
-        List<DeviceAudioTrack> visibleTracks = visibleLibraryTracks();
-        if (visibleTracks.isEmpty()) {
-            LinearLayout empty = panel();
-            boolean searching = !librarySearchQuery.trim().isEmpty();
-            empty.addView(label(searching ? "검색 결과가 없습니다." : "표시할 음악이 없습니다."), marginBottom(8));
-            empty.addView(muted(searching
-                    ? "다른 검색어를 입력하거나 폴더 필터를 변경하세요."
-                    : emptyLibraryHint(), 13), matchWrap());
-            root.addView(empty, matchWrap());
+        if (libraryFilter == LibraryFilter.ALL) {
+            List<DeviceAudioTrack> visibleTracks = visibleLibraryTracks();
+            if (visibleTracks.isEmpty()) {
+                root.addView(emptyLibraryView(), matchWrap());
+                return root;
+            }
+            int limit = Math.min(visibleTracks.size(), 80);
+            if (libraryGridView) {
+                addTrackCardGrid(root, visibleTracks, limit);
+            } else {
+                for (int i = 0; i < limit; i++) {
+                    root.addView(trackRow(visibleTracks.get(i)), marginBottom(8));
+                }
+            }
+            if (visibleTracks.size() > limit) {
+                root.addView(muted("상위 " + limit + "곡만 표시 중입니다. 검색하면 목록을 좁힐 수 있습니다.", 12), matchWrap());
+            }
             return root;
         }
 
-        int limit = Math.min(visibleTracks.size(), 80);
+        List<LibraryGroup> visibleGroups = visibleLibraryGroups();
+        if (visibleGroups.isEmpty()) {
+            root.addView(emptyLibraryView(), matchWrap());
+            return root;
+        }
+        int limit = Math.min(visibleGroups.size(), 80);
         if (libraryGridView) {
-            addTrackCardGrid(root, visibleTracks, limit);
+            addLibraryGroupCardGrid(root, visibleGroups, limit);
         } else {
             for (int i = 0; i < limit; i++) {
-                root.addView(trackRow(visibleTracks.get(i)), marginBottom(8));
+                root.addView(libraryGroupRow(visibleGroups.get(i)), marginBottom(8));
             }
         }
-        if (visibleTracks.size() > limit) {
-            root.addView(muted("상위 " + limit + "개만 표시 중입니다. 검색하거나 폴더를 선택하면 목록을 좁힐 수 있습니다.", 12), matchWrap());
+        if (visibleGroups.size() > limit) {
+            root.addView(muted("상위 " + limit + "개만 표시 중입니다. 검색하면 목록을 좁힐 수 있습니다.", 12), matchWrap());
         }
         return root;
+    }
+
+    private View emptyLibraryView() {
+        LinearLayout empty = panel();
+        boolean searching = !librarySearchQuery.trim().isEmpty();
+        empty.addView(label(searching ? "검색 결과가 없습니다." : "표시할 음악이 없습니다."), marginBottom(8));
+        empty.addView(muted(searching
+                ? "다른 검색어를 입력하거나 전체/앨범/아티스트 필터를 바꿔보세요."
+                : emptyLibraryHint(), 13), matchWrap());
+        return empty;
+    }
+
+    private View libraryFilterBar() {
+        HorizontalScrollView shelf = new HorizontalScrollView(this);
+        shelf.setHorizontalScrollBarEnabled(false);
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.addView(libraryFilterChip("전체", LibraryFilter.ALL), marginRight(8, LinearLayout.LayoutParams.WRAP_CONTENT, dp(38)));
+        row.addView(libraryFilterChip("앨범", LibraryFilter.ALBUM), marginRight(8, LinearLayout.LayoutParams.WRAP_CONTENT, dp(38)));
+        row.addView(libraryFilterChip("아티스트", LibraryFilter.ARTIST), marginRight(0, LinearLayout.LayoutParams.WRAP_CONTENT, dp(38)));
+        shelf.addView(row, matchWrap());
+        return shelf;
+    }
+
+    private Button libraryFilterChip(String label, LibraryFilter filter) {
+        Button chip = compactButton(label);
+        boolean selected = libraryFilter == filter;
+        chip.setTextColor(selected ? 0xFFFFFFFF : color(R.color.ytet_text));
+        chip.setBackground(rounded(selected ? color(R.color.ytet_accent) : color(R.color.ytet_panel_alt), 18));
+        chip.setOnClickListener(view -> {
+            if (libraryFilter == filter) {
+                return;
+            }
+            libraryFilter = filter;
+            selectedTrack = null;
+            renderCurrentTab();
+        });
+        return chip;
+    }
+
+    private View libraryViewToolbar() {
+        LinearLayout toolbar = new LinearLayout(this);
+        toolbar.setOrientation(LinearLayout.HORIZONTAL);
+        toolbar.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView status = muted(libraryStatus, 12);
+        status.setGravity(Gravity.CENTER_VERTICAL);
+        toolbar.addView(status, new LinearLayout.LayoutParams(0, dp(34), 1f));
+        return toolbar;
     }
 
     private View librarySearchToolbar() {
@@ -999,23 +1039,16 @@ public final class MainActivity extends Activity {
         });
         toolbar.addView(search, marginRight(8, dp(44), dp(44)));
 
-        ImageButton list = toolbarIconButton(R.drawable.ic_view_list, "리스트 보기", !libraryGridView);
-        list.setOnClickListener(view -> {
-            if (libraryGridView) {
-                libraryGridView = false;
-                renderCurrentTab();
-            }
+        ImageButton viewToggle = toolbarIconButton(
+                libraryGridView ? R.drawable.ic_view_list : R.drawable.ic_grid_view,
+                libraryGridView ? "리스트 보기" : "카드 보기",
+                false
+        );
+        viewToggle.setOnClickListener(view -> {
+            libraryGridView = !libraryGridView;
+            renderCurrentTab();
         });
-        toolbar.addView(list, marginRight(6, dp(44), dp(44)));
-
-        ImageButton grid = toolbarIconButton(R.drawable.ic_grid_view, "카드 보기", libraryGridView);
-        grid.setOnClickListener(view -> {
-            if (!libraryGridView) {
-                libraryGridView = true;
-                renderCurrentTab();
-            }
-        });
-        toolbar.addView(grid, new LinearLayout.LayoutParams(dp(44), dp(44)));
+        toolbar.addView(viewToggle, new LinearLayout.LayoutParams(dp(44), dp(44)));
         return toolbar;
     }
 
@@ -1044,17 +1077,6 @@ public final class MainActivity extends Activity {
         return librarySearchInput;
     }
 
-    private View libraryViewToolbar() {
-        LinearLayout toolbar = new LinearLayout(this);
-        toolbar.setOrientation(LinearLayout.HORIZONTAL);
-        toolbar.setGravity(Gravity.CENTER_VERTICAL);
-
-        TextView status = muted(libraryStatus, 12);
-        status.setGravity(Gravity.CENTER_VERTICAL);
-        toolbar.addView(status, new LinearLayout.LayoutParams(0, dp(44), 1f));
-        return toolbar;
-    }
-
     private void showLibrarySourceDialog() {
         String[] labels = {"보관함", "기기 파일"};
         int checked = isDeviceFileSource() ? 1 : 0;
@@ -1077,7 +1099,6 @@ public final class MainActivity extends Activity {
         }
         librarySource = nextSource;
         getPreferences().edit().putString(PREF_LIBRARY_SOURCE, librarySource).apply();
-        selectedFolder = MusicLibrary.ALL_FOLDERS;
         selectedTrack = null;
         libraryLoaded = false;
         startLibraryRefresh(true);
@@ -1104,19 +1125,187 @@ public final class MainActivity extends Activity {
     }
 
     private List<DeviceAudioTrack> visibleLibraryTracks() {
-        List<DeviceAudioTrack> byFolder = MusicLibrary.filterByFolder(libraryTracks, selectedFolder);
         String query = librarySearchQuery == null ? "" : librarySearchQuery.trim().toLowerCase(Locale.ROOT);
         if (query.isEmpty()) {
-            return byFolder;
+            return new ArrayList<>(libraryTracks);
         }
 
         List<DeviceAudioTrack> matches = new ArrayList<>();
-        for (DeviceAudioTrack track : byFolder) {
+        for (DeviceAudioTrack track : libraryTracks) {
             if (trackMatchesQuery(track, query)) {
                 matches.add(track);
             }
         }
         return matches;
+    }
+
+    private List<LibraryGroup> visibleLibraryGroups() {
+        Map<String, List<DeviceAudioTrack>> grouped = new LinkedHashMap<>();
+        for (DeviceAudioTrack track : visibleLibraryTracks()) {
+            String key = libraryFilter == LibraryFilter.ALBUM ? track.album() : track.artist();
+            grouped.computeIfAbsent(key, ignored -> new ArrayList<>()).add(track);
+        }
+
+        List<LibraryGroup> groups = new ArrayList<>();
+        for (Map.Entry<String, List<DeviceAudioTrack>> entry : grouped.entrySet()) {
+            groups.add(libraryGroup(entry.getKey(), entry.getValue()));
+        }
+        groups.sort((first, second) -> first.title.compareToIgnoreCase(second.title));
+        return groups;
+    }
+
+    private LibraryGroup libraryGroup(String title, List<DeviceAudioTrack> tracks) {
+        String subtitle;
+        if (libraryFilter == LibraryFilter.ALBUM) {
+            subtitle = albumArtistSummary(tracks) + " · " + tracks.size() + "곡 · " + totalDurationLabel(tracks);
+        } else {
+            subtitle = distinctAlbumCount(tracks) + "개 앨범 · " + tracks.size() + "곡 · " + totalDurationLabel(tracks);
+        }
+        return new LibraryGroup(title, subtitle, bestCoverTrack(tracks), tracks);
+    }
+
+    private String albumArtistSummary(List<DeviceAudioTrack> tracks) {
+        String artist = "";
+        for (DeviceAudioTrack track : tracks) {
+            if (artist.isEmpty()) {
+                artist = track.artist();
+                continue;
+            }
+            if (!artist.equals(track.artist())) {
+                return "여러 아티스트";
+            }
+        }
+        return artist.isEmpty() ? "알 수 없는 아티스트" : artist;
+    }
+
+    private int distinctAlbumCount(List<DeviceAudioTrack> tracks) {
+        Map<String, Boolean> albums = new LinkedHashMap<>();
+        for (DeviceAudioTrack track : tracks) {
+            albums.put(track.album(), true);
+        }
+        return albums.size();
+    }
+
+    private String totalDurationLabel(List<DeviceAudioTrack> tracks) {
+        long total = 0L;
+        for (DeviceAudioTrack track : tracks) {
+            total += track.durationMs();
+        }
+        return MusicLibrary.formatDuration(total);
+    }
+
+    private DeviceAudioTrack bestCoverTrack(List<DeviceAudioTrack> tracks) {
+        DeviceAudioTrack fallback = tracks.isEmpty() ? null : tracks.get(0);
+        for (DeviceAudioTrack track : tracks) {
+            if (track.albumArtUri() != null && !track.albumArtUri().trim().isEmpty()) {
+                return track;
+            }
+        }
+        return fallback;
+    }
+
+    private void addLibraryGroupCardGrid(LinearLayout root, List<LibraryGroup> groups, int limit) {
+        for (int index = 0; index < limit; index += 2) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.addView(libraryGroupCard(groups.get(index)), cardColumnParams(8));
+            if (index + 1 < limit) {
+                row.addView(libraryGroupCard(groups.get(index + 1)), cardColumnParams(0));
+            } else {
+                row.addView(new View(this), cardColumnParams(0));
+            }
+            root.addView(row, marginBottom(10));
+        }
+    }
+
+    private View libraryGroupCard(LibraryGroup group) {
+        LinearLayout card = panel();
+        card.setPadding(dp(10), dp(10), dp(10), dp(12));
+        card.setOnClickListener(view -> playLibraryGroup(group));
+
+        SquareFrameLayout coverFrame = new SquareFrameLayout(this);
+        coverFrame.addView(groupCoverView(group), new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+        ));
+        card.addView(coverFrame, marginBottom(10));
+
+        TextView title = text(group.title, 14, R.color.ytet_text, true);
+        title.setMaxLines(2);
+        title.setEllipsize(TextUtils.TruncateAt.END);
+        card.addView(title, marginBottom(4));
+
+        TextView subtitle = muted(group.subtitle, 12);
+        subtitle.setMaxLines(2);
+        subtitle.setEllipsize(TextUtils.TruncateAt.END);
+        card.addView(subtitle, matchWrap());
+        return card;
+    }
+
+    private View libraryGroupRow(LibraryGroup group) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(10), dp(10), dp(10), dp(10));
+        row.setBackground(rounded(color(R.color.ytet_panel), 8));
+        row.setOnClickListener(view -> playLibraryGroup(group));
+
+        LinearLayout.LayoutParams coverParams = new LinearLayout.LayoutParams(dp(58), dp(58));
+        coverParams.setMargins(0, 0, dp(12), 0);
+        row.addView(groupCoverView(group), coverParams);
+
+        LinearLayout info = new LinearLayout(this);
+        info.setOrientation(LinearLayout.VERTICAL);
+        TextView title = text(group.title, 15, R.color.ytet_text, true);
+        title.setSingleLine(true);
+        title.setEllipsize(TextUtils.TruncateAt.END);
+        info.addView(title, marginBottom(4));
+        TextView subtitle = muted(group.subtitle, 12);
+        subtitle.setSingleLine(true);
+        subtitle.setEllipsize(TextUtils.TruncateAt.END);
+        info.addView(subtitle, matchWrap());
+        row.addView(info, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        return row;
+    }
+
+    private View groupCoverView(LibraryGroup group) {
+        if (group.coverTrack != null) {
+            return trackCoverView(group.coverTrack);
+        }
+        TextView placeholder = text("YT", 22, android.R.color.white, true);
+        placeholder.setGravity(Gravity.CENTER);
+        placeholder.setBackground(rounded(color(R.color.ytet_accent_dark), 8));
+        return placeholder;
+    }
+
+    private void playLibraryGroup(LibraryGroup group) {
+        if (group == null || group.tracks.isEmpty()) {
+            toast("재생할 음악이 없습니다.");
+            return;
+        }
+        String category = libraryFilter == LibraryFilter.ALBUM ? "앨범" : "아티스트";
+        MusicStation station = new MusicStation(
+                category + "-" + Integer.toHexString(group.title.hashCode()),
+                group.title,
+                category,
+                group.subtitle,
+                group.tracks.size() + "곡 재생",
+                MusicStation.MixType.ALL,
+                "",
+                color(R.color.ytet_accent)
+        );
+        activeStation = station;
+        activeQueuePreview = new ArrayList<>(group.tracks);
+        playbackHasQueue = true;
+        playbackPlaying = false;
+        playbackPreparing = true;
+        playbackWillPlay = true;
+        playbackError = false;
+        playbackTitle = station.title();
+        playbackMeta = station.subtitle();
+        setStreamingStatus("준비 중: " + station.title());
+        updateNowPlayingBar();
+        startPlayback(PlaybackService.playQueueIntent(this, station, group.tracks));
     }
 
     private boolean trackMatchesQuery(DeviceAudioTrack track, String query) {
@@ -1326,18 +1515,6 @@ public final class MainActivity extends Activity {
         styleInput(urlInput);
         root.addView(urlInput, controlParams(58, 18));
 
-        playlistCheck = new CheckBox(this);
-        playlistCheck.setText("list URL이면 전체 플레이리스트를 순서대로 추출");
-        playlistCheck.setTextColor(color(R.color.ytet_text));
-        playlistCheck.setChecked(extractorIncludePlaylist);
-        root.addView(playlistCheck, marginBottom(10));
-
-        metadataEnhanceCheck = new CheckBox(this);
-        metadataEnhanceCheck.setText("MusicBrainz로 실제 앨범/아티스트 보정");
-        metadataEnhanceCheck.setTextColor(color(R.color.ytet_text));
-        metadataEnhanceCheck.setChecked(extractorEnhanceMetadata);
-        root.addView(metadataEnhanceCheck, marginBottom(16));
-
         root.addView(label("모드"), marginBottom(8));
         mediaGroup = new RadioGroup(this);
         mediaGroup.setOrientation(RadioGroup.HORIZONTAL);
@@ -1367,6 +1544,18 @@ public final class MainActivity extends Activity {
         optionSpinner.setBackgroundColor(color(R.color.ytet_panel_alt));
         optionSpinner.setPadding(dp(4), 0, dp(4), 0);
         root.addView(optionSpinner, controlParams(56, 14));
+
+        playlistCheck = new CheckBox(this);
+        playlistCheck.setText("list URL이면 전체 플레이리스트를 순서대로 추출");
+        playlistCheck.setTextColor(color(R.color.ytet_text));
+        playlistCheck.setChecked(extractorIncludePlaylist);
+        root.addView(playlistCheck, marginBottom(10));
+
+        metadataEnhanceCheck = new CheckBox(this);
+        metadataEnhanceCheck.setText("MusicBrainz로 실제 앨범/아티스트 보정");
+        metadataEnhanceCheck.setTextColor(color(R.color.ytet_text));
+        metadataEnhanceCheck.setChecked(extractorEnhanceMetadata);
+        root.addView(metadataEnhanceCheck, marginBottom(10));
 
         subtitlesCheck = new CheckBox(this);
         subtitlesCheck.setText("한국어/영어 등록 자막 포함");
@@ -2050,7 +2239,7 @@ public final class MainActivity extends Activity {
 
     private String emptyLibraryHint() {
         if (isDeviceFileSource()) {
-            return "다른 폴더를 선택하거나 화면 맨 위에서 아래로 당겨 다시 스캔하세요.";
+            return "기기에 음악을 추가하거나 화면 맨 위에서 아래로 당겨 다시 스캔하세요.";
         }
         return "추출기에서 음원을 저장하면 "
                 + DefaultMediaPaths.displayPath(MediaType.AUDIO)
@@ -2869,6 +3058,31 @@ public final class MainActivity extends Activity {
 
     private interface TimerChangeListener {
         void onChanged(int minutes, boolean committed);
+    }
+
+    private static final class LibraryGroup {
+        private final String title;
+        private final String subtitle;
+        private final DeviceAudioTrack coverTrack;
+        private final List<DeviceAudioTrack> tracks;
+
+        private LibraryGroup(
+                String title,
+                String subtitle,
+                DeviceAudioTrack coverTrack,
+                List<DeviceAudioTrack> tracks
+        ) {
+            this.title = title == null || title.trim().isEmpty() ? "알 수 없음" : title.trim();
+            this.subtitle = subtitle == null || subtitle.trim().isEmpty() ? "-" : subtitle.trim();
+            this.coverTrack = coverTrack;
+            this.tracks = tracks == null ? new ArrayList<>() : new ArrayList<>(tracks);
+        }
+    }
+
+    private enum LibraryFilter {
+        ALL,
+        ALBUM,
+        ARTIST
     }
 
     private enum Tab {

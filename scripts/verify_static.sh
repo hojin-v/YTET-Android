@@ -20,6 +20,7 @@ required=(
   "$root/app/src/main/java/com/ytet/android/extract/ExtractionOutputs.java"
   "$root/app/src/main/java/com/ytet/android/extract/StorageWriter.java"
   "$root/app/src/main/java/com/ytet/android/core/DefaultMediaPaths.java"
+  "$root/app/src/main/res/drawable-nodpi/ytet_launcher_icon.png"
   "$root/app/src/main/res/drawable/ic_stat_playback.xml"
   "$root/app/src/main/res/drawable/ic_keyboard_arrow_down.xml"
   "$root/app/src/main/res/drawable/ic_play_arrow.xml"
@@ -73,6 +74,7 @@ grep -q 'android.permission.FOREGROUND_SERVICE' "$root/app/src/main/AndroidManif
 grep -q 'android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK' "$root/app/src/main/AndroidManifest.xml"
 grep -q 'android.permission.REQUEST_INSTALL_PACKAGES' "$root/app/src/main/AndroidManifest.xml"
 grep -q 'android:allowBackup="false"' "$root/app/src/main/AndroidManifest.xml"
+grep -q 'android:icon="@drawable/ytet_launcher_icon"' "$root/app/src/main/AndroidManifest.xml"
 grep -q 'android:foregroundServiceType="mediaPlayback"' "$root/app/src/main/AndroidManifest.xml"
 grep -q 'ACTION_OPEN_DOCUMENT_TREE' "$root/app/src/main/java/com/ytet/android/ui/MainActivity.java"
 grep -q 'new YtDlpPythonEngine()' "$root/app/src/main/java/com/ytet/android/extract/ExtractionService.java"
@@ -101,6 +103,10 @@ grep -q 'showQueueDialog' "$root/app/src/main/java/com/ytet/android/ui/MainActiv
 grep -q 'SleepTimerDialView' "$root/app/src/main/java/com/ytet/android/ui/MainActivity.java"
 grep -q 'DragDismissLayout' "$root/app/src/main/java/com/ytet/android/ui/MainActivity.java"
 grep -q 'librarySearchToolbar' "$root/app/src/main/java/com/ytet/android/ui/MainActivity.java"
+grep -q 'libraryFilterBar' "$root/app/src/main/java/com/ytet/android/ui/MainActivity.java"
+grep -q 'LibraryFilter' "$root/app/src/main/java/com/ytet/android/ui/MainActivity.java"
+grep -q 'LibraryGroup' "$root/app/src/main/java/com/ytet/android/ui/MainActivity.java"
+grep -q 'libraryGridView ? R.drawable.ic_view_list : R.drawable.ic_grid_view' "$root/app/src/main/java/com/ytet/android/ui/MainActivity.java"
 grep -q 'librarySearchInputRow' "$root/app/src/main/java/com/ytet/android/ui/MainActivity.java"
 grep -q 'trackCard' "$root/app/src/main/java/com/ytet/android/ui/MainActivity.java"
 grep -q 'showTrackDetails' "$root/app/src/main/java/com/ytet/android/ui/MainActivity.java"
@@ -177,6 +183,11 @@ fi
 
 if grep -R "buildSettingsTab\\|PREF_HIDE_SHORT_AUDIO\\|PREF_HIDE_SYSTEM_AUDIO_FOLDERS\\|Tab\\.SETTINGS" "$root/app/src/main/java/com/ytet/android/ui/MainActivity.java" >/dev/null; then
   echo "removed settings tab or audio hiding filter reference found" >&2
+  exit 1
+fi
+
+if grep -R "sectionTitle(\"폴더\")\\|sectionTitle(\"파일\")\\|selectedFolder" "$root/app/src/main/java/com/ytet/android/ui/MainActivity.java" >/dev/null; then
+  echo "removed folder/file library section reference found" >&2
   exit 1
 fi
 
