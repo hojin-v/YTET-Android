@@ -3488,7 +3488,7 @@ public final class MainActivity extends Activity {
     private final class DragDismissLayout extends LinearLayout {
         private float startX;
         private float startY;
-        private boolean dismissedByDrag;
+        private boolean draggingDown;
 
         DragDismissLayout(Context context) {
             super(context);
@@ -3500,29 +3500,49 @@ public final class MainActivity extends Activity {
             if (action == MotionEvent.ACTION_DOWN) {
                 startX = event.getRawX();
                 startY = event.getRawY();
-                dismissedByDrag = false;
+                draggingDown = false;
+                animate().cancel();
+                setAlpha(1f);
                 setTranslationY(0f);
             } else if (action == MotionEvent.ACTION_MOVE && !suppressPlayerDragDismiss) {
                 float dx = event.getRawX() - startX;
                 float dy = event.getRawY() - startY;
-                if (dy > dp(8) && dy > Math.abs(dx)) {
-                    setTranslationY(Math.min(dp(96), dy * 0.32f));
-                }
-                if (!dismissedByDrag && dy > dp(56) && dy > Math.abs(dx)) {
-                    dismissedByDrag = true;
-                    dismissTopPlayerSurface();
+                if (draggingDown || (dy > dp(8) && dy > Math.abs(dx) * 0.85f)) {
+                    draggingDown = true;
+                    float translation = Math.max(0f, Math.min(getHeight(), dy));
+                    setTranslationY(translation);
+                    setAlpha(1f - Math.min(0.18f, translation / Math.max(1f, getHeight()) * 0.18f));
                     return true;
                 }
             } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
-                if (dismissedByDrag) {
-                    dismissedByDrag = false;
+                if (draggingDown) {
+                    boolean shouldDismiss = action == MotionEvent.ACTION_UP && getTranslationY() >= dp(56);
+                    draggingDown = false;
+                    if (shouldDismiss) {
+                        animateDismissTopPlayerSurface();
+                    } else {
+                        animate().translationY(0f).alpha(1f).setDuration(150L).start();
+                    }
                     return true;
                 }
                 if (getTranslationY() > 0f) {
-                    animate().translationY(0f).setDuration(140L).start();
+                    animate().translationY(0f).alpha(1f).setDuration(150L).start();
                 }
             }
             return super.dispatchTouchEvent(event);
+        }
+
+        private void animateDismissTopPlayerSurface() {
+            animate()
+                    .translationY(Math.max(getHeight(), dp(320)))
+                    .alpha(0.82f)
+                    .setDuration(190L)
+                    .withEndAction(() -> {
+                        setTranslationY(0f);
+                        setAlpha(1f);
+                        dismissTopPlayerSurface();
+                    })
+                    .start();
         }
 
         private void dismissTopPlayerSurface() {
