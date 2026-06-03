@@ -51,7 +51,7 @@ public final class MusicLibrary {
         }
         for (DeviceAudioTrack track : tracks) {
             if (station.mixType() == MusicStation.MixType.ALL
-                    || (station.mixType() == MusicStation.MixType.ARTIST && station.mixValue().equals(track.artist()))
+                    || (station.mixType() == MusicStation.MixType.ARTIST && station.mixValue().equals(representativeArtist(track)))
                     || (station.mixType() == MusicStation.MixType.FOLDER && station.mixValue().equals(track.folder()))
                     || (station.mixType() == MusicStation.MixType.TRACK && station.mixValue().equals(Long.toString(track.id())))) {
                 selected.add(track);
@@ -59,6 +59,21 @@ public final class MusicLibrary {
         }
         Collections.shuffle(selected);
         return selected;
+    }
+
+    public static String representativeArtist(DeviceAudioTrack track) {
+        return representativeArtist(track == null ? null : track.artist());
+    }
+
+    public static String representativeArtist(String artist) {
+        String clean = artist == null || artist.trim().isEmpty() ? "알 수 없는 아티스트" : artist.trim();
+        String[] parts = clean.split("(?i)\\s*(?:,|，|、|;|；|\\||\\s+/\\s+|\\s+feat\\.?\\s+|\\s+ft\\.?\\s+|\\s+featuring\\s+|\\s+with\\s+|\\s+[x×&]\\s+)\\s*");
+        for (String part : parts) {
+            if (part != null && !part.trim().isEmpty()) {
+                return part.trim();
+            }
+        }
+        return clean;
     }
 
     public static String folderLabelFromPath(String relativePath, String fallback) {

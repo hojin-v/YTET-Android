@@ -75,6 +75,20 @@ public final class MusicLibraryTest {
         assertEquals(3, MusicLibrary.tracksForStation(List.of(first, second, third), all).size());
     }
 
+    @Test
+    public void usesRepresentativeArtistForArtistStations() {
+        DeviceAudioTrack first = track(1, "Alpha", "Artist A, Guest One", "Camera");
+        DeviceAudioTrack second = track(2, "Beta", "Artist A feat. Guest Two", "Downloads");
+        DeviceAudioTrack third = track(3, "Gamma", "Artist B", "Camera");
+
+        MusicStation artist = station(MusicStation.MixType.ARTIST, "Artist A");
+        List<DeviceAudioTrack> artistTracks = MusicLibrary.tracksForStation(List.of(first, second, third), artist);
+
+        assertEquals(2, artistTracks.size());
+        assertEquals("Artist A", MusicLibrary.representativeArtist(first));
+        assertEquals("Artist A", MusicLibrary.representativeArtist(second));
+    }
+
     private DeviceAudioTrack track(long id, String title, String folder) {
         return track(id, title, "Artist", folder);
     }

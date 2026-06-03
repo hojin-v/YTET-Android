@@ -107,7 +107,7 @@ public final class StationCatalog {
     private static Map<String, Integer> countByArtist(List<DeviceAudioTrack> tracks) {
         Map<String, Integer> counts = new LinkedHashMap<>();
         for (DeviceAudioTrack track : tracks) {
-            String artist = track.artist();
+            String artist = MusicLibrary.representativeArtist(track);
             if ("알 수 없는 아티스트".equals(artist)) {
                 continue;
             }

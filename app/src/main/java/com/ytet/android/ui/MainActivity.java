@@ -1391,20 +1391,20 @@ public final class MainActivity extends Activity {
 
     private String libraryGroupKey(DeviceAudioTrack track, LibraryFilter filter) {
         if (filter == LibraryFilter.ARTIST) {
-            return "artist:" + groupKeyPart(track.artist());
+            return "artist:" + groupKeyPart(MusicLibrary.representativeArtist(track));
         }
         if (track.albumId() > 0) {
             return "album-id:" + track.albumId();
         }
         String key = "album:" + groupKeyPart(track.album()) + "|folder:" + groupKeyPart(track.folder());
         if (isUnknownAlbum(track.album())) {
-            key += "|artist:" + groupKeyPart(track.artist());
+            key += "|artist:" + groupKeyPart(MusicLibrary.representativeArtist(track));
         }
         return key;
     }
 
     private String libraryGroupTitle(DeviceAudioTrack track, LibraryFilter filter) {
-        return filter == LibraryFilter.ALBUM ? track.album() : track.artist();
+        return filter == LibraryFilter.ALBUM ? track.album() : MusicLibrary.representativeArtist(track);
     }
 
     private String groupKeyPart(String value) {
@@ -1466,12 +1466,12 @@ public final class MainActivity extends Activity {
     private String albumArtistSummary(List<DeviceAudioTrack> tracks) {
         String artist = "";
         for (DeviceAudioTrack track : tracks) {
-            if (artist.isEmpty()) {
-                artist = track.artist();
-                continue;
+            String representative = MusicLibrary.representativeArtist(track);
+            if (!representative.isEmpty() && !"알 수 없는 아티스트".equals(representative)) {
+                return representative;
             }
-            if (!artist.equals(track.artist())) {
-                return "여러 아티스트";
+            if (artist.isEmpty()) {
+                artist = representative;
             }
         }
         return artist.isEmpty() ? "알 수 없는 아티스트" : artist;
@@ -2627,8 +2627,8 @@ public final class MainActivity extends Activity {
             content.addView(activeSleepTimerRow(), marginBottom(8));
         }
         content.addView(text(playbackTitle, 23, R.color.ytet_text, true), marginBottom(4));
-        content.addView(muted(playbackArtist + " · " + playbackAlbum, 14), marginBottom(2));
-        content.addView(muted(queuePositionText(), 12), marginBottom(8));
+        content.addView(muted(playbackArtist, 14), marginBottom(2));
+        content.addView(muted(albumQueuePositionText(), 12), marginBottom(8));
 
         PlaybackSeekBarView progress = new PlaybackSeekBarView(this);
         progress.setProgress(playbackDurationMs, playbackSeeking ? playbackSeekPreviewMs : playbackPositionMs);
@@ -2902,6 +2902,15 @@ public final class MainActivity extends Activity {
             return "";
         }
         return (playbackQueueIndex + 1) + "/" + playbackQueueSize;
+    }
+
+    private String albumQueuePositionText() {
+        String album = valueOrDefault(playbackAlbum, "앨범 정보 없음");
+        String position = queuePositionText();
+        if (position.isEmpty()) {
+            return album;
+        }
+        return album + " · " + position;
     }
 
     private String playbackProgressText() {
