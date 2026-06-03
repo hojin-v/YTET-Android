@@ -2061,6 +2061,48 @@ public final class MainActivity extends Activity {
         return drawable;
     }
 
+    private void applyExpandedPlayerWindow(Window window) {
+        if (window == null) {
+            return;
+        }
+        int statusColor = playerStatusBarColor();
+        int navigationColor = blendColors(color(R.color.ytet_background), statusColor, 0.16f);
+        applyOpaqueDialogBars(window, statusColor, navigationColor);
+    }
+
+    private void applyQueueWindow(Window window) {
+        if (window == null) {
+            return;
+        }
+        int background = color(R.color.ytet_background);
+        applyOpaqueDialogBars(window, background, background);
+    }
+
+    private void applyOpaqueDialogBars(Window window, int statusColor, int navigationColor) {
+        window.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS
+                | WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION);
+        window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+        window.setBackgroundDrawable(new ColorDrawable(statusColor));
+        window.setStatusBarColor(statusColor);
+        window.setNavigationBarColor(navigationColor);
+        View decor = window.getDecorView();
+        decor.setSystemUiVisibility(decor.getSystemUiVisibility()
+                & ~View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                & ~View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                & ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+                & ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+        window.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT);
+    }
+
+    private int playerStatusBarColor() {
+        int base = playbackThemeColor;
+        float[] hsv = new float[3];
+        Color.colorToHSV(base, hsv);
+        hsv[1] = Math.min(1f, Math.max(0.42f, hsv[1] * 1.18f));
+        hsv[2] = Math.max(0.08f, Math.min(0.22f, hsv[2] * 0.58f));
+        return Color.HSVToColor(hsv);
+    }
+
     private int readArtworkThemeColor(String artworkUri) {
         Bitmap bitmap = null;
         try {
@@ -2183,11 +2225,7 @@ public final class MainActivity extends Activity {
         }
         playerDialog.setContentView(buildExpandedPlayerContent());
         playerDialog.show();
-        Window window = playerDialog.getWindow();
-        if (window != null) {
-            window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-            window.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT);
-        }
+        applyExpandedPlayerWindow(playerDialog.getWindow());
     }
 
     private void updateExpandedPlayer() {
@@ -2195,6 +2233,7 @@ public final class MainActivity extends Activity {
             return;
         }
         playerDialog.setContentView(buildExpandedPlayerContent());
+        applyExpandedPlayerWindow(playerDialog.getWindow());
     }
 
     private View buildExpandedPlayerContent() {
@@ -2567,16 +2606,13 @@ public final class MainActivity extends Activity {
         }
         queueDialog.setContentView(buildQueueDialogContent());
         queueDialog.show();
-        Window window = queueDialog.getWindow();
-        if (window != null) {
-            window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-            window.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT);
-        }
+        applyQueueWindow(queueDialog.getWindow());
     }
 
     private void updateQueueDialog() {
         if (queueDialog != null && queueDialog.isShowing()) {
             queueDialog.setContentView(buildQueueDialogContent());
+            applyQueueWindow(queueDialog.getWindow());
         }
     }
 
