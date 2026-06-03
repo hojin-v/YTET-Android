@@ -165,6 +165,7 @@ public final class MainActivity extends Activity {
     private boolean playbackShuffleEnabled;
     private int playbackRepeatMode = PlaybackService.REPEAT_OFF;
     private boolean playbackSeeking;
+    private boolean resumePlaybackAfterSeek;
     private long playbackSeekPreviewMs;
     private List<DeviceAudioTrack> activeQueuePreview = new ArrayList<>();
     private long[] playbackQueueTrackIds = new long[0];
@@ -195,6 +196,8 @@ public final class MainActivity extends Activity {
     private boolean libraryGridView;
     private boolean librarySearchVisible;
     private EditText librarySearchInput;
+    private LibraryGroup focusedLibraryGroup;
+    private LibraryFilter focusedLibraryGroupFilter;
     private float libraryPullStartY;
     private boolean libraryPullTracking;
     private float libraryPullDistance;
@@ -1009,6 +1012,16 @@ public final class MainActivity extends Activity {
             startLibraryRefresh(false);
         }
 
+        if (focusedLibraryGroup != null && focusedLibraryGroupFilter == LibraryFilter.ALBUM) {
+            LibraryGroup group = currentFocusedLibraryGroup();
+            if (group != null && !group.tracks.isEmpty()) {
+                buildLibraryGroupDetail(root, group);
+                return root;
+            }
+            focusedLibraryGroup = null;
+            focusedLibraryGroupFilter = null;
+        }
+
         root.addView(librarySearchToolbar(), marginBottom(8));
         root.addView(libraryFilterBar(), marginBottom(shouldShowLibrarySearchInput() ? 8 : 12));
         if (shouldShowLibrarySearchInput()) {
@@ -1090,6 +1103,8 @@ public final class MainActivity extends Activity {
             }
             libraryFilter = filter;
             selectedTrack = null;
+            focusedLibraryGroup = null;
+            focusedLibraryGroupFilter = null;
             renderCurrentTab();
         });
         return chip;
@@ -1262,6 +1277,8 @@ public final class MainActivity extends Activity {
         librarySource = nextSource;
         getPreferences().edit().putString(PREF_LIBRARY_SOURCE, librarySource).apply();
         selectedTrack = null;
+        focusedLibraryGroup = null;
+        focusedLibraryGroupFilter = null;
         libraryLoaded = false;
         startLibraryRefresh(true);
     }
@@ -1316,26 +1333,46 @@ public final class MainActivity extends Activity {
     private List<LibraryGroup> visibleLibraryGroups() {
         Map<String, List<DeviceAudioTrack>> grouped = new LinkedHashMap<>();
         for (DeviceAudioTrack track : visibleLibraryTracks()) {
-            String key = libraryFilter == LibraryFilter.ALBUM ? track.album() : track.artist();
+            String key = libraryGroupKey(track, libraryFilter);
             grouped.computeIfAbsent(key, ignored -> new ArrayList<>()).add(track);
         }
 
         List<LibraryGroup> groups = new ArrayList<>();
         for (Map.Entry<String, List<DeviceAudioTrack>> entry : grouped.entrySet()) {
-            groups.add(libraryGroup(entry.getKey(), entry.getValue()));
+            groups.add(libraryGroup(entry.getKey(), entry.getValue(), libraryFilter));
         }
         groups.sort((first, second) -> first.title.compareToIgnoreCase(second.title));
         return groups;
     }
 
-    private LibraryGroup libraryGroup(String title, List<DeviceAudioTrack> tracks) {
+    private String libraryGroupKey(DeviceAudioTrack track, LibraryFilter filter) {
+        return filter == LibraryFilter.ALBUM ? track.album() : track.artist();
+    }
+
+    private LibraryGroup libraryGroup(String title, List<DeviceAudioTrack> tracks, LibraryFilter filter) {
         String subtitle;
-        if (libraryFilter == LibraryFilter.ALBUM) {
+        if (filter == LibraryFilter.ALBUM) {
             subtitle = albumArtistSummary(tracks) + " · " + tracks.size() + "곡 · " + totalDurationLabel(tracks);
         } else {
             subtitle = distinctAlbumCount(tracks) + "개 앨범 · " + tracks.size() + "곡 · " + totalDurationLabel(tracks);
         }
         return new LibraryGroup(title, subtitle, bestCoverTrack(tracks), tracks);
+    }
+
+    private LibraryGroup currentFocusedLibraryGroup() {
+        if (focusedLibraryGroup == null || focusedLibraryGroupFilter == null) {
+            return null;
+        }
+        List<DeviceAudioTrack> tracks = new ArrayList<>();
+        for (DeviceAudioTrack track : libraryTracks) {
+            if (focusedLibraryGroup.title.equals(libraryGroupKey(track, focusedLibraryGroupFilter))) {
+                tracks.add(track);
+            }
+        }
+        if (tracks.isEmpty()) {
+            return focusedLibraryGroup;
+        }
+        return libraryGroup(focusedLibraryGroup.title, tracks, focusedLibraryGroupFilter);
     }
 
     private String albumArtistSummary(List<DeviceAudioTrack> tracks) {
@@ -1395,7 +1432,7 @@ public final class MainActivity extends Activity {
     private View libraryGroupCard(LibraryGroup group) {
         LinearLayout card = panel();
         card.setPadding(dp(10), dp(10), dp(10), dp(12));
-        card.setOnClickListener(view -> playLibraryGroup(group));
+        card.setOnClickListener(view -> handleLibraryGroupClick(group));
 
         SquareFrameLayout coverFrame = new SquareFrameLayout(this);
         coverFrame.addView(groupCoverView(group), new FrameLayout.LayoutParams(
@@ -1422,7 +1459,7 @@ public final class MainActivity extends Activity {
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(10), dp(10), dp(10), dp(10));
         row.setBackground(rounded(color(R.color.ytet_panel), 8));
-        row.setOnClickListener(view -> playLibraryGroup(group));
+        row.setOnClickListener(view -> handleLibraryGroupClick(group));
 
         LinearLayout.LayoutParams coverParams = new LinearLayout.LayoutParams(dp(58), dp(58));
         coverParams.setMargins(0, 0, dp(12), 0);
@@ -1442,6 +1479,131 @@ public final class MainActivity extends Activity {
         return row;
     }
 
+    private void handleLibraryGroupClick(LibraryGroup group) {
+        if (libraryFilter == LibraryFilter.ALBUM) {
+            focusedLibraryGroup = group;
+            focusedLibraryGroupFilter = LibraryFilter.ALBUM;
+            selectedTrack = null;
+            renderCurrentTab();
+            return;
+        }
+        playLibraryGroup(group);
+    }
+
+    private void buildLibraryGroupDetail(LinearLayout root, LibraryGroup group) {
+        LinearLayout top = new LinearLayout(this);
+        top.setOrientation(LinearLayout.HORIZONTAL);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        ImageButton back = toolbarIconButton(R.drawable.ic_arrow_back, "앨범 목록", false);
+        back.setOnClickListener(view -> {
+            focusedLibraryGroup = null;
+            focusedLibraryGroupFilter = null;
+            renderCurrentTab();
+        });
+        top.addView(back, new LinearLayout.LayoutParams(dp(44), dp(44)));
+        View spacer = new View(this);
+        top.addView(spacer, new LinearLayout.LayoutParams(0, dp(44), 1f));
+        ImageButton search = toolbarIconButton(R.drawable.ic_search, "검색", false);
+        search.setOnClickListener(view -> {
+            focusedLibraryGroup = null;
+            focusedLibraryGroupFilter = null;
+            librarySearchVisible = true;
+            renderCurrentTab();
+        });
+        top.addView(search, new LinearLayout.LayoutParams(dp(44), dp(44)));
+        root.addView(top, marginBottom(24));
+
+        LinearLayout hero = new LinearLayout(this);
+        hero.setOrientation(LinearLayout.HORIZONTAL);
+        hero.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams coverParams = new LinearLayout.LayoutParams(dp(142), dp(142));
+        coverParams.setMargins(0, 0, dp(18), 0);
+        hero.addView(groupCoverView(group), coverParams);
+
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        TextView title = text(group.title, 27, R.color.ytet_text, true);
+        title.setMaxLines(2);
+        title.setEllipsize(TextUtils.TruncateAt.END);
+        copy.addView(title, marginBottom(8));
+        TextView subtitle = muted(group.subtitle, 15);
+        subtitle.setMaxLines(2);
+        subtitle.setEllipsize(TextUtils.TruncateAt.END);
+        copy.addView(subtitle, marginBottom(12));
+        ImageButton more = playerIconButton(R.drawable.ic_more_vert, "상세정보", false, true);
+        more.setPadding(dp(10), dp(10), dp(10), dp(10));
+        more.setOnClickListener(view -> showLibraryGroupDetails(group));
+        copy.addView(more, new LinearLayout.LayoutParams(dp(44), dp(44)));
+        hero.addView(copy, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        root.addView(hero, marginBottom(24));
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        Button play = primaryButton("▶  재생");
+        play.setOnClickListener(view -> playLibraryGroup(group, 0, false));
+        actions.addView(play, weightedControlParams(1, 10));
+        Button shuffle = secondaryButton("♢  셔플");
+        shuffle.setOnClickListener(view -> playLibraryGroup(group, 0, true));
+        actions.addView(shuffle, weightedControlParams(1, 0));
+        root.addView(actions, marginBottom(22));
+
+        for (int index = 0; index < group.tracks.size(); index++) {
+            root.addView(libraryGroupTrackRow(group, group.tracks.get(index), index), marginBottom(6));
+        }
+    }
+
+    private View libraryGroupTrackRow(LibraryGroup group, DeviceAudioTrack track, int index) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(8), dp(9), dp(6), dp(9));
+        row.setBackground(rounded(track.id() == playbackTrackId ? selectedTrackBackgroundColor() : Color.TRANSPARENT, 8));
+        row.setOnClickListener(view -> {
+            selectLibraryTrack(track);
+            playLibraryGroup(group, index, false);
+        });
+
+        TextView number = muted(Integer.toString(index + 1), 13);
+        number.setGravity(Gravity.CENTER);
+        row.addView(number, new LinearLayout.LayoutParams(dp(34), LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        LinearLayout info = new LinearLayout(this);
+        info.setOrientation(LinearLayout.VERTICAL);
+        TextView title = text(track.title(), 15, R.color.ytet_text, true);
+        title.setSingleLine(true);
+        title.setEllipsize(TextUtils.TruncateAt.END);
+        info.addView(title, marginBottom(4));
+        TextView meta = muted(track.artist() + " · " + MusicLibrary.formatDuration(track.durationMs()), 12);
+        meta.setSingleLine(true);
+        meta.setEllipsize(TextUtils.TruncateAt.END);
+        info.addView(meta, matchWrap());
+        row.addView(info, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        ImageButton more = trackMoreButton(track);
+        row.addView(more, new LinearLayout.LayoutParams(dp(42), dp(42)));
+        return row;
+    }
+
+    private void showLibraryGroupDetails(LibraryGroup group) {
+        LinearLayout body = dialogBody("상세정보");
+        body.addView(trackDetailItem("앨범", group.title), marginBottom(10));
+        body.addView(trackDetailItem("아티스트", albumArtistSummary(group.tracks)), marginBottom(10));
+        body.addView(trackDetailItem("수록곡", group.tracks.size() + "곡"), marginBottom(10));
+        body.addView(trackDetailItem("전체 재생시간", totalDurationLabel(group.tracks)), marginBottom(14));
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setView(body)
+                .create();
+        LinearLayout actions = new LinearLayout(this);
+        actions.setGravity(Gravity.END);
+        Button close = detailActionButton("닫기");
+        close.setOnClickListener(view -> dialog.dismiss());
+        actions.addView(close, fixedButtonParams(76, 38, 0));
+        body.addView(actions, matchWrap());
+        dialog.show();
+        styleDetailDialog(dialog);
+    }
+
     private View groupCoverView(LibraryGroup group) {
         if (group.coverTrack != null) {
             return trackCoverView(group.coverTrack);
@@ -1453,23 +1615,30 @@ public final class MainActivity extends Activity {
     }
 
     private void playLibraryGroup(LibraryGroup group) {
+        playLibraryGroup(group, 0, true);
+    }
+
+    private void playLibraryGroup(LibraryGroup group, int startIndex, boolean shuffle) {
         if (group == null || group.tracks.isEmpty()) {
             toast("재생할 음악이 없습니다.");
             return;
         }
-        String category = libraryFilter == LibraryFilter.ALBUM ? "앨범" : "아티스트";
+        int safeIndex = Math.max(0, Math.min(startIndex, group.tracks.size() - 1));
+        LibraryFilter groupFilter = focusedLibraryGroupFilter == null ? libraryFilter : focusedLibraryGroupFilter;
+        String category = groupFilter == LibraryFilter.ALBUM ? "앨범" : "아티스트";
         MusicStation station = new MusicStation(
-                category + "-" + Integer.toHexString(group.title.hashCode()),
+                category + "-" + Integer.toHexString(group.title.hashCode()) + (shuffle ? "-shuffle" : "-ordered"),
                 group.title,
                 category,
                 group.subtitle,
                 group.tracks.size() + "곡 재생",
-                MusicStation.MixType.ALL,
+                shuffle ? MusicStation.MixType.ALL : MusicStation.MixType.TRACK,
                 "",
                 color(R.color.ytet_accent)
         );
         activeStation = station;
         activeQueuePreview = new ArrayList<>(group.tracks);
+        applyPreviewTrackTheme(group.tracks.get(safeIndex));
         playbackHasQueue = true;
         playbackPlaying = false;
         playbackPreparing = true;
@@ -1479,7 +1648,7 @@ public final class MainActivity extends Activity {
         playbackMeta = station.subtitle();
         setStreamingStatus("준비 중: " + station.title());
         updateNowPlayingBar();
-        startPlayback(PlaybackService.playQueueIntent(this, station, group.tracks));
+        startPlayback(PlaybackService.playQueueIntent(this, station, group.tracks, safeIndex));
     }
 
     private boolean trackMatchesQuery(DeviceAudioTrack track, String query) {
@@ -2243,7 +2412,7 @@ public final class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
         ));
-        root.setPadding(dp(20), dp(22), dp(20), dp(8));
+        root.setPadding(dp(20), dp(22), dp(20), dp(24));
         updatePlaybackThemeColor(false);
         root.setBackground(expandedPlayerBackground(false));
         root.setPlayerSurfaceStyle(true);
@@ -2263,7 +2432,7 @@ public final class MainActivity extends Activity {
         top.addView(mix, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         View spacer = new View(this);
         top.addView(spacer, new LinearLayout.LayoutParams(dp(44), dp(42)));
-        root.addView(top, marginBottom(14));
+        root.addView(top, marginBottom(26));
 
         root.addView(coverArtView(), coverParams());
         if (hasSleepTimer()) {
@@ -2279,8 +2448,11 @@ public final class MainActivity extends Activity {
             @Override
             public void onSeekStarted(long positionMs) {
                 playbackSeeking = true;
+                resumePlaybackAfterSeek = playbackPlaying || playbackWillPlay;
                 playbackSeekPreviewMs = positionMs;
-                startPlayback(PlaybackService.commandIntent(MainActivity.this, PlaybackService.ACTION_PAUSE));
+                if (resumePlaybackAfterSeek) {
+                    startPlayback(PlaybackService.commandIntent(MainActivity.this, PlaybackService.ACTION_PAUSE));
+                }
             }
 
             @Override
@@ -2293,13 +2465,23 @@ public final class MainActivity extends Activity {
                 playbackSeeking = false;
                 playbackPositionMs = positionMs;
                 playbackSeekPreviewMs = positionMs;
+                boolean shouldResume = resumePlaybackAfterSeek;
+                resumePlaybackAfterSeek = false;
                 startPlayback(PlaybackService.seekIntent(MainActivity.this, positionMs));
+                if (shouldResume) {
+                    startPlayback(PlaybackService.commandIntent(MainActivity.this, PlaybackService.ACTION_PLAY));
+                }
                 updateExpandedPlayer();
             }
 
             @Override
             public void onSeekCanceled() {
                 playbackSeeking = false;
+                boolean shouldResume = resumePlaybackAfterSeek;
+                resumePlaybackAfterSeek = false;
+                if (shouldResume) {
+                    startPlayback(PlaybackService.commandIntent(MainActivity.this, PlaybackService.ACTION_PLAY));
+                }
                 updateExpandedPlayer();
             }
         });
@@ -2336,7 +2518,7 @@ public final class MainActivity extends Activity {
         controls.addView(play, playerControlParams(5));
         controls.addView(next, playerControlParams(5));
         controls.addView(repeat, playerControlParams(0));
-        root.addView(controls, marginBottom(8));
+        root.addView(controls, marginBottom(6));
 
         LinearLayout tools = new LinearLayout(this);
         tools.setOrientation(LinearLayout.HORIZONTAL);
@@ -2369,7 +2551,7 @@ public final class MainActivity extends Activity {
         tools.addView(queue, new LinearLayout.LayoutParams(dp(58), dp(58)));
         root.addView(tools, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(76)
+                dp(98)
         ));
         return root;
     }
