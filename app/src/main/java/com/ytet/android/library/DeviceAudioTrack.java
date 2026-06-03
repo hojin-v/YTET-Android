@@ -11,6 +11,7 @@ public final class DeviceAudioTrack {
     private final String albumArtUri;
     private final long albumId;
     private final int trackNumber;
+    private final long dateAddedMs;
     private final long durationMs;
     private final long sizeBytes;
 
@@ -25,7 +26,7 @@ public final class DeviceAudioTrack {
             long durationMs,
             long sizeBytes
     ) {
-        this(id, title, artist, album, displayName, folder, contentUri, "", 0L, 0, durationMs, sizeBytes);
+        this(id, title, artist, album, displayName, folder, contentUri, "", 0L, 0, 0L, durationMs, sizeBytes);
     }
 
     public DeviceAudioTrack(
@@ -40,7 +41,7 @@ public final class DeviceAudioTrack {
             long durationMs,
             long sizeBytes
     ) {
-        this(id, title, artist, album, displayName, folder, contentUri, albumArtUri, 0L, 0, durationMs, sizeBytes);
+        this(id, title, artist, album, displayName, folder, contentUri, albumArtUri, 0L, 0, 0L, durationMs, sizeBytes);
     }
 
     public DeviceAudioTrack(
@@ -54,6 +55,7 @@ public final class DeviceAudioTrack {
             String albumArtUri,
             long albumId,
             int trackNumber,
+            long dateAddedMs,
             long durationMs,
             long sizeBytes
     ) {
@@ -67,6 +69,7 @@ public final class DeviceAudioTrack {
         this.albumArtUri = clean(albumArtUri, "");
         this.albumId = Math.max(0L, albumId);
         this.trackNumber = Math.max(0, trackNumber);
+        this.dateAddedMs = Math.max(0L, dateAddedMs);
         this.durationMs = Math.max(0, durationMs);
         this.sizeBytes = Math.max(0, sizeBytes);
     }
@@ -109,6 +112,10 @@ public final class DeviceAudioTrack {
 
     public int trackNumber() {
         return trackNumber;
+    }
+
+    public long dateAddedMs() {
+        return dateAddedMs;
     }
 
     public long durationMs() {

@@ -104,6 +104,7 @@ public final class MainActivity extends Activity {
     private static final String PREF_UPDATE_DOWNLOAD_ID = "update_download_id";
     private static final String PREF_UPDATE_TAG = "update_tag";
     private static final String PREF_LIBRARY_SOURCE = "library_source";
+    private static final String PREF_LIBRARY_SORT = "library_sort";
     private static final String LIBRARY_SOURCE_COLLECTION = "collection";
     private static final String LIBRARY_SOURCE_DEVICE = "device";
 
@@ -195,6 +196,7 @@ public final class MainActivity extends Activity {
     private boolean homeLoading;
     private String homeStatus = "보관함 음악을 스캔하면 추천 믹스가 표시됩니다.";
     private LibraryFilter libraryFilter = LibraryFilter.ALL;
+    private LibrarySort librarySort = LibrarySort.NEWEST;
     private String librarySearchQuery = "";
     private boolean libraryGridView;
     private boolean librarySearchVisible;
@@ -336,6 +338,7 @@ public final class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         outputTreeUri = getPreferences().getString(PREF_OUTPUT_TREE, null);
         librarySource = getPreferences().getString(PREF_LIBRARY_SOURCE, LIBRARY_SOURCE_COLLECTION);
+        librarySort = LibrarySort.fromKey(getPreferences().getString(PREF_LIBRARY_SORT, LibrarySort.NEWEST.key));
         updateDownloadId = getPreferences().getLong(PREF_UPDATE_DOWNLOAD_ID, NO_DOWNLOAD_ID);
         ensureDefaultMediaFolders();
         clearInstalledPendingUpdateIfNeeded();
@@ -1198,15 +1201,31 @@ public final class MainActivity extends Activity {
     }
 
     private View libraryFilterBar() {
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+
         HorizontalScrollView shelf = new HorizontalScrollView(this);
         shelf.setHorizontalScrollBarEnabled(false);
+        shelf.setHorizontalFadingEdgeEnabled(true);
+        shelf.setFadingEdgeLength(dp(28));
+        shelf.setOverScrollMode(View.OVER_SCROLL_NEVER);
+
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.addView(libraryFilterChip("전체", LibraryFilter.ALL), marginRight(8, LinearLayout.LayoutParams.WRAP_CONTENT, dp(38)));
         row.addView(libraryFilterChip("앨범", LibraryFilter.ALBUM), marginRight(8, LinearLayout.LayoutParams.WRAP_CONTENT, dp(38)));
         row.addView(libraryFilterChip("아티스트", LibraryFilter.ARTIST), marginRight(0, LinearLayout.LayoutParams.WRAP_CONTENT, dp(38)));
         shelf.addView(row, matchWrap());
-        return shelf;
+        bar.addView(shelf, new LinearLayout.LayoutParams(0, dp(38), 1f));
+
+        Button sort = compactButton(librarySort.label + " ▾");
+        sort.setGravity(Gravity.CENTER);
+        sort.setOnClickListener(view -> showLibrarySortDialog());
+        LinearLayout.LayoutParams sortParams = new LinearLayout.LayoutParams(dp(92), dp(38));
+        sortParams.setMargins(dp(10), 0, 0, 0);
+        bar.addView(sort, sortParams);
+        return bar;
     }
 
     private Button libraryFilterChip(String label, LibraryFilter filter) {
@@ -1227,6 +1246,41 @@ public final class MainActivity extends Activity {
             renderCurrentTab();
         });
         return chip;
+    }
+
+    private void showLibrarySortDialog() {
+        AlertDialog dialog = new AlertDialog.Builder(this).create();
+        LinearLayout body = dialogBody("정렬");
+        for (LibrarySort sort : LibrarySort.values()) {
+            body.addView(librarySourceOption(
+                    sort.label,
+                    sort.description,
+                    librarySort == sort,
+                    () -> {
+                        setLibrarySort(sort);
+                        dialog.dismiss();
+                    }
+            ), marginBottom(8));
+        }
+        LinearLayout actions = new LinearLayout(this);
+        actions.setGravity(Gravity.END);
+        Button close = detailActionButton("닫기");
+        close.setOnClickListener(view -> dialog.dismiss());
+        actions.addView(close, fixedButtonParams(76, 38, 0));
+        body.addView(actions, matchWrap());
+        dialog.setView(body);
+        dialog.show();
+        styleDetailDialog(dialog);
+    }
+
+    private void setLibrarySort(LibrarySort sort) {
+        if (sort == null || sort == librarySort) {
+            return;
+        }
+        librarySort = sort;
+        getPreferences().edit().putString(PREF_LIBRARY_SORT, sort.key).apply();
+        selectedTrack = null;
+        refreshLibraryResultsOnly();
     }
 
     private View libraryViewToolbar() {
@@ -1460,7 +1514,7 @@ public final class MainActivity extends Activity {
     private List<DeviceAudioTrack> visibleLibraryTracks() {
         String query = librarySearchQuery == null ? "" : librarySearchQuery.trim().toLowerCase(Locale.ROOT);
         if (query.isEmpty()) {
-            return new ArrayList<>(libraryTracks);
+            return sortedLibraryTracks(libraryTracks, libraryFilter);
         }
 
         List<DeviceAudioTrack> matches = new ArrayList<>();
@@ -1469,7 +1523,7 @@ public final class MainActivity extends Activity {
                 matches.add(track);
             }
         }
-        return matches;
+        return sortedLibraryTracks(matches, libraryFilter);
     }
 
     private List<LibraryGroup> visibleLibraryGroups() {
@@ -1494,7 +1548,7 @@ public final class MainActivity extends Activity {
                     filter
             ));
         }
-        groups.sort((first, second) -> first.title.compareToIgnoreCase(second.title));
+        groups.sort((first, second) -> compareLibraryGroups(first, second, filter));
         return groups;
     }
 
@@ -1599,10 +1653,69 @@ public final class MainActivity extends Activity {
 
     private List<DeviceAudioTrack> orderedGroupTracks(List<DeviceAudioTrack> tracks, LibraryFilter filter) {
         List<DeviceAudioTrack> ordered = tracks == null ? new ArrayList<>() : new ArrayList<>(tracks);
-        if (filter == LibraryFilter.ALBUM) {
-            ordered.sort(this::compareAlbumTrackOrder);
-        }
+        ordered.sort((first, second) -> compareLibraryTracks(first, second, filter));
         return ordered;
+    }
+
+    private List<DeviceAudioTrack> sortedLibraryTracks(List<DeviceAudioTrack> tracks, LibraryFilter filter) {
+        List<DeviceAudioTrack> sorted = tracks == null ? new ArrayList<>() : new ArrayList<>(tracks);
+        sorted.sort((first, second) -> compareLibraryTracks(first, second, filter));
+        return sorted;
+    }
+
+    private int compareLibraryTracks(DeviceAudioTrack first, DeviceAudioTrack second, LibraryFilter filter) {
+        switch (librarySort) {
+            case OLDEST:
+                return compareByDate(first, second, true);
+            case NAME:
+                return compareTrackName(first, second);
+            case PLAY_ORDER:
+                return filter == LibraryFilter.ALBUM
+                        ? compareAlbumTrackOrder(first, second)
+                        : comparePlaybackOrder(first, second);
+            case NEWEST:
+            default:
+                return compareByDate(first, second, false);
+        }
+    }
+
+    private int compareLibraryGroups(LibraryGroup first, LibraryGroup second, LibraryFilter filter) {
+        switch (librarySort) {
+            case OLDEST:
+                int oldest = Long.compare(groupOldestTimestamp(first), groupOldestTimestamp(second));
+                return oldest != 0 ? oldest : compareGroupName(first, second);
+            case NAME:
+                return compareGroupName(first, second);
+            case PLAY_ORDER:
+                if (filter == LibraryFilter.ALBUM) {
+                    int playback = comparePlaybackOrder(firstPlayableTrack(first), firstPlayableTrack(second));
+                    return playback != 0 ? playback : compareGroupName(first, second);
+                }
+                return compareGroupName(first, second);
+            case NEWEST:
+            default:
+                int newest = Long.compare(groupNewestTimestamp(second), groupNewestTimestamp(first));
+                return newest != 0 ? newest : compareGroupName(first, second);
+        }
+    }
+
+    private int compareByDate(DeviceAudioTrack first, DeviceAudioTrack second, boolean oldestFirst) {
+        int result = oldestFirst
+                ? Long.compare(trackSortTimestamp(first), trackSortTimestamp(second))
+                : Long.compare(trackSortTimestamp(second), trackSortTimestamp(first));
+        return result != 0 ? result : compareTrackName(first, second);
+    }
+
+    private int comparePlaybackOrder(DeviceAudioTrack first, DeviceAudioTrack second) {
+        int folder = compareTextValues(first == null ? "" : first.folder(), second == null ? "" : second.folder());
+        if (folder != 0) {
+            return folder;
+        }
+        int album = compareTextValues(first == null ? "" : first.album(), second == null ? "" : second.album());
+        if (album != 0) {
+            return album;
+        }
+        return compareAlbumTrackOrder(first, second);
     }
 
     private int compareAlbumTrackOrder(DeviceAudioTrack first, DeviceAudioTrack second) {
@@ -1611,11 +1724,72 @@ public final class MainActivity extends Activity {
         if (firstNumber != secondNumber) {
             return Integer.compare(firstNumber, secondNumber);
         }
-        return first.title().compareToIgnoreCase(second.title());
+        return compareTrackName(first, second);
     }
 
     private int trackSortNumber(DeviceAudioTrack track) {
-        return track.trackNumber() > 0 ? track.trackNumber() : Integer.MAX_VALUE;
+        return track != null && track.trackNumber() > 0 ? track.trackNumber() : Integer.MAX_VALUE;
+    }
+
+    private long trackSortTimestamp(DeviceAudioTrack track) {
+        if (track == null) {
+            return 0L;
+        }
+        return track.dateAddedMs() > 0L ? track.dateAddedMs() : track.id();
+    }
+
+    private int compareTrackName(DeviceAudioTrack first, DeviceAudioTrack second) {
+        int title = compareTextValues(first == null ? "" : first.title(), second == null ? "" : second.title());
+        if (title != 0) {
+            return title;
+        }
+        int artist = compareTextValues(first == null ? "" : first.artist(), second == null ? "" : second.artist());
+        if (artist != 0) {
+            return artist;
+        }
+        return compareTextValues(first == null ? "" : first.album(), second == null ? "" : second.album());
+    }
+
+    private int compareGroupName(LibraryGroup first, LibraryGroup second) {
+        return compareTextValues(first == null ? "" : first.title, second == null ? "" : second.title);
+    }
+
+    private int compareTextValues(String first, String second) {
+        String left = first == null ? "" : first.trim();
+        String right = second == null ? "" : second.trim();
+        return left.compareToIgnoreCase(right);
+    }
+
+    private long groupNewestTimestamp(LibraryGroup group) {
+        if (group == null) {
+            return 0L;
+        }
+        long newest = 0L;
+        for (DeviceAudioTrack track : group.tracks) {
+            newest = Math.max(newest, trackSortTimestamp(track));
+        }
+        return newest;
+    }
+
+    private long groupOldestTimestamp(LibraryGroup group) {
+        if (group == null) {
+            return 0L;
+        }
+        long oldest = Long.MAX_VALUE;
+        for (DeviceAudioTrack track : group.tracks) {
+            long timestamp = trackSortTimestamp(track);
+            if (timestamp > 0L) {
+                oldest = Math.min(oldest, timestamp);
+            }
+        }
+        return oldest == Long.MAX_VALUE ? 0L : oldest;
+    }
+
+    private DeviceAudioTrack firstPlayableTrack(LibraryGroup group) {
+        if (group == null || group.tracks.isEmpty()) {
+            return null;
+        }
+        return group.tracks.get(0);
     }
 
     private LibraryGroup currentFocusedLibraryGroup() {
@@ -4817,6 +4991,32 @@ public final class MainActivity extends Activity {
         ALL,
         ALBUM,
         ARTIST
+    }
+
+    private enum LibrarySort {
+        NEWEST("newest", "최신순", "최근 추가된 음악부터 표시"),
+        OLDEST("oldest", "오래된순", "오래전에 추가된 음악부터 표시"),
+        NAME("name", "이름순", "이름을 기준으로 정렬"),
+        PLAY_ORDER("play_order", "재생순", "폴더와 앨범의 재생 흐름을 기준으로 정렬");
+
+        private final String key;
+        private final String label;
+        private final String description;
+
+        LibrarySort(String key, String label, String description) {
+            this.key = key;
+            this.label = label;
+            this.description = description;
+        }
+
+        private static LibrarySort fromKey(String key) {
+            for (LibrarySort sort : values()) {
+                if (sort.key.equals(key)) {
+                    return sort;
+                }
+            }
+            return NEWEST;
+        }
     }
 
     private enum ArtistDetailMode {
