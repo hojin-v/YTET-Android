@@ -47,6 +47,8 @@ import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowManager;
+import android.window.OnBackInvokedCallback;
+import android.window.OnBackInvokedDispatcher;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
@@ -128,6 +130,7 @@ public final class MainActivity extends Activity {
     private Dialog playerDialog;
     private Dialog queueDialog;
     private AlertDialog updateDialog;
+    private OnBackInvokedCallback backInvokedCallback;
 
     private EditText urlInput;
     private RadioGroup mediaGroup;
@@ -344,6 +347,7 @@ public final class MainActivity extends Activity {
         ensureDefaultMediaFolders();
         clearInstalledPendingUpdateIfNeeded();
         setContentView(buildContent());
+        registerBackNavigationCallback();
         startUpdateCheck(false);
     }
 
@@ -413,6 +417,7 @@ public final class MainActivity extends Activity {
             updateDialog.dismiss();
             updateDialog = null;
         }
+        unregisterBackNavigationCallback();
         libraryExecutor.shutdownNow();
         updateExecutor.shutdownNow();
         super.onDestroy();
@@ -420,10 +425,56 @@ public final class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        if (closeOpenDialogFromBack()) {
+            return;
+        }
         if (handleLibraryBackNavigation()) {
             return;
         }
         super.onBackPressed();
+    }
+
+    private void registerBackNavigationCallback() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || backInvokedCallback != null) {
+            return;
+        }
+        backInvokedCallback = () -> {
+            if (closeOpenDialogFromBack()) {
+                return;
+            }
+            if (handleLibraryBackNavigation()) {
+                return;
+            }
+            finish();
+        };
+        getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                OnBackInvokedDispatcher.PRIORITY_DEFAULT,
+                backInvokedCallback
+        );
+    }
+
+    private void unregisterBackNavigationCallback() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || backInvokedCallback == null) {
+            return;
+        }
+        getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(backInvokedCallback);
+        backInvokedCallback = null;
+    }
+
+    private boolean closeOpenDialogFromBack() {
+        if (queueDialog != null && queueDialog.isShowing()) {
+            queueDialog.dismiss();
+            return true;
+        }
+        if (playerDialog != null && playerDialog.isShowing()) {
+            playerDialog.dismiss();
+            return true;
+        }
+        if (updateDialog != null && updateDialog.isShowing()) {
+            updateDialog.dismiss();
+            return true;
+        }
+        return false;
     }
 
     @Override
@@ -1663,7 +1714,11 @@ public final class MainActivity extends Activity {
 
     private List<DeviceAudioTrack> orderedGroupTracks(List<DeviceAudioTrack> tracks, LibraryFilter filter) {
         List<DeviceAudioTrack> ordered = tracks == null ? new ArrayList<>() : new ArrayList<>(tracks);
-        ordered.sort((first, second) -> compareLibraryTracks(first, second, filter));
+        if (filter == LibraryFilter.ALBUM) {
+            ordered.sort(this::compareAlbumTrackOrder);
+        } else {
+            ordered.sort((first, second) -> compareLibraryTracks(first, second, filter));
+        }
         return ordered;
     }
 
@@ -1724,16 +1779,55 @@ public final class MainActivity extends Activity {
     }
 
     private int compareAlbumTrackOrder(DeviceAudioTrack first, DeviceAudioTrack second) {
-        int firstNumber = trackSortNumber(first);
-        int secondNumber = trackSortNumber(second);
+        int firstNumber = albumTrackSortNumber(first);
+        int secondNumber = albumTrackSortNumber(second);
         if (firstNumber != secondNumber) {
             return Integer.compare(firstNumber, secondNumber);
         }
-        return compareTrackName(first, second);
+        return compareAlbumStoredOrder(first, second);
     }
 
-    private int trackSortNumber(DeviceAudioTrack track) {
-        return track != null && track.trackNumber() > 0 ? track.trackNumber() : Integer.MAX_VALUE;
+    private int albumTrackSortNumber(DeviceAudioTrack track) {
+        if (track == null) {
+            return Integer.MAX_VALUE;
+        }
+        if (track.trackNumber() > 0) {
+            return track.trackNumber();
+        }
+        int filePrefix = leadingTrackNumber(track.displayName());
+        if (filePrefix > 0) {
+            return filePrefix;
+        }
+        int titlePrefix = leadingTrackNumber(track.title());
+        return titlePrefix > 0 ? titlePrefix : Integer.MAX_VALUE;
+    }
+
+    private int leadingTrackNumber(String value) {
+        if (value == null) {
+            return 0;
+        }
+        String text = value.trim();
+        int index = 0;
+        int number = 0;
+        while (index < text.length() && Character.isDigit(text.charAt(index)) && index < 3) {
+            number = number * 10 + (text.charAt(index) - '0');
+            index++;
+        }
+        if (index == 0 || number <= 0 || number > 999) {
+            return 0;
+        }
+        if (index < text.length() && Character.isLetterOrDigit(text.charAt(index))) {
+            return 0;
+        }
+        return number;
+    }
+
+    private int compareAlbumStoredOrder(DeviceAudioTrack first, DeviceAudioTrack second) {
+        int stored = Long.compare(trackSortTimestamp(first), trackSortTimestamp(second));
+        if (stored != 0) {
+            return stored;
+        }
+        return Long.compare(first == null ? 0L : first.id(), second == null ? 0L : second.id());
     }
 
     private long trackSortTimestamp(DeviceAudioTrack track) {
@@ -1984,7 +2078,7 @@ public final class MainActivity extends Activity {
         if (artistDetail) {
             Button viewMode = toolbarTextButton(artistDetailModeLabel() + " ▾");
             viewMode.setOnClickListener(view -> showArtistDetailModeDialog());
-            top.addView(viewMode, marginRight(8, dp(92), dp(44)));
+            top.addView(viewMode, marginRight(2, dp(82), dp(44)));
         }
         ImageButton search = toolbarIconButton(R.drawable.ic_search, "검색", false);
         search.setOnClickListener(view -> {
@@ -2023,10 +2117,10 @@ public final class MainActivity extends Activity {
 
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
-        Button play = actionButtonWithIcon("재생", R.drawable.ic_play_arrow, true);
+        View play = actionButtonWithIcon("재생", R.drawable.ic_play_arrow, true);
         play.setOnClickListener(view -> playLibraryGroup(group, 0, false));
         actions.addView(play, weightedControlParams(1, 10));
-        Button shuffle = actionButtonWithIcon("셔플", R.drawable.ic_shuffle, false);
+        View shuffle = actionButtonWithIcon("셔플", R.drawable.ic_shuffle, false);
         shuffle.setOnClickListener(view -> playLibraryGroup(group, 0, true));
         actions.addView(shuffle, weightedControlParams(1, 0));
         root.addView(actions, marginBottom(22));
@@ -4236,16 +4330,34 @@ public final class MainActivity extends Activity {
         return button;
     }
 
-    private Button actionButtonWithIcon(String text, int iconRes, boolean primary) {
-        Button button = primary ? primaryButton(text) : secondaryButton(text);
+    private View actionButtonWithIcon(String text, int iconRes, boolean primary) {
+        LinearLayout button = new LinearLayout(this);
+        button.setOrientation(LinearLayout.HORIZONTAL);
+        button.setGravity(Gravity.CENTER_VERTICAL);
+        button.setClickable(true);
+        button.setFocusable(true);
+        button.setPadding(dp(12), 0, dp(12), 0);
+        button.setBackground(rounded(primary ? color(R.color.ytet_accent) : color(R.color.ytet_panel_alt), 8));
+        int textColor = primary ? 0xFFFFFFFF : color(R.color.ytet_text);
+
+        FrameLayout iconSlot = new FrameLayout(this);
         Drawable icon = getDrawable(iconRes);
         if (icon != null) {
             icon = icon.mutate();
-            icon.setTint(button.getCurrentTextColor());
-            icon.setBounds(0, 0, dp(22), dp(22));
-            button.setCompoundDrawables(icon, null, null, null);
-            button.setCompoundDrawablePadding(dp(8));
+            icon.setTint(textColor);
+            ImageView iconView = new ImageView(this);
+            iconView.setImageDrawable(icon);
+            FrameLayout.LayoutParams iconParams = new FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER);
+            iconSlot.addView(iconView, iconParams);
         }
+        button.addView(iconSlot, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f));
+
+        TextView label = text(text, 15, primary ? android.R.color.white : R.color.ytet_text, true);
+        label.setGravity(Gravity.CENTER);
+        button.addView(label, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+        View rightSpace = new View(this);
+        button.addView(rightSpace, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f));
         return button;
     }
 

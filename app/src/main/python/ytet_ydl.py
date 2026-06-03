@@ -612,10 +612,25 @@ def playlist_artist_album_candidates(info):
         if separator in cleaned:
             left, right = cleaned.split(separator, 1)
             artist = clean_music_title(left)
-            album = clean_music_title(right)
+            album = clean_album_candidate(right)
             if artist and album:
                 return artist, album
-    return None, clean_music_title(cleaned)
+    return None, clean_album_candidate(cleaned)
+
+
+def clean_album_candidate(value):
+    text = remove_bracket_descriptors(value)
+    text = re.sub(r"(?i)\bfull\s+album\s+topic\b", " ", text)
+    text = re.sub(r"(?i)\bfull\s+album\b", " ", text)
+    text = re.sub(r"(?i)\balbum\s+topic\b", " ", text)
+    for pattern in (r"(?i)\bclean\b", r"(?i)\bexplicit\b"):
+        cleaned = clean_music_title(re.sub(pattern, " ", text))
+        if cleaned:
+            text = cleaned
+    without_year = clean_music_title(re.sub(r"\b(?:19|20)\d{2}\b\s*$", " ", text))
+    if without_year:
+        text = without_year
+    return clean_music_title(text)
 
 
 def match_release_for_playlist(entries, artist_candidate, album_candidate, client):
@@ -624,24 +639,34 @@ def match_release_for_playlist(entries, artist_candidate, album_candidate, clien
     clauses = [f'release:"{mb_escape(album_candidate)}"']
     if artist_candidate:
         clauses.append(f'artist:"{mb_escape(artist_candidate)}"')
-    results = client.search("release", " AND ".join(clauses), limit=5).get("releases") or []
-    best = None
-    best_score = 0
-    for release in results:
-        release_score = as_int(release.get("score")) or 0
-        title_score = similarity(album_candidate, release.get("title"))
-        artist_score = similarity(artist_candidate, artist_credit_name(release.get("artist-credit"))) if artist_candidate else 0.7
-        score = release_score / 100 * 0.45 + title_score * 0.35 + artist_score * 0.20
-        if score > best_score and release.get("id"):
-            best = release
-            best_score = score
-    if not best or best_score < 0.72:
-        return None
-    release = client.lookup_release(best["id"])
-    matches = release_track_matches(entries, release)
-    if len(entries) > 1 and matches < max(2, int(round(len(entries) * 0.5))):
-        return None
-    return release
+    results = client.search("release", " AND ".join(clauses), limit=10).get("releases") or []
+    minimum_matches = max(2, int(round(len(entries) * 0.5))) if len(entries) > 1 else 1
+    best_release = None
+    best_rank = None
+    for release_candidate in results:
+        release_id = release_candidate.get("id")
+        if not release_id:
+            continue
+        release_score = as_int(release_candidate.get("score")) or 0
+        title_score = similarity(album_candidate, release_candidate.get("title"))
+        artist_score = similarity(artist_candidate, artist_credit_name(release_candidate.get("artist-credit"))) if artist_candidate else 0.7
+        search_score = release_score / 100 * 0.45 + title_score * 0.35 + artist_score * 0.20
+        if search_score < 0.72:
+            continue
+        release = client.lookup_release(release_id)
+        tracks = release_tracks(release)
+        matches = release_track_matches(entries, release)
+        if len(entries) > 1 and matches < minimum_matches:
+            continue
+        track_count_delta = abs(len(tracks) - len(entries))
+        exact_count = 1 if len(tracks) == len(entries) else 0
+        rank = (matches, exact_count, -track_count_delta, search_score)
+        if best_rank is None or rank > best_rank:
+            best_release = release
+            best_rank = rank
+        if len(entries) > 1 and exact_count and matches == len(entries):
+            return release
+    return best_release
 
 
 def release_track_matches(entries, release):
