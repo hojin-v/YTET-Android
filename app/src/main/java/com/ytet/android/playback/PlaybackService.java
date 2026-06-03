@@ -8,6 +8,8 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.media.AudioAttributes;
 import android.media.AudioFocusRequest;
 import android.media.AudioManager;
@@ -17,6 +19,7 @@ import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
 import android.net.Uri;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
@@ -30,6 +33,7 @@ import com.ytet.android.ui.MainActivity;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.io.InputStream;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -125,6 +129,8 @@ public final class PlaybackService extends Service {
     private int repeatMode = REPEAT_OFF;
     private long sleepTimerEndAtMs;
     private String errorStatus;
+    private String cachedArtworkUri = "";
+    private Bitmap cachedArtwork;
 
     public static Intent playQueueIntent(Context context, MusicStation station, List<DeviceAudioTrack> tracks) {
         return playQueueIntent(context, station, tracks, 0);
@@ -201,6 +207,15 @@ public final class PlaybackService extends Service {
             @Override
             public void onStop() {
                 stopPlayback();
+            }
+
+            @Override
+            public void onCustomAction(String action, Bundle extras) {
+                if (ACTION_TOGGLE_SHUFFLE.equals(action)) {
+                    toggleShuffle();
+                } else if (ACTION_TOGGLE_REPEAT.equals(action)) {
+                    toggleRepeat();
+                }
             }
         });
         mediaSession.setActive(true);
@@ -729,33 +744,52 @@ public final class PlaybackService extends Service {
                 : new Notification.Builder(this);
 
         DeviceAudioTrack track = currentTrack();
+        Bitmap artwork = artworkFor(track);
         builder.setSmallIcon(R.drawable.ic_stat_playback)
                 .setContentTitle(track == null ? "YTET 로컬 플레이어" : track.title())
                 .setContentText(track == null ? "기기 저장 음악" : track.artist() + " · " + mixTitle)
                 .setContentIntent(contentIntent())
-                .setDeleteIntent(serviceAction(ACTION_STOP, 5))
+                .setDeleteIntent(serviceAction(ACTION_STOP, 6))
                 .setCategory(Notification.CATEGORY_TRANSPORT)
                 .setVisibility(Notification.VISIBILITY_PUBLIC)
                 .setShowWhen(false)
                 .setOnlyAlertOnce(true)
                 .setOngoing(playing || (preparing && startWhenPrepared));
+        if (artwork != null) {
+            builder.setLargeIcon(artwork);
+        }
 
-        builder.addAction(android.R.drawable.ic_media_previous, "이전", serviceAction(ACTION_PREVIOUS, 1));
         boolean waitingToPlay = preparing && startWhenPrepared;
+        builder.addAction(R.drawable.ic_shuffle, shuffleEnabled ? "셔플 켜짐" : "셔플", serviceAction(ACTION_TOGGLE_SHUFFLE, 1));
+        builder.addAction(R.drawable.ic_skip_previous, "이전", serviceAction(ACTION_PREVIOUS, 2));
         builder.addAction(
-                playing || waitingToPlay ? android.R.drawable.ic_media_pause : android.R.drawable.ic_media_play,
+                playing || waitingToPlay ? R.drawable.ic_pause : R.drawable.ic_play_arrow,
                 playing || waitingToPlay ? "일시정지" : "재생",
-                serviceAction(ACTION_TOGGLE, 2)
+                serviceAction(ACTION_TOGGLE, 3)
         );
-        builder.addAction(android.R.drawable.ic_media_next, "다음", serviceAction(ACTION_NEXT, 3));
-        builder.addAction(android.R.drawable.ic_menu_close_clear_cancel, "닫기", serviceAction(ACTION_STOP, 4));
+        builder.addAction(R.drawable.ic_skip_next, "다음", serviceAction(ACTION_NEXT, 4));
+        builder.addAction(
+                repeatMode == REPEAT_ONE ? R.drawable.ic_repeat_one : R.drawable.ic_repeat,
+                repeatNotificationLabel(),
+                serviceAction(ACTION_TOGGLE_REPEAT, 5)
+        );
 
         if (mediaSession != null) {
             builder.setStyle(new Notification.MediaStyle()
                     .setMediaSession(mediaSession.getSessionToken())
-                    .setShowActionsInCompactView(0, 1, 2));
+                    .setShowActionsInCompactView(1, 2, 3));
         }
         return builder.build();
+    }
+
+    private String repeatNotificationLabel() {
+        if (repeatMode == REPEAT_ONE) {
+            return "한 곡 반복";
+        }
+        if (repeatMode == REPEAT_ALL) {
+            return "전체 반복";
+        }
+        return "반복";
     }
 
     private PendingIntent contentIntent() {
@@ -780,12 +814,19 @@ public final class PlaybackService extends Service {
         }
         DeviceAudioTrack track = currentTrack();
         if (track != null) {
-            mediaSession.setMetadata(new MediaMetadata.Builder()
+            Bitmap artwork = artworkFor(track);
+            MediaMetadata.Builder metadata = new MediaMetadata.Builder()
                     .putString(MediaMetadata.METADATA_KEY_TITLE, track.title())
                     .putString(MediaMetadata.METADATA_KEY_ARTIST, track.artist())
                     .putString(MediaMetadata.METADATA_KEY_ALBUM, track.album())
-                    .putLong(MediaMetadata.METADATA_KEY_DURATION, track.durationMs())
-                    .build());
+                    .putString(MediaMetadata.METADATA_KEY_ART_URI, track.albumArtUri())
+                    .putString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI, track.albumArtUri())
+                    .putLong(MediaMetadata.METADATA_KEY_DURATION, track.durationMs());
+            if (artwork != null) {
+                metadata.putBitmap(MediaMetadata.METADATA_KEY_ART, artwork);
+                metadata.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, artwork);
+            }
+            mediaSession.setMetadata(metadata.build());
         }
 
         int state;
@@ -814,10 +855,56 @@ public final class PlaybackService extends Service {
         PlaybackState.Builder builder = new PlaybackState.Builder()
                 .setActions(actions)
                 .setState(state, currentPosition(), playing ? 1f : 0f);
+        if (queue.size() > 1) {
+            builder.addCustomAction(new PlaybackState.CustomAction.Builder(
+                    ACTION_TOGGLE_SHUFFLE,
+                    shuffleEnabled ? "셔플 켜짐" : "셔플",
+                    R.drawable.ic_shuffle
+            ).build());
+        }
+        if (!queue.isEmpty()) {
+            builder.addCustomAction(new PlaybackState.CustomAction.Builder(
+                    ACTION_TOGGLE_REPEAT,
+                    repeatNotificationLabel(),
+                    repeatMode == REPEAT_ONE ? R.drawable.ic_repeat_one : R.drawable.ic_repeat
+            ).build());
+        }
         if (errorStatus != null) {
             builder.setErrorMessage(errorStatus);
         }
         mediaSession.setPlaybackState(builder.build());
+    }
+
+    private Bitmap artworkFor(DeviceAudioTrack track) {
+        String artworkUri = track == null ? "" : track.albumArtUri();
+        if (artworkUri.trim().isEmpty()) {
+            return null;
+        }
+        if (artworkUri.equals(cachedArtworkUri)) {
+            return cachedArtwork;
+        }
+        cachedArtworkUri = artworkUri;
+        cachedArtwork = loadArtworkBitmap(artworkUri);
+        return cachedArtwork;
+    }
+
+    private Bitmap loadArtworkBitmap(String artworkUri) {
+        try (InputStream stream = getContentResolver().openInputStream(Uri.parse(artworkUri))) {
+            Bitmap bitmap = BitmapFactory.decodeStream(stream);
+            if (bitmap == null) {
+                return null;
+            }
+            int maxDimension = Math.max(bitmap.getWidth(), bitmap.getHeight());
+            if (maxDimension <= 768) {
+                return bitmap;
+            }
+            float ratio = 768f / maxDimension;
+            int width = Math.max(1, Math.round(bitmap.getWidth() * ratio));
+            int height = Math.max(1, Math.round(bitmap.getHeight() * ratio));
+            return Bitmap.createScaledBitmap(bitmap, width, height, true);
+        } catch (Exception exception) {
+            return null;
+        }
     }
 
     private long currentPosition() {
