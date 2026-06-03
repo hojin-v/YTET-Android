@@ -348,6 +348,10 @@ public final class PlaybackService extends Service {
         queue.clear();
         queue.addAll(loadedTracks);
         queueIndex = queue.isEmpty() ? 0 : Math.min(Math.max(0, startIndex), queue.size() - 1);
+        shuffleEnabled = shuffleEnabled && queue.size() > 1;
+        if (shuffleEnabled) {
+            shuffleQueueFromCurrentTrack();
+        }
         failedTrackSkips = 0;
         prepareCurrentTrack(shouldStartWhenPrepared);
     }

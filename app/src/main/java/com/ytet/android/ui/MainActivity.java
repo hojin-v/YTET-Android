@@ -20,6 +20,7 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Insets;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.Rect;
@@ -43,6 +44,7 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
+import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
@@ -1362,31 +1364,77 @@ public final class MainActivity extends Activity {
 
     private List<LibraryGroup> visibleLibraryGroups() {
         Map<String, List<DeviceAudioTrack>> grouped = new LinkedHashMap<>();
+        Map<String, String> titles = new LinkedHashMap<>();
         for (DeviceAudioTrack track : visibleLibraryTracks()) {
             String key = libraryGroupKey(track, libraryFilter);
+            titles.putIfAbsent(key, libraryGroupTitle(track, libraryFilter));
             grouped.computeIfAbsent(key, ignored -> new ArrayList<>()).add(track);
         }
 
         List<LibraryGroup> groups = new ArrayList<>();
         for (Map.Entry<String, List<DeviceAudioTrack>> entry : grouped.entrySet()) {
-            groups.add(libraryGroup(entry.getKey(), entry.getValue(), libraryFilter));
+            groups.add(libraryGroup(entry.getKey(), titles.get(entry.getKey()), entry.getValue(), libraryFilter));
         }
         groups.sort((first, second) -> first.title.compareToIgnoreCase(second.title));
         return groups;
     }
 
     private String libraryGroupKey(DeviceAudioTrack track, LibraryFilter filter) {
+        if (filter == LibraryFilter.ARTIST) {
+            return "artist:" + groupKeyPart(track.artist());
+        }
+        if (track.albumId() > 0) {
+            return "album-id:" + track.albumId();
+        }
+        String key = "album:" + groupKeyPart(track.album()) + "|folder:" + groupKeyPart(track.folder());
+        if (isUnknownAlbum(track.album())) {
+            key += "|artist:" + groupKeyPart(track.artist());
+        }
+        return key;
+    }
+
+    private String libraryGroupTitle(DeviceAudioTrack track, LibraryFilter filter) {
         return filter == LibraryFilter.ALBUM ? track.album() : track.artist();
     }
 
-    private LibraryGroup libraryGroup(String title, List<DeviceAudioTrack> tracks, LibraryFilter filter) {
+    private String groupKeyPart(String value) {
+        return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private boolean isUnknownAlbum(String album) {
+        return album == null || album.trim().isEmpty() || "앨범 정보 없음".equals(album.trim());
+    }
+
+    private LibraryGroup libraryGroup(String key, String title, List<DeviceAudioTrack> tracks, LibraryFilter filter) {
+        List<DeviceAudioTrack> orderedTracks = orderedGroupTracks(tracks, filter);
         String subtitle;
         if (filter == LibraryFilter.ALBUM) {
-            subtitle = albumArtistSummary(tracks) + " · " + tracks.size() + "곡 · " + totalDurationLabel(tracks);
+            subtitle = albumArtistSummary(orderedTracks) + " · " + orderedTracks.size() + "곡 · " + totalDurationLabel(orderedTracks);
         } else {
-            subtitle = distinctAlbumCount(tracks) + "개 앨범 · " + tracks.size() + "곡 · " + totalDurationLabel(tracks);
+            subtitle = distinctAlbumCount(orderedTracks) + "개 앨범 · " + orderedTracks.size() + "곡 · " + totalDurationLabel(orderedTracks);
         }
-        return new LibraryGroup(title, subtitle, bestCoverTrack(tracks), tracks);
+        return new LibraryGroup(key, title, subtitle, bestCoverTrack(orderedTracks), orderedTracks);
+    }
+
+    private List<DeviceAudioTrack> orderedGroupTracks(List<DeviceAudioTrack> tracks, LibraryFilter filter) {
+        List<DeviceAudioTrack> ordered = tracks == null ? new ArrayList<>() : new ArrayList<>(tracks);
+        if (filter == LibraryFilter.ALBUM) {
+            ordered.sort(this::compareAlbumTrackOrder);
+        }
+        return ordered;
+    }
+
+    private int compareAlbumTrackOrder(DeviceAudioTrack first, DeviceAudioTrack second) {
+        int firstNumber = trackSortNumber(first);
+        int secondNumber = trackSortNumber(second);
+        if (firstNumber != secondNumber) {
+            return Integer.compare(firstNumber, secondNumber);
+        }
+        return first.title().compareToIgnoreCase(second.title());
+    }
+
+    private int trackSortNumber(DeviceAudioTrack track) {
+        return track.trackNumber() > 0 ? track.trackNumber() : Integer.MAX_VALUE;
     }
 
     private LibraryGroup currentFocusedLibraryGroup() {
@@ -1395,14 +1443,14 @@ public final class MainActivity extends Activity {
         }
         List<DeviceAudioTrack> tracks = new ArrayList<>();
         for (DeviceAudioTrack track : libraryTracks) {
-            if (focusedLibraryGroup.title.equals(libraryGroupKey(track, focusedLibraryGroupFilter))) {
+            if (focusedLibraryGroup.key.equals(libraryGroupKey(track, focusedLibraryGroupFilter))) {
                 tracks.add(track);
             }
         }
         if (tracks.isEmpty()) {
-            return focusedLibraryGroup;
+            return libraryLoading ? focusedLibraryGroup : null;
         }
-        return libraryGroup(focusedLibraryGroup.title, tracks, focusedLibraryGroupFilter);
+        return libraryGroup(focusedLibraryGroup.key, focusedLibraryGroup.title, tracks, focusedLibraryGroupFilter);
     }
 
     private String albumArtistSummary(List<DeviceAudioTrack> tracks) {
@@ -1657,7 +1705,7 @@ public final class MainActivity extends Activity {
         LibraryFilter groupFilter = focusedLibraryGroupFilter == null ? libraryFilter : focusedLibraryGroupFilter;
         String category = groupFilter == LibraryFilter.ALBUM ? "앨범" : "아티스트";
         MusicStation station = new MusicStation(
-                category + "-" + Integer.toHexString(group.title.hashCode()) + (shuffle ? "-shuffle" : "-ordered"),
+                category + "-" + Integer.toHexString(group.key.hashCode()) + (shuffle ? "-shuffle" : "-ordered"),
                 group.title,
                 category,
                 group.subtitle,
@@ -2267,7 +2315,6 @@ public final class MainActivity extends Activity {
         int statusColor = playerStatusBarColor();
         int navigationColor = blendColors(color(R.color.ytet_background), statusColor, 0.16f);
         applyExpandedDialogBars(window, statusColor, navigationColor);
-        applyActivitySystemBars(statusColor, navigationColor);
     }
 
     private void applyQueueWindow(Window window) {
@@ -2315,32 +2362,6 @@ public final class MainActivity extends Activity {
         window.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT);
     }
 
-    private void applyActivitySystemBars(int statusColor, int navigationColor) {
-        Window window = getWindow();
-        if (window == null) {
-            return;
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            window.setDecorFitsSystemWindows(true);
-        }
-        window.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS
-                | WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION);
-        window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
-        window.setStatusBarColor(statusColor);
-        window.setNavigationBarColor(navigationColor);
-        View decor = window.getDecorView();
-        decor.setSystemUiVisibility(decor.getSystemUiVisibility()
-                & ~View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                & ~View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                & ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
-                & ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
-    }
-
-    private void restoreActivitySystemBars() {
-        int background = color(R.color.ytet_background);
-        applyActivitySystemBars(background, background);
-    }
-
     private int playerStatusBarColor() {
         int base = playbackThemeColor;
         float[] hsv = new float[3];
@@ -2360,6 +2381,29 @@ public final class MainActivity extends Activity {
         return expandedPlayerDrawsBehindSystemBars()
                 ? systemBarDimension("navigation_bar_height")
                 : 0;
+    }
+
+    private void applyExpandedPlayerInsets(DragDismissLayout root, View statusScrim, LinearLayout content) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            return;
+        }
+        root.setOnApplyWindowInsetsListener((view, insets) -> {
+            Insets topInsets = insets.getInsets(WindowInsets.Type.statusBars() | WindowInsets.Type.displayCutout());
+            Insets bottomInsets = insets.getInsets(WindowInsets.Type.navigationBars());
+            setViewHeight(statusScrim, topInsets.top);
+            content.setPadding(dp(20), dp(22), dp(20), dp(24) + bottomInsets.bottom);
+            return insets;
+        });
+        root.requestApplyInsets();
+    }
+
+    private void setViewHeight(View view, int height) {
+        ViewGroup.LayoutParams params = view.getLayoutParams();
+        if (params == null || params.height == height) {
+            return;
+        }
+        params.height = height;
+        view.setLayoutParams(params);
     }
 
     private boolean expandedPlayerDrawsBehindSystemBars() {
@@ -2494,7 +2538,6 @@ public final class MainActivity extends Activity {
             playerDialog = new Dialog(this);
             playerDialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
         }
-        playerDialog.setOnDismissListener(dialog -> restoreActivitySystemBars());
         playerDialog.setContentView(buildExpandedPlayerContent());
         playerDialog.show();
         applyExpandedPlayerWindow(playerDialog.getWindow());
@@ -2536,6 +2579,7 @@ public final class MainActivity extends Activity {
                 0,
                 1f
         ));
+        applyExpandedPlayerInsets(root, statusScrim, content);
 
         LinearLayout top = new LinearLayout(this);
         top.setOrientation(LinearLayout.HORIZONTAL);
@@ -4413,17 +4457,20 @@ public final class MainActivity extends Activity {
     }
 
     private static final class LibraryGroup {
+        private final String key;
         private final String title;
         private final String subtitle;
         private final DeviceAudioTrack coverTrack;
         private final List<DeviceAudioTrack> tracks;
 
         private LibraryGroup(
+                String key,
                 String title,
                 String subtitle,
                 DeviceAudioTrack coverTrack,
                 List<DeviceAudioTrack> tracks
         ) {
+            this.key = key == null || key.trim().isEmpty() ? "group:unknown" : key.trim();
             this.title = title == null || title.trim().isEmpty() ? "알 수 없음" : title.trim();
             this.subtitle = subtitle == null || subtitle.trim().isEmpty() ? "-" : subtitle.trim();
             this.coverTrack = coverTrack;

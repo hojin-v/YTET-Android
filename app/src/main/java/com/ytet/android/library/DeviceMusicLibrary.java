@@ -99,6 +99,7 @@ public final class DeviceMusicLibrary {
         projection.add(MediaStore.Audio.Media.ARTIST);
         projection.add(MediaStore.Audio.Media.ALBUM);
         projection.add(MediaStore.Audio.Media.ALBUM_ID);
+        projection.add(MediaStore.Audio.Media.TRACK);
         projection.add(MediaStore.Audio.Media.DISPLAY_NAME);
         projection.add(MediaStore.Audio.Media.DURATION);
         projection.add(MediaStore.Audio.Media.SIZE);
@@ -160,9 +161,18 @@ public final class DeviceMusicLibrary {
                 folderFromCursor(cursor),
                 contentUri.toString(),
                 albumArtUri(cursor),
+                getLong(cursor, MediaStore.Audio.Media.ALBUM_ID),
+                normalizedTrackNumber(getLong(cursor, MediaStore.Audio.Media.TRACK)),
                 getLong(cursor, MediaStore.Audio.Media.DURATION),
                 getLong(cursor, MediaStore.Audio.Media.SIZE)
         );
+    }
+
+    private int normalizedTrackNumber(long value) {
+        if (value <= 0 || value > Integer.MAX_VALUE) {
+            return 0;
+        }
+        return (int) value;
     }
 
     private String albumArtUri(Cursor cursor) {
