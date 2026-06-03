@@ -902,23 +902,19 @@ public final class PlaybackService extends Service {
                 | PlaybackState.ACTION_PAUSE
                 | PlaybackState.ACTION_PLAY_PAUSE
                 | PlaybackState.ACTION_STOP;
-        if (canMoveToNextTrack()) {
-            actions |= PlaybackState.ACTION_SKIP_TO_NEXT;
-        }
-        if (canMoveToPreviousTrack()) {
-            actions |= PlaybackState.ACTION_SKIP_TO_PREVIOUS;
+        if (track != null) {
+            actions |= PlaybackState.ACTION_SKIP_TO_PREVIOUS
+                    | PlaybackState.ACTION_SKIP_TO_NEXT;
         }
         PlaybackState.Builder builder = new PlaybackState.Builder()
                 .setActions(actions)
                 .setState(state, currentPosition(), playing ? 1f : 0f);
-        if (queue.size() > 1) {
+        if (track != null) {
             builder.addCustomAction(new PlaybackState.CustomAction.Builder(
                     ACTION_TOGGLE_SHUFFLE,
                     shuffleEnabled ? "셔플 켜짐" : "셔플",
                     R.drawable.ic_shuffle
             ).build());
-        }
-        if (!queue.isEmpty()) {
             builder.addCustomAction(new PlaybackState.CustomAction.Builder(
                     ACTION_TOGGLE_REPEAT,
                     repeatNotificationLabel(),
