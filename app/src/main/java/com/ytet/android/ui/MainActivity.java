@@ -452,10 +452,21 @@ public final class MainActivity extends Activity {
         app.setOrientation(LinearLayout.VERTICAL);
         app.setBackgroundColor(color(R.color.ytet_background));
 
+        FrameLayout contentFrame = new FrameLayout(this);
         contentScrollView = new PullRefreshScrollView(this);
         contentScrollView.setFillViewport(true);
         contentScrollView.setBackgroundColor(color(R.color.ytet_background));
-        app.addView(contentScrollView, new LinearLayout.LayoutParams(
+        contentFrame.addView(contentScrollView, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+        ));
+        FrameLayout.LayoutParams refreshParams = new FrameLayout.LayoutParams(
+                dp(56),
+                dp(56),
+                Gravity.TOP | Gravity.CENTER_HORIZONTAL
+        );
+        contentFrame.addView(libraryPullRefreshIndicator(), refreshParams);
+        app.addView(contentFrame, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 0,
                 1f
@@ -544,6 +555,11 @@ public final class MainActivity extends Activity {
         ));
         updateTabStyles();
         updateNowPlayingBar();
+        if (currentTab == Tab.LIBRARY) {
+            updateLibraryPullIndicator(libraryLoading ? dp(92) : libraryPullDistance, libraryLoading || libraryPullReady);
+        } else {
+            resetLibraryPullIndicator();
+        }
     }
 
     private void ensureDefaultMediaFolders() {
@@ -606,18 +622,18 @@ public final class MainActivity extends Activity {
         if (libraryPullIndicator == null) {
             return;
         }
-        int height = libraryLoading
-                ? dp(72)
-                : Math.min(dp(72), Math.round(Math.max(0f, dragDistance) * 0.72f));
-        ViewGroup.LayoutParams params = libraryPullIndicator.getLayoutParams();
-        if (params != null && params.height != height) {
-            params.height = height;
-            libraryPullIndicator.setLayoutParams(params);
-        }
-        libraryPullIndicator.setVisibility(height > 0 ? View.VISIBLE : View.INVISIBLE);
+        boolean visible = libraryLoading || dragDistance > dp(8);
+        float progress = Math.min(1f, Math.max(0f, dragDistance / dp(92)));
+        float offset = libraryLoading || ready
+                ? dp(28)
+                : -dp(54) + Math.min(dp(82), dragDistance * 0.72f);
+        libraryPullIndicator.setVisibility(visible ? View.VISIBLE : View.INVISIBLE);
+        libraryPullIndicator.setTranslationY(offset);
+        libraryPullIndicator.setAlpha(libraryLoading || ready ? 1f : Math.max(0.35f, progress));
+        float scale = 0.86f + progress * 0.14f;
+        libraryPullIndicator.setScaleX(scale);
+        libraryPullIndicator.setScaleY(scale);
         if (libraryPullIcon != null) {
-            float progress = Math.min(1f, Math.max(0f, dragDistance / dp(92)));
-            libraryPullIcon.setAlpha(libraryLoading || ready ? 1f : Math.max(0.35f, progress));
             libraryPullIcon.setRotation(libraryLoading || ready ? 0f : progress * 180f);
         }
     }
@@ -966,7 +982,6 @@ public final class MainActivity extends Activity {
             startLibraryRefresh(false);
         }
 
-        root.addView(libraryPullRefreshIndicator(), pullIndicatorParams());
         root.addView(librarySearchToolbar(), marginBottom(8));
         root.addView(libraryFilterBar(), marginBottom(shouldShowLibrarySearchInput() ? 8 : 12));
         if (shouldShowLibrarySearchInput()) {
@@ -1066,23 +1081,20 @@ public final class MainActivity extends Activity {
 
     private View libraryPullRefreshIndicator() {
         FrameLayout container = new FrameLayout(this);
-        container.setVisibility(libraryLoading ? View.VISIBLE : View.INVISIBLE);
-
-        FrameLayout circle = new FrameLayout(this);
-        circle.setBackground(rounded(Color.WHITE, 28));
+        container.setVisibility(View.INVISIBLE);
+        container.setBackground(rounded(Color.WHITE, 28));
         ImageView icon = new ImageView(this);
         icon.setImageResource(R.drawable.ic_refresh);
         icon.setColorFilter(Color.BLACK);
         icon.setScaleType(ImageView.ScaleType.CENTER);
-        circle.addView(icon, new FrameLayout.LayoutParams(
+        container.addView(icon, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT
         ));
 
-        container.addView(circle, new FrameLayout.LayoutParams(dp(56), dp(56), Gravity.CENTER));
         libraryPullIndicator = container;
         libraryPullIcon = icon;
-        updateLibraryPullIndicator(libraryLoading ? dp(92) : libraryPullDistance, libraryLoading || libraryPullReady);
+        updateLibraryPullIndicator(0f, false);
         return container;
     }
 
@@ -3103,13 +3115,6 @@ public final class MainActivity extends Activity {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(50), 1f);
         params.setMargins(0, 0, dp(rightDp), 0);
         return params;
-    }
-
-    private LinearLayout.LayoutParams pullIndicatorParams() {
-        return new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                libraryLoading ? dp(72) : 0
-        );
     }
 
     private LinearLayout.LayoutParams coverParams() {
