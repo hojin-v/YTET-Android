@@ -858,7 +858,7 @@ public final class PlaybackService extends Service {
         boolean nextAvailable = canMoveToNextTrack();
         builder.addAction(
                 shuffleIcon(),
-                shuffleAvailable ? (shuffleEnabled ? "셔플 켜짐" : "셔플") : "셔플 사용할 수 없음",
+                shuffleNotificationLabel(),
                 controlAction(ACTION_TOGGLE_SHUFFLE, shuffleAvailable, 1)
         );
         builder.addAction(
@@ -897,7 +897,7 @@ public final class PlaybackService extends Service {
         if (repeatMode == REPEAT_ALL) {
             return "전체 반복";
         }
-        return "반복";
+        return "반복 꺼짐";
     }
 
     private PendingIntent contentIntent() {
@@ -973,7 +973,7 @@ public final class PlaybackService extends Service {
         if (track != null) {
             builder.addCustomAction(new PlaybackState.CustomAction.Builder(
                     ACTION_TOGGLE_SHUFFLE,
-                    shuffleEnabled ? "셔플 켜짐" : "셔플",
+                    shuffleNotificationLabel(),
                     shuffleIcon()
             ).build());
             builder.addCustomAction(new PlaybackState.CustomAction.Builder(
@@ -992,7 +992,14 @@ public final class PlaybackService extends Service {
         if (!canShuffleQueue()) {
             return R.drawable.ic_shuffle_disabled;
         }
-        return shuffleEnabled ? R.drawable.ic_shuffle_active : R.drawable.ic_shuffle;
+        return shuffleEnabled ? R.drawable.ic_shuffle : R.drawable.ic_shuffle_disabled;
+    }
+
+    private String shuffleNotificationLabel() {
+        if (!canShuffleQueue()) {
+            return "셔플 사용할 수 없음";
+        }
+        return shuffleEnabled ? "셔플 켜짐" : "셔플 꺼짐";
     }
 
     private int previousIcon() {
@@ -1008,9 +1015,9 @@ public final class PlaybackService extends Service {
             return R.drawable.ic_repeat_one;
         }
         if (repeatMode == REPEAT_ALL) {
-            return R.drawable.ic_repeat_active;
+            return R.drawable.ic_repeat;
         }
-        return R.drawable.ic_repeat;
+        return R.drawable.ic_repeat_disabled;
     }
 
     private Bitmap artworkFor(DeviceAudioTrack track) {
