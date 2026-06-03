@@ -30,8 +30,10 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.provider.MediaStore;
 import android.provider.Settings;
+import android.text.Editable;
 import android.text.InputType;
 import android.text.TextUtils;
+import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.inputmethod.EditorInfo;
 import android.view.MotionEvent;
@@ -1120,7 +1122,7 @@ public final class MainActivity extends Activity {
                 renderCurrentTab();
                 return;
             }
-            applyLibrarySearch(librarySearchInput == null ? librarySearchQuery : librarySearchInput.getText().toString());
+            focusLibrarySearchInput();
         });
         toolbar.addView(search, marginRight(8, dp(44), dp(44)));
 
@@ -1145,19 +1147,32 @@ public final class MainActivity extends Activity {
         librarySearchInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_NORMAL);
         librarySearchInput.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
         styleInput(librarySearchInput);
+        librarySearchInput.setMinHeight(dp(56));
+        librarySearchInput.setPadding(dp(2), 0, dp(2), 0);
+        librarySearchInput.setBackgroundColor(Color.TRANSPARENT);
         librarySearchInput.setSelection(librarySearchInput.getText().length());
         librarySearchInput.setOnEditorActionListener((view, actionId, event) -> {
             if (actionId == EditorInfo.IME_ACTION_SEARCH) {
-                applyLibrarySearch(view.getText().toString());
                 return true;
             }
             return false;
         });
+        librarySearchInput.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence text, int start, int count, int after) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence text, int start, int before, int count) {
+                applyLibrarySearch(text == null ? "" : text.toString());
+            }
+
+            @Override
+            public void afterTextChanged(Editable text) {
+            }
+        });
         if (librarySearchVisible) {
-            librarySearchInput.post(() -> {
-                librarySearchInput.requestFocus();
-                librarySearchInput.setSelection(librarySearchInput.getText().length());
-            });
+            librarySearchInput.post(this::focusLibrarySearchInput);
         }
         return librarySearchInput;
     }
@@ -1237,11 +1252,23 @@ public final class MainActivity extends Activity {
     }
 
     private void applyLibrarySearch(String query) {
-        librarySearchQuery = query == null ? "" : query.trim();
-        librarySearchVisible = !librarySearchQuery.isEmpty();
+        String nextQuery = query == null ? "" : query;
+        if (nextQuery.equals(librarySearchQuery)) {
+            return;
+        }
+        librarySearchQuery = nextQuery;
+        librarySearchVisible = true;
         librarySearchInput = null;
         selectedTrack = null;
         renderCurrentTab();
+    }
+
+    private void focusLibrarySearchInput() {
+        if (librarySearchInput == null) {
+            return;
+        }
+        librarySearchInput.requestFocus();
+        librarySearchInput.setSelection(librarySearchInput.getText().length());
     }
 
     private boolean shouldShowLibrarySearchInput() {
