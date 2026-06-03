@@ -1279,12 +1279,18 @@ public final class MainActivity extends Activity {
         shelf.addView(row, matchWrap());
         bar.addView(shelf, new LinearLayout.LayoutParams(0, dp(38), 1f));
 
-        Button sort = compactButton(librarySort.shortLabel + " ▾");
+        Button sort = compactButton(librarySort.buttonLabel() + " ▾");
+        sort.setTextSize(12);
+        sort.setSingleLine(false);
+        sort.setMaxLines(2);
+        sort.setLineSpacing(0f, 0.92f);
         sort.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
-        sort.setPadding(0, 0, dp(1), 0);
+        sort.setPadding(dp(2), 0, 0, 0);
+        sort.setBackgroundColor(Color.TRANSPARENT);
+        sort.setContentDescription("정렬: " + librarySort.label);
         sort.setOnClickListener(view -> showLibrarySortDialog());
-        LinearLayout.LayoutParams sortParams = new LinearLayout.LayoutParams(dp(70), dp(38));
-        sortParams.setMargins(dp(6), 0, 0, 0);
+        LinearLayout.LayoutParams sortParams = new LinearLayout.LayoutParams(dp(librarySort.buttonWidthDp()), dp(44));
+        sortParams.setMargins(dp(4), 0, 0, 0);
         bar.addView(sort, sortParams);
         return bar;
     }
@@ -5132,22 +5138,34 @@ public final class MainActivity extends Activity {
     }
 
     private enum LibrarySort {
-        NEWEST("newest", "최신순", "최신순", "최근 추가된 음악부터 표시"),
-        OLDEST("oldest", "오래된순", "오래된순", "오래전에 추가된 음악부터 표시"),
-        NAME("name", "이름순", "이름순", "이름을 기준으로 정렬"),
-        MOST_PLAYED("most_played", "많이 재생한순", "많이순", "재생 횟수가 많은 음악부터 표시"),
-        LEAST_PLAYED("least_played", "적게 재생한순", "적게순", "재생 횟수가 적은 음악부터 표시");
+        NEWEST("newest", "최신순", "최근 추가된 음악부터 표시"),
+        OLDEST("oldest", "오래된순", "오래전에 추가된 음악부터 표시"),
+        NAME("name", "이름순", "이름을 기준으로 정렬"),
+        MOST_PLAYED("most_played", "많이 재생한순", "재생 횟수가 많은 음악부터 표시"),
+        LEAST_PLAYED("least_played", "적게 재생한순", "재생 횟수가 적은 음악부터 표시");
 
         private final String key;
         private final String label;
-        private final String shortLabel;
         private final String description;
 
-        LibrarySort(String key, String label, String shortLabel, String description) {
+        LibrarySort(String key, String label, String description) {
             this.key = key;
             this.label = label;
-            this.shortLabel = shortLabel;
             this.description = description;
+        }
+
+        private String buttonLabel() {
+            if (this == MOST_PLAYED) {
+                return "많이\n재생한순";
+            }
+            if (this == LEAST_PLAYED) {
+                return "적게\n재생한순";
+            }
+            return label;
+        }
+
+        private int buttonWidthDp() {
+            return this == MOST_PLAYED || this == LEAST_PLAYED ? 66 : 52;
         }
 
         private static LibrarySort fromKey(String key) {
