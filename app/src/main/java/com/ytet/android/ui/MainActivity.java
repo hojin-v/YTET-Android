@@ -106,7 +106,7 @@ public final class MainActivity extends Activity {
 
     private ScrollView contentScrollView;
     private LinearLayout nowPlayingBar;
-    private TextView nowPlayingCover;
+    private FrameLayout nowPlayingCover;
     private TextView nowPlayingTitle;
     private TextView nowPlayingMeta;
     private ImageButton playPauseButton;
@@ -296,7 +296,6 @@ public final class MainActivity extends Activity {
             }
             updateNowPlayingBar();
             updateExpandedPlayer();
-            updateQueueDialog();
         }
     };
 
@@ -478,9 +477,8 @@ public final class MainActivity extends Activity {
         bar.setBackgroundColor(color(R.color.ytet_panel));
         bar.setOnClickListener(view -> showExpandedPlayer());
 
-        nowPlayingCover = text("YT", 13, android.R.color.white, true);
-        nowPlayingCover.setGravity(Gravity.CENTER);
-        nowPlayingCover.setBackground(rounded(color(R.color.ytet_accent_dark), 8));
+        nowPlayingCover = new FrameLayout(this);
+        setNowPlayingCover(true);
         bar.addView(nowPlayingCover, marginRight(10, dp(44), dp(44)));
 
         LinearLayout copy = new LinearLayout(this);
@@ -1801,8 +1799,12 @@ public final class MainActivity extends Activity {
                 && (playbackQueueIndex < playbackQueueSize - 1 || playbackRepeatMode == PlaybackService.REPEAT_ALL);
     }
 
+    private boolean canShuffleQueue() {
+        return playbackHasQueue && playbackQueueSize > 1;
+    }
+
     private void toggleShuffle() {
-        if (playbackHasQueue) {
+        if (canShuffleQueue()) {
             startPlayback(PlaybackService.commandIntent(this, PlaybackService.ACTION_TOGGLE_SHUFFLE));
         }
     }
@@ -1831,25 +1833,53 @@ public final class MainActivity extends Activity {
             return;
         }
         if (!playbackHasQueue && activeStation == null) {
-            if (nowPlayingCover != null) {
-                nowPlayingCover.setText("YT");
-                nowPlayingCover.setBackground(rounded(color(R.color.ytet_panel_alt), 8));
-            }
+            setNowPlayingCover(true);
             nowPlayingTitle.setText("로컬 재생 대기");
             nowPlayingMeta.setText("기기 음악을 스캔하면 재생할 수 있습니다.");
             playPauseButton.setImageResource(R.drawable.ic_play_arrow);
             playPauseButton.setContentDescription("재생");
             return;
         }
-        if (nowPlayingCover != null) {
-            nowPlayingCover.setText(coverInitials());
-            nowPlayingCover.setBackground(rounded(color(R.color.ytet_accent_dark), 8));
-        }
+        setNowPlayingCover(false);
         nowPlayingTitle.setText(playbackTitle);
-        nowPlayingMeta.setText(playbackPreparing || playbackError ? streamStatus : playbackMeta);
+        nowPlayingMeta.setText(playbackPreparing || playbackError ? streamStatus : miniPlaybackMeta());
         boolean waitingToPlay = playbackPlaying || playbackWillPlay;
         playPauseButton.setImageResource(waitingToPlay ? R.drawable.ic_pause : R.drawable.ic_play_arrow);
         playPauseButton.setContentDescription(waitingToPlay ? "일시정지" : "재생");
+    }
+
+    private void setNowPlayingCover(boolean idle) {
+        if (nowPlayingCover == null) {
+            return;
+        }
+        nowPlayingCover.removeAllViews();
+        nowPlayingCover.addView(nowPlayingCoverView(idle), new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+        ));
+    }
+
+    private View nowPlayingCoverView(boolean idle) {
+        if (!idle && playbackAlbumArtUri != null && !playbackAlbumArtUri.trim().isEmpty()) {
+            ImageView image = new ImageView(this);
+            image.setBackground(rounded(color(R.color.ytet_panel_alt), 8));
+            image.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            image.setImageURI(Uri.parse(playbackAlbumArtUri));
+            return image;
+        }
+        TextView placeholder = text(idle ? "YT" : coverInitials(), 13, android.R.color.white, true);
+        placeholder.setGravity(Gravity.CENTER);
+        placeholder.setBackground(rounded(idle ? color(R.color.ytet_panel_alt) : color(R.color.ytet_accent_dark), 8));
+        return placeholder;
+    }
+
+    private String miniPlaybackMeta() {
+        String artist = valueOrDefault(playbackArtist, "알 수 없는 아티스트");
+        String album = valueOrDefault(playbackAlbum, "");
+        if (album.isEmpty() || "앨범 정보 없음".equals(album)) {
+            return artist;
+        }
+        return artist + " · " + album;
     }
 
     private void showExpandedPlayer() {
@@ -1926,7 +1956,7 @@ public final class MainActivity extends Activity {
         LinearLayout controls = new LinearLayout(this);
         controls.setOrientation(LinearLayout.HORIZONTAL);
         controls.setGravity(Gravity.CENTER_VERTICAL);
-        ImageButton shuffle = playerIconButton(R.drawable.ic_shuffle, "셔플", playbackShuffleEnabled, playbackHasQueue);
+        ImageButton shuffle = playerIconButton(R.drawable.ic_shuffle, "셔플", playbackShuffleEnabled, canShuffleQueue());
         shuffle.setOnClickListener(view -> toggleShuffle());
         ImageButton previous = playerIconButton(R.drawable.ic_skip_previous, "이전 곡", false, hasPreviousTrack());
         previous.setOnClickListener(view -> previousTrack());
@@ -2067,13 +2097,28 @@ public final class MainActivity extends Activity {
 
     private View queueRow(DeviceAudioTrack track, int index) {
         LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.VERTICAL);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(12), dp(10), dp(12), dp(10));
         boolean current = track.id() == playbackTrackId
                 || (playbackTrackId < 0L && index == playbackQueueIndex);
         row.setBackground(rounded(current ? color(R.color.ytet_panel_alt) : color(R.color.ytet_panel), 8));
-        row.addView(text(track.title(), 14, current ? R.color.ytet_text : R.color.ytet_muted, current), marginBottom(2));
-        row.addView(muted(track.artist() + " · " + MusicLibrary.formatDuration(track.durationMs()), 12), matchWrap());
+
+        LinearLayout.LayoutParams coverParams = new LinearLayout.LayoutParams(dp(48), dp(48));
+        coverParams.setMargins(0, 0, dp(12), 0);
+        row.addView(trackCoverView(track), coverParams);
+
+        LinearLayout info = new LinearLayout(this);
+        info.setOrientation(LinearLayout.VERTICAL);
+        TextView title = text(track.title(), 14, current ? R.color.ytet_text : R.color.ytet_muted, current);
+        title.setSingleLine(true);
+        title.setEllipsize(TextUtils.TruncateAt.END);
+        info.addView(title, marginBottom(3));
+        TextView meta = muted(track.artist() + " · " + MusicLibrary.formatDuration(track.durationMs()), 12);
+        meta.setSingleLine(true);
+        meta.setEllipsize(TextUtils.TruncateAt.END);
+        info.addView(meta, matchWrap());
+        row.addView(info, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         row.setOnClickListener(view -> playQueueTrack(track, index));
         return row;
     }
