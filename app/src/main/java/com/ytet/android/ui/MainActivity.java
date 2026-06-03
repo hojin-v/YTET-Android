@@ -196,6 +196,7 @@ public final class MainActivity extends Activity {
     private boolean libraryGridView;
     private boolean librarySearchVisible;
     private EditText librarySearchInput;
+    private LinearLayout libraryResultsContainer;
     private LibraryGroup focusedLibraryGroup;
     private LibraryFilter focusedLibraryGroupFilter;
     private float libraryPullStartY;
@@ -996,6 +997,7 @@ public final class MainActivity extends Activity {
     private View buildLibraryTab() {
         LinearLayout root = screenRoot();
         libraryTrackItemViews.clear();
+        libraryResultsContainer = null;
 
         if (!hasAudioPermission()) {
             LinearLayout permission = panel();
@@ -1031,11 +1033,19 @@ public final class MainActivity extends Activity {
             root.addView(libraryViewToolbar(), marginBottom(14));
         }
 
+        libraryResultsContainer = new LinearLayout(this);
+        libraryResultsContainer.setOrientation(LinearLayout.VERTICAL);
+        populateLibraryResults(libraryResultsContainer);
+        root.addView(libraryResultsContainer, matchWrap());
+        return root;
+    }
+
+    private void populateLibraryResults(LinearLayout root) {
         if (libraryFilter == LibraryFilter.ALL) {
             List<DeviceAudioTrack> visibleTracks = visibleLibraryTracks();
             if (visibleTracks.isEmpty()) {
                 root.addView(emptyLibraryView(), matchWrap());
-                return root;
+                return;
             }
             int limit = Math.min(visibleTracks.size(), 80);
             if (libraryGridView) {
@@ -1048,13 +1058,13 @@ public final class MainActivity extends Activity {
             if (visibleTracks.size() > limit) {
                 root.addView(muted("상위 " + limit + "곡만 표시 중입니다. 검색하면 목록을 좁힐 수 있습니다.", 12), matchWrap());
             }
-            return root;
+            return;
         }
 
         List<LibraryGroup> visibleGroups = visibleLibraryGroups();
         if (visibleGroups.isEmpty()) {
             root.addView(emptyLibraryView(), matchWrap());
-            return root;
+            return;
         }
         int limit = Math.min(visibleGroups.size(), 80);
         if (libraryGridView) {
@@ -1067,7 +1077,6 @@ public final class MainActivity extends Activity {
         if (visibleGroups.size() > limit) {
             root.addView(muted("상위 " + limit + "개만 표시 중입니다. 검색하면 목록을 좁힐 수 있습니다.", 12), matchWrap());
         }
-        return root;
     }
 
     private View emptyLibraryView() {
@@ -1153,14 +1162,18 @@ public final class MainActivity extends Activity {
         View spacer = new View(this);
         toolbar.addView(spacer, new LinearLayout.LayoutParams(0, dp(48), 1f));
 
-        ImageButton search = toolbarIconButton(R.drawable.ic_search, "검색", shouldShowLibrarySearchInput());
+        ImageButton search = toolbarIconButton(
+                R.drawable.ic_search,
+                shouldShowLibrarySearchInput() ? "검색 닫기" : "검색",
+                shouldShowLibrarySearchInput()
+        );
         search.setOnClickListener(view -> {
             if (!shouldShowLibrarySearchInput()) {
                 librarySearchVisible = true;
                 renderCurrentTab();
                 return;
             }
-            focusLibrarySearchInput();
+            closeLibrarySearch();
         });
         toolbar.addView(search, marginRight(8, dp(44), dp(44)));
 
@@ -1298,9 +1311,26 @@ public final class MainActivity extends Activity {
         }
         librarySearchQuery = nextQuery;
         librarySearchVisible = true;
+        selectedTrack = null;
+        refreshLibraryResultsOnly();
+    }
+
+    private void closeLibrarySearch() {
+        librarySearchVisible = false;
+        librarySearchQuery = "";
         librarySearchInput = null;
         selectedTrack = null;
         renderCurrentTab();
+    }
+
+    private void refreshLibraryResultsOnly() {
+        if (currentTab != Tab.LIBRARY || libraryResultsContainer == null) {
+            renderCurrentTab();
+            return;
+        }
+        libraryTrackItemViews.clear();
+        libraryResultsContainer.removeAllViews();
+        populateLibraryResults(libraryResultsContainer);
     }
 
     private void focusLibrarySearchInput() {
