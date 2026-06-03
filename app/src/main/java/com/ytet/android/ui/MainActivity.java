@@ -1880,7 +1880,11 @@ public final class MainActivity extends Activity {
     private View buildExpandedPlayerContent() {
         DragDismissLayout root = new DragDismissLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(20), dp(30), dp(20), dp(28));
+        root.setLayoutParams(new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+        ));
+        root.setPadding(dp(20), dp(26), dp(20), dp(10));
         root.setBackgroundColor(color(R.color.ytet_background));
 
         LinearLayout top = new LinearLayout(this);
@@ -1913,6 +1917,11 @@ public final class MainActivity extends Activity {
         progress.setProgress((int) Math.max(0L, Math.min(progress.getMax(), playbackPositionMs)));
         root.addView(progress, marginBottom(8));
         root.addView(muted(playbackProgressText(), 12), marginBottom(18));
+        root.addView(new View(this), new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+        ));
 
         LinearLayout controls = new LinearLayout(this);
         controls.setOrientation(LinearLayout.HORIZONTAL);
@@ -1943,7 +1952,7 @@ public final class MainActivity extends Activity {
 
         LinearLayout tools = new LinearLayout(this);
         tools.setOrientation(LinearLayout.HORIZONTAL);
-        tools.setGravity(Gravity.CENTER_VERTICAL);
+        tools.setGravity(Gravity.BOTTOM);
         boolean timerSelected = hasSleepTimer() || (sleepTimerControlsVisible && sleepTimerMinutes > 0);
         ImageButton timer = playerIconButton(R.drawable.ic_timer, "슬립 타이머", timerSelected, true);
         timer.setOnClickListener(view -> {
@@ -1962,7 +1971,7 @@ public final class MainActivity extends Activity {
         View timerControls = sleepTimerControlsVisible ? sleepTimerControlsPanel() : new View(this);
         LinearLayout.LayoutParams timerParams = new LinearLayout.LayoutParams(
                 0,
-                sleepTimerControlsVisible ? dp(116) : dp(58),
+                dp(116),
                 1f
         );
         timerParams.setMargins(dp(8), 0, dp(8), 0);
@@ -1970,7 +1979,10 @@ public final class MainActivity extends Activity {
         ImageButton queue = playerIconButton(R.drawable.ic_queue_music, "재생목록", false, playbackHasQueue);
         queue.setOnClickListener(view -> showQueueDialog());
         tools.addView(queue, new LinearLayout.LayoutParams(dp(58), dp(58)));
-        root.addView(tools, matchWrap());
+        root.addView(tools, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(116)
+        ));
         return root;
     }
 
