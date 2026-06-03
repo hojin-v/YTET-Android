@@ -667,7 +667,7 @@ public final class MainActivity extends Activity {
     private View buildHomeTab() {
         LinearLayout root = screenRoot();
         if (!hasAudioPermission()) {
-            LinearLayout permission = panel();
+            LinearLayout permission = topAlignedPanel();
             permission.addView(label("오디오 권한 필요"), marginBottom(8));
             permission.addView(muted("홈 추천 믹스는 YTET 보관함 음악 메타데이터와 폴더를 읽은 뒤 생성됩니다.", 14), marginBottom(14));
             Button request = primaryButton("권한 허용");
@@ -681,7 +681,7 @@ public final class MainActivity extends Activity {
             startHomeRefresh(false);
         }
 
-        LinearLayout hero = panel();
+        LinearLayout hero = topAlignedPanel();
         hero.addView(label("내 음악 바로 듣기"), marginBottom(8));
         if (!homeStatus.trim().isEmpty()) {
             hero.addView(text(homeStatus, 15, R.color.ytet_text, false), marginBottom(12));
@@ -1708,6 +1708,7 @@ public final class MainActivity extends Activity {
     private View buildExtractorTab() {
         LinearLayout root = screenRoot();
 
+        addTopVisualAlignmentSpacer(root);
         root.addView(label("YouTube URL"), marginBottom(8));
         urlInput = new EditText(this);
         urlInput.setSingleLine(true);
@@ -3228,6 +3229,19 @@ public final class MainActivity extends Activity {
         panel.setPadding(dp(16), dp(16), dp(16), dp(16));
         panel.setBackground(rounded(color(R.color.ytet_panel), 8));
         return panel;
+    }
+
+    private LinearLayout topAlignedPanel() {
+        LinearLayout panel = panel();
+        panel.setPadding(dp(16), dp(10), dp(16), dp(16));
+        return panel;
+    }
+
+    private void addTopVisualAlignmentSpacer(LinearLayout root) {
+        root.addView(new View(this), new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(10)
+        ));
     }
 
     private TextView title(String text) {
