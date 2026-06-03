@@ -2236,7 +2236,8 @@ public final class MainActivity extends Activity {
         }
         int statusColor = playerStatusBarColor();
         int navigationColor = blendColors(color(R.color.ytet_background), statusColor, 0.16f);
-        applyOpaqueDialogBars(window, statusColor, navigationColor);
+        applyExpandedDialogBars(window, statusColor, navigationColor);
+        applyActivitySystemBars(statusColor, navigationColor);
     }
 
     private void applyQueueWindow(Window window) {
@@ -2248,6 +2249,9 @@ public final class MainActivity extends Activity {
     }
 
     private void applyOpaqueDialogBars(Window window, int statusColor, int navigationColor) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.setDecorFitsSystemWindows(true);
+        }
         window.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS
                 | WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION);
         window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
@@ -2263,6 +2267,50 @@ public final class MainActivity extends Activity {
         window.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT);
     }
 
+    private void applyExpandedDialogBars(Window window, int statusColor, int navigationColor) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.setDecorFitsSystemWindows(false);
+        }
+        window.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS
+                | WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION);
+        window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+        window.setBackgroundDrawable(new ColorDrawable(statusColor));
+        window.setStatusBarColor(statusColor);
+        window.setNavigationBarColor(navigationColor);
+        View decor = window.getDecorView();
+        decor.setBackgroundColor(statusColor);
+        decor.setSystemUiVisibility(decor.getSystemUiVisibility()
+                & ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+                & ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+        window.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT);
+    }
+
+    private void applyActivitySystemBars(int statusColor, int navigationColor) {
+        Window window = getWindow();
+        if (window == null) {
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.setDecorFitsSystemWindows(true);
+        }
+        window.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS
+                | WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION);
+        window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+        window.setStatusBarColor(statusColor);
+        window.setNavigationBarColor(navigationColor);
+        View decor = window.getDecorView();
+        decor.setSystemUiVisibility(decor.getSystemUiVisibility()
+                & ~View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                & ~View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                & ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+                & ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+    }
+
+    private void restoreActivitySystemBars() {
+        int background = color(R.color.ytet_background);
+        applyActivitySystemBars(background, background);
+    }
+
     private int playerStatusBarColor() {
         int base = playbackThemeColor;
         float[] hsv = new float[3];
@@ -2270,6 +2318,30 @@ public final class MainActivity extends Activity {
         hsv[1] = Math.min(1f, Math.max(0.42f, hsv[1] * 1.18f));
         hsv[2] = Math.max(0.08f, Math.min(0.22f, hsv[2] * 0.58f));
         return Color.HSVToColor(hsv);
+    }
+
+    private int expandedPlayerStatusInset() {
+        return expandedPlayerDrawsBehindSystemBars()
+                ? systemBarDimension("status_bar_height")
+                : 0;
+    }
+
+    private int expandedPlayerNavigationInset() {
+        return expandedPlayerDrawsBehindSystemBars()
+                ? systemBarDimension("navigation_bar_height")
+                : 0;
+    }
+
+    private boolean expandedPlayerDrawsBehindSystemBars() {
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.R;
+    }
+
+    private int systemBarDimension(String name) {
+        int identifier = getResources().getIdentifier(name, "dimen", "android");
+        if (identifier == 0) {
+            return 0;
+        }
+        return getResources().getDimensionPixelSize(identifier);
     }
 
     private int readArtworkThemeColor(String artworkUri) {
@@ -2392,6 +2464,7 @@ public final class MainActivity extends Activity {
             playerDialog = new Dialog(this);
             playerDialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
         }
+        playerDialog.setOnDismissListener(dialog -> restoreActivitySystemBars());
         playerDialog.setContentView(buildExpandedPlayerContent());
         playerDialog.show();
         applyExpandedPlayerWindow(playerDialog.getWindow());
@@ -2412,10 +2485,27 @@ public final class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
         ));
-        root.setPadding(dp(20), dp(22), dp(20), dp(24));
         updatePlaybackThemeColor(false);
         root.setBackground(expandedPlayerBackground(false));
         root.setPlayerSurfaceStyle(true);
+
+        int statusInset = expandedPlayerStatusInset();
+        int navigationInset = expandedPlayerNavigationInset();
+        View statusScrim = new View(this);
+        statusScrim.setBackgroundColor(playerStatusBarColor());
+        root.addView(statusScrim, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                statusInset
+        ));
+
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(dp(20), dp(22), dp(20), dp(24) + navigationInset);
+        root.addView(content, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+        ));
 
         LinearLayout top = new LinearLayout(this);
         top.setOrientation(LinearLayout.HORIZONTAL);
@@ -2432,15 +2522,15 @@ public final class MainActivity extends Activity {
         top.addView(mix, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         View spacer = new View(this);
         top.addView(spacer, new LinearLayout.LayoutParams(dp(44), dp(42)));
-        root.addView(top, marginBottom(26));
+        content.addView(top, marginBottom(26));
 
-        root.addView(coverArtView(), coverParams());
+        content.addView(coverArtView(), coverParams());
         if (hasSleepTimer()) {
-            root.addView(activeSleepTimerRow(), marginBottom(8));
+            content.addView(activeSleepTimerRow(), marginBottom(8));
         }
-        root.addView(text(playbackTitle, 23, R.color.ytet_text, true), marginBottom(4));
-        root.addView(muted(playbackArtist + " · " + playbackAlbum, 14), marginBottom(2));
-        root.addView(muted(queuePositionText(), 12), marginBottom(8));
+        content.addView(text(playbackTitle, 23, R.color.ytet_text, true), marginBottom(4));
+        content.addView(muted(playbackArtist + " · " + playbackAlbum, 14), marginBottom(2));
+        content.addView(muted(queuePositionText(), 12), marginBottom(8));
 
         PlaybackSeekBarView progress = new PlaybackSeekBarView(this);
         progress.setProgress(playbackDurationMs, playbackSeeking ? playbackSeekPreviewMs : playbackPositionMs);
@@ -2485,9 +2575,9 @@ public final class MainActivity extends Activity {
                 updateExpandedPlayer();
             }
         });
-        root.addView(progress, controlParams(42, 0));
-        root.addView(muted(playbackProgressText(), 12), marginBottom(10));
-        root.addView(new View(this), new LinearLayout.LayoutParams(
+        content.addView(progress, controlParams(42, 0));
+        content.addView(muted(playbackProgressText(), 12), marginBottom(10));
+        content.addView(new View(this), new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 0,
                 1f
@@ -2518,7 +2608,7 @@ public final class MainActivity extends Activity {
         controls.addView(play, playerControlParams(5));
         controls.addView(next, playerControlParams(5));
         controls.addView(repeat, playerControlParams(0));
-        root.addView(controls, marginBottom(6));
+        content.addView(controls, marginBottom(6));
 
         LinearLayout tools = new LinearLayout(this);
         tools.setOrientation(LinearLayout.HORIZONTAL);
@@ -2549,7 +2639,7 @@ public final class MainActivity extends Activity {
         ImageButton queue = playerIconButton(R.drawable.ic_queue_music, "재생목록", false, playbackHasQueue);
         queue.setOnClickListener(view -> showQueueDialog());
         tools.addView(queue, new LinearLayout.LayoutParams(dp(58), dp(58)));
-        root.addView(tools, new LinearLayout.LayoutParams(
+        content.addView(tools, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 dp(98)
         ));
@@ -4096,6 +4186,7 @@ public final class MainActivity extends Activity {
         private void setDragRounded(boolean rounded) {
             if (playerSurfaceStyle) {
                 setBackground(expandedPlayerBackground(rounded));
+                setClipToOutline(rounded);
             }
         }
 
