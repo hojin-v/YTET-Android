@@ -2264,7 +2264,7 @@ public final class MainActivity extends Activity {
 
         LinearLayout tools = new LinearLayout(this);
         tools.setOrientation(LinearLayout.HORIZONTAL);
-        tools.setGravity(Gravity.BOTTOM);
+        tools.setGravity(Gravity.CENTER_VERTICAL);
         boolean timerSelected = hasSleepTimer() || (sleepTimerControlsVisible && sleepTimerMinutes > 0);
         ImageButton timer = playerIconButton(R.drawable.ic_timer, "슬립 타이머", timerSelected, true);
         timer.setOnClickListener(view -> {
@@ -2283,7 +2283,7 @@ public final class MainActivity extends Activity {
         View timerControls = sleepTimerControlsVisible ? sleepTimerControlsPanel() : new View(this);
         LinearLayout.LayoutParams timerParams = new LinearLayout.LayoutParams(
                 0,
-                dp(116),
+                dp(64),
                 1f
         );
         timerParams.setMargins(dp(8), 0, dp(8), 0);
@@ -2293,7 +2293,7 @@ public final class MainActivity extends Activity {
         tools.addView(queue, new LinearLayout.LayoutParams(dp(58), dp(58)));
         root.addView(tools, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(116)
+                dp(64)
         ));
         return root;
     }
@@ -2458,7 +2458,7 @@ public final class MainActivity extends Activity {
                 updateExpandedPlayer();
             }
         });
-        panel.addView(dial, new LinearLayout.LayoutParams(dp(116), LinearLayout.LayoutParams.MATCH_PARENT));
+        panel.addView(dial, new LinearLayout.LayoutParams(dp(104), LinearLayout.LayoutParams.MATCH_PARENT));
         return panel;
     }
 
@@ -3544,8 +3544,10 @@ public final class MainActivity extends Activity {
         private TimerChangeListener listener;
         private int selectedMinutes = 30;
         private int dragStartMinutes = 30;
+        private float dragStepOffset;
         private float dragStartY;
         private boolean timerActive;
+        private boolean dragging;
 
         SleepTimerDialView(Context context) {
             super(context);
@@ -3554,6 +3556,9 @@ public final class MainActivity extends Activity {
 
         void setSelectedMinutes(int minutes) {
             selectedMinutes = clampTimerMinutes(minutes);
+            if (!dragging) {
+                dragStepOffset = 0f;
+            }
             invalidate();
         }
 
@@ -3575,20 +3580,23 @@ public final class MainActivity extends Activity {
 
             paint.setStyle(Paint.Style.FILL);
             paint.setColor(color(R.color.ytet_panel_alt));
-            canvas.drawRoundRect(wheel, dp(18), dp(18), paint);
+            canvas.drawRoundRect(wheel, dp(16), dp(16), paint);
 
             paint.setColor(timerActive ? color(R.color.ytet_accent_dark) : color(R.color.ytet_panel));
-            RectF centerBand = new RectF(dp(8), height * 0.34f, width - dp(8), height * 0.66f);
-            canvas.drawRoundRect(centerBand, dp(14), dp(14), paint);
+            RectF centerBand = new RectF(dp(8), height * 0.26f, width - dp(8), height * 0.74f);
+            canvas.drawRoundRect(centerBand, dp(13), dp(13), paint);
 
-            int previous = previousTimerValue();
-            int next = nextTimerValue();
-            if (previous != selectedMinutes) {
-                drawDialValue(canvas, timerText(previous), width / 2f, height * 0.24f, 15, 0x88FFFFFF);
-            }
-            drawDialValue(canvas, timerText(selectedMinutes), width / 2f, height * 0.53f, 24, Color.WHITE);
-            if (next != selectedMinutes) {
-                drawDialValue(canvas, timerText(next), width / 2f, height * 0.82f, 15, 0x88FFFFFF);
+            float centerIndex = visibleCenterIndex();
+            int anchor = Math.round(centerIndex);
+            int minIndex = Math.max(0, anchor - 2);
+            int maxIndex = Math.min(maxTimerIndex(), anchor + 2);
+            for (int index = minIndex; index <= maxIndex; index++) {
+                float distance = index - centerIndex;
+                if (Math.abs(distance) > 1.65f) {
+                    continue;
+                }
+                drawDialValue(canvas, timerText(index * STEP_MINUTES), width / 2f, dialValueY(height, distance),
+                        dialTextSize(distance), dialTextColor(distance));
             }
         }
 
@@ -3596,32 +3604,62 @@ public final class MainActivity extends Activity {
         public boolean onTouchEvent(MotionEvent event) {
             if (event.getAction() == MotionEvent.ACTION_DOWN) {
                 suppressPlayerDragDismiss = true;
+                dragging = true;
+                dragStepOffset = 0f;
                 dragStartY = event.getRawY();
                 dragStartMinutes = selectedMinutes;
                 getParent().requestDisallowInterceptTouchEvent(true);
+                invalidate();
                 return true;
             }
             if (event.getAction() == MotionEvent.ACTION_MOVE) {
-                int steps = Math.round((dragStartY - event.getRawY()) / dp(18));
-                int nextMinutes = clampTimerMinutes(dragStartMinutes + steps * STEP_MINUTES);
+                float startIndex = dragStartMinutes / (float) STEP_MINUTES;
+                float rawCenterIndex = startIndex + (dragStartY - event.getRawY()) / dp(20);
+                float nextCenterIndex = Math.max(0f, Math.min(maxTimerIndex(), rawCenterIndex));
+                dragStepOffset = nextCenterIndex - startIndex;
+                int nextMinutes = clampTimerMinutes(Math.round(nextCenterIndex) * STEP_MINUTES);
                 if (nextMinutes != selectedMinutes) {
                     selectedMinutes = nextMinutes;
                     if (listener != null) {
                         listener.onChanged(selectedMinutes, false);
                     }
-                    invalidate();
                 }
+                invalidate();
                 return true;
             }
             if (event.getAction() == MotionEvent.ACTION_UP || event.getAction() == MotionEvent.ACTION_CANCEL) {
+                dragging = false;
+                dragStepOffset = 0f;
                 suppressPlayerDragDismiss = false;
                 getParent().requestDisallowInterceptTouchEvent(false);
                 if (listener != null && event.getAction() == MotionEvent.ACTION_UP) {
                     listener.onChanged(selectedMinutes, true);
                 }
+                invalidate();
                 return true;
             }
             return super.onTouchEvent(event);
+        }
+
+        private float visibleCenterIndex() {
+            if (dragging) {
+                return dragStartMinutes / (float) STEP_MINUTES + dragStepOffset;
+            }
+            return selectedMinutes / (float) STEP_MINUTES;
+        }
+
+        private float dialValueY(int height, float distance) {
+            return height * 0.53f + distance * height * 0.33f;
+        }
+
+        private int dialTextSize(float distance) {
+            float absolute = Math.min(1.4f, Math.abs(distance));
+            return Math.round(22f - absolute * 7f);
+        }
+
+        private int dialTextColor(float distance) {
+            int alpha = Math.round(255f - Math.min(1.4f, Math.abs(distance)) * 102f);
+            return Color.argb(Math.max(96, alpha), 255, 255, 255);
         }
 
         private void drawDialValue(Canvas canvas, String text, float x, float y, int sizeSp, int textColor) {
@@ -3634,16 +3672,12 @@ public final class MainActivity extends Activity {
             canvas.drawText(text, x, y + textBounds.height() / 2f, paint);
         }
 
-        private int previousTimerValue() {
-            return clampTimerMinutes(selectedMinutes - STEP_MINUTES);
-        }
-
-        private int nextTimerValue() {
-            return clampTimerMinutes(selectedMinutes + STEP_MINUTES);
-        }
-
         private String timerText(int minutes) {
             return minutes <= 0 ? "OFF" : minutes + "m";
+        }
+
+        private int maxTimerIndex() {
+            return MAX_MINUTES / STEP_MINUTES;
         }
 
         private int clampTimerMinutes(int minutes) {
