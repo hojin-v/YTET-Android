@@ -80,6 +80,7 @@ public final class PlaybackService extends Service {
     private static final String EXTRA_MIX_TITLE = "com.ytet.android.extra.MIX_TITLE";
     private static final String EXTRA_MIX_SUBTITLE = "com.ytet.android.extra.MIX_SUBTITLE";
     private static final String EXTRA_TRACK_IDS = "com.ytet.android.extra.TRACK_IDS";
+    private static final String EXTRA_START_INDEX = "com.ytet.android.extra.START_INDEX";
     private static final String CHANNEL_ID = "ytet_playback";
     private static final int NOTIFICATION_ID = 4211;
 
@@ -126,6 +127,10 @@ public final class PlaybackService extends Service {
     private String errorStatus;
 
     public static Intent playQueueIntent(Context context, MusicStation station, List<DeviceAudioTrack> tracks) {
+        return playQueueIntent(context, station, tracks, 0);
+    }
+
+    public static Intent playQueueIntent(Context context, MusicStation station, List<DeviceAudioTrack> tracks, int startIndex) {
         Intent intent = new Intent(context, PlaybackService.class);
         intent.setAction(ACTION_PLAY_QUEUE);
         intent.putExtra(EXTRA_MIX_TITLE, station == null ? "로컬 음악" : station.title());
@@ -143,6 +148,7 @@ public final class PlaybackService extends Service {
         }
 
         intent.putExtra(EXTRA_TRACK_IDS, ids);
+        intent.putExtra(EXTRA_START_INDEX, Math.max(0, startIndex));
         return intent;
     }
 
@@ -257,6 +263,7 @@ public final class PlaybackService extends Service {
     private void loadQueueAsync(Intent intent) {
         int version = ++queueLoadVersion;
         long[] ids = intent.getLongArrayExtra(EXTRA_TRACK_IDS);
+        int startIndex = Math.max(0, intent.getIntExtra(EXTRA_START_INDEX, 0));
 
         queue.clear();
         queueIndex = 0;
@@ -283,18 +290,18 @@ public final class PlaybackService extends Service {
                 mainHandler.post(() -> handleQueueLoadFailure(version, exception));
                 return;
             }
-            mainHandler.post(() -> finishQueueLoad(version, loadedTracks));
+            mainHandler.post(() -> finishQueueLoad(version, loadedTracks, startIndex));
         });
     }
 
-    private void finishQueueLoad(int version, List<DeviceAudioTrack> loadedTracks) {
+    private void finishQueueLoad(int version, List<DeviceAudioTrack> loadedTracks, int startIndex) {
         if (version != queueLoadVersion) {
             return;
         }
         boolean shouldStartWhenPrepared = startWhenPrepared;
         queue.clear();
         queue.addAll(loadedTracks);
-        queueIndex = 0;
+        queueIndex = queue.isEmpty() ? 0 : Math.min(Math.max(0, startIndex), queue.size() - 1);
         failedTrackSkips = 0;
         prepareCurrentTrack(shouldStartWhenPrepared);
     }
@@ -479,15 +486,20 @@ public final class PlaybackService extends Service {
         if (queue.isEmpty()) {
             return;
         }
-        if (fromCompletion
-                && repeatMode == REPEAT_OFF
-                && !shuffleEnabled
-                && queueIndex >= queue.size() - 1) {
-            finishQueuePlayback();
-            return;
+        if (queueIndex >= queue.size() - 1) {
+            if (repeatMode == REPEAT_ALL) {
+                queueIndex = 0;
+            } else if (fromCompletion) {
+                finishQueuePlayback();
+                return;
+            } else {
+                broadcastState();
+                return;
+            }
+        } else {
+            queueIndex++;
         }
         failedTrackSkips = 0;
-        queueIndex = (queueIndex + 1) % queue.size();
         prepareCurrentTrack();
     }
 
@@ -495,9 +507,28 @@ public final class PlaybackService extends Service {
         if (queue.isEmpty()) {
             return;
         }
+        if (queueIndex <= 0) {
+            if (repeatMode == REPEAT_ALL) {
+                queueIndex = queue.size() - 1;
+            } else {
+                broadcastState();
+                return;
+            }
+        } else {
+            queueIndex--;
+        }
         failedTrackSkips = 0;
-        queueIndex = queueIndex == 0 ? queue.size() - 1 : queueIndex - 1;
         prepareCurrentTrack();
+    }
+
+    private boolean canMoveToNextTrack() {
+        return queue.size() > 1
+                && (queueIndex < queue.size() - 1 || repeatMode == REPEAT_ALL);
+    }
+
+    private boolean canMoveToPreviousTrack() {
+        return queue.size() > 1
+                && (queueIndex > 0 || repeatMode == REPEAT_ALL);
     }
 
     private void handleTrackCompletion() {
@@ -773,9 +804,13 @@ public final class PlaybackService extends Service {
         long actions = PlaybackState.ACTION_PLAY
                 | PlaybackState.ACTION_PAUSE
                 | PlaybackState.ACTION_PLAY_PAUSE
-                | PlaybackState.ACTION_SKIP_TO_NEXT
-                | PlaybackState.ACTION_SKIP_TO_PREVIOUS
                 | PlaybackState.ACTION_STOP;
+        if (canMoveToNextTrack()) {
+            actions |= PlaybackState.ACTION_SKIP_TO_NEXT;
+        }
+        if (canMoveToPreviousTrack()) {
+            actions |= PlaybackState.ACTION_SKIP_TO_PREVIOUS;
+        }
         PlaybackState.Builder builder = new PlaybackState.Builder()
                 .setActions(actions)
                 .setState(state, currentPosition(), playing ? 1f : 0f);

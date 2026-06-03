@@ -160,7 +160,8 @@ public final class MainActivity extends Activity {
     private long[] playbackQueueTrackIds = new long[0];
     private boolean queuePreviewLoading;
     private long sleepTimerEndAtMs;
-    private int sleepTimerMinutes = 30;
+    private int sleepTimerMinutes;
+    private boolean sleepTimerControlsVisible;
     private boolean suppressPlayerDragDismiss;
     private String extractorUrl = "";
     private MediaType extractorMediaType = MediaType.AUDIO;
@@ -184,6 +185,10 @@ public final class MainActivity extends Activity {
     private EditText librarySearchInput;
     private float libraryPullStartY;
     private boolean libraryPullTracking;
+    private float libraryPullDistance;
+    private boolean libraryPullReady;
+    private FrameLayout libraryPullIndicator;
+    private ImageView libraryPullIcon;
     private String librarySource = LIBRARY_SOURCE_COLLECTION;
     private DeviceAudioTrack selectedTrack;
     private DeviceAudioTrack pendingDeleteTrack;
@@ -548,34 +553,71 @@ public final class MainActivity extends Activity {
     }
 
     private boolean handleLibraryPullToRefresh(MotionEvent event) {
+        int action = event.getActionMasked();
         if (currentTab != Tab.LIBRARY || contentScrollView == null) {
-            libraryPullTracking = false;
+            resetLibraryPullIndicator();
             return false;
         }
-        if (event.getAction() == MotionEvent.ACTION_DOWN) {
-            libraryPullTracking = contentScrollView.getScrollY() <= 0;
+        if (action == MotionEvent.ACTION_DOWN) {
+            libraryPullTracking = contentScrollView.getScrollY() <= 0 && !libraryLoading;
             libraryPullStartY = event.getRawY();
+            libraryPullDistance = 0f;
+            libraryPullReady = false;
+            updateLibraryPullIndicator(0f, false);
             return false;
         }
-        if (event.getAction() == MotionEvent.ACTION_MOVE && libraryPullTracking) {
-            if (contentScrollView.getScrollY() > 0) {
-                libraryPullTracking = false;
+        if (action == MotionEvent.ACTION_MOVE && libraryPullTracking) {
+            float dragDistance = event.getRawY() - libraryPullStartY;
+            if (dragDistance <= 0f || contentScrollView.getScrollY() > 0) {
+                libraryPullDistance = 0f;
+                libraryPullReady = false;
+                updateLibraryPullIndicator(0f, false);
                 return false;
             }
-            float dragDistance = event.getRawY() - libraryPullStartY;
-            if (dragDistance > dp(92)) {
-                libraryPullTracking = false;
-                if (!libraryLoading) {
-                    toast("내 음악을 새로고침합니다.");
-                    startLibraryRefresh(true);
-                }
+            libraryPullDistance = dragDistance;
+            libraryPullReady = dragDistance >= dp(92);
+            updateLibraryPullIndicator(dragDistance, libraryPullReady);
+            return dragDistance > dp(6);
+        }
+        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+            boolean shouldRefresh = action == MotionEvent.ACTION_UP && libraryPullTracking && libraryPullReady && !libraryLoading;
+            libraryPullTracking = false;
+            libraryPullDistance = 0f;
+            libraryPullReady = false;
+            updateLibraryPullIndicator(shouldRefresh ? dp(92) : 0f, shouldRefresh);
+            if (shouldRefresh) {
+                startLibraryRefresh(true);
                 return true;
             }
         }
-        if (event.getAction() == MotionEvent.ACTION_UP || event.getAction() == MotionEvent.ACTION_CANCEL) {
-            libraryPullTracking = false;
-        }
         return false;
+    }
+
+    private void resetLibraryPullIndicator() {
+        libraryPullTracking = false;
+        libraryPullDistance = 0f;
+        libraryPullReady = false;
+        updateLibraryPullIndicator(0f, false);
+    }
+
+    private void updateLibraryPullIndicator(float dragDistance, boolean ready) {
+        if (libraryPullIndicator == null) {
+            return;
+        }
+        int height = libraryLoading
+                ? dp(72)
+                : Math.min(dp(72), Math.round(Math.max(0f, dragDistance) * 0.72f));
+        ViewGroup.LayoutParams params = libraryPullIndicator.getLayoutParams();
+        if (params != null && params.height != height) {
+            params.height = height;
+            libraryPullIndicator.setLayoutParams(params);
+        }
+        libraryPullIndicator.setVisibility(height > 0 ? View.VISIBLE : View.INVISIBLE);
+        if (libraryPullIcon != null) {
+            float progress = Math.min(1f, Math.max(0f, dragDistance / dp(92)));
+            libraryPullIcon.setAlpha(libraryLoading || ready ? 1f : Math.max(0.35f, progress));
+            libraryPullIcon.setRotation(libraryLoading || ready ? 0f : progress * 180f);
+        }
     }
 
     private View buildHomeTab() {
@@ -597,7 +639,9 @@ public final class MainActivity extends Activity {
 
         LinearLayout hero = panel();
         hero.addView(label("내 음악 바로 듣기"), marginBottom(8));
-        hero.addView(text(homeStatus, 15, R.color.ytet_text, false), marginBottom(12));
+        if (!homeStatus.trim().isEmpty()) {
+            hero.addView(text(homeStatus, 15, R.color.ytet_text, false), marginBottom(12));
+        }
         hero.addView(muted(homeSummary(), 13), marginBottom(14));
         Button primaryPlay = primaryButton("보관함 추천 재생");
         primaryPlay.setEnabled(!homeTracks.isEmpty());
@@ -920,12 +964,15 @@ public final class MainActivity extends Activity {
             startLibraryRefresh(false);
         }
 
+        root.addView(libraryPullRefreshIndicator(), pullIndicatorParams());
         root.addView(librarySearchToolbar(), marginBottom(8));
         root.addView(libraryFilterBar(), marginBottom(shouldShowLibrarySearchInput() ? 8 : 12));
         if (shouldShowLibrarySearchInput()) {
             root.addView(librarySearchInputRow(), marginBottom(10));
         }
-        root.addView(libraryViewToolbar(), marginBottom(14));
+        if (!libraryStatus.trim().isEmpty()) {
+            root.addView(libraryViewToolbar(), marginBottom(14));
+        }
 
         if (libraryFilter == LibraryFilter.ALL) {
             List<DeviceAudioTrack> visibleTracks = visibleLibraryTracks();
@@ -1013,6 +1060,28 @@ public final class MainActivity extends Activity {
         status.setGravity(Gravity.CENTER_VERTICAL);
         toolbar.addView(status, new LinearLayout.LayoutParams(0, dp(34), 1f));
         return toolbar;
+    }
+
+    private View libraryPullRefreshIndicator() {
+        FrameLayout container = new FrameLayout(this);
+        container.setVisibility(libraryLoading ? View.VISIBLE : View.INVISIBLE);
+
+        FrameLayout circle = new FrameLayout(this);
+        circle.setBackground(rounded(Color.WHITE, 28));
+        ImageView icon = new ImageView(this);
+        icon.setImageResource(R.drawable.ic_refresh);
+        icon.setColorFilter(Color.BLACK);
+        icon.setScaleType(ImageView.ScaleType.CENTER);
+        circle.addView(icon, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+        ));
+
+        container.addView(circle, new FrameLayout.LayoutParams(dp(56), dp(56), Gravity.CENTER));
+        libraryPullIndicator = container;
+        libraryPullIcon = icon;
+        updateLibraryPullIndicator(libraryLoading ? dp(92) : libraryPullDistance, libraryLoading || libraryPullReady);
+        return container;
     }
 
     private View librarySearchToolbar() {
@@ -1663,13 +1732,35 @@ public final class MainActivity extends Activity {
         playbackWillPlay = true;
         playbackError = false;
         playbackTitle = track.title();
-        playbackMeta = track.artist() + " · " + track.folder();
+        playbackMeta = track.artist() + " · " + track.album();
         setStreamingStatus("준비 중: " + track.title());
         updateNowPlayingBar();
         List<DeviceAudioTrack> queue = new ArrayList<>();
         queue.add(track);
         activeQueuePreview = new ArrayList<>(queue);
         startPlayback(PlaybackService.playQueueIntent(this, station, queue));
+    }
+
+    private void playQueueTrack(DeviceAudioTrack track, int index) {
+        if (track == null || activeQueuePreview.isEmpty() || index < 0 || index >= activeQueuePreview.size()) {
+            playTrack(track);
+            return;
+        }
+        MusicStation station = activeStation == null ? singleTrackStation(track) : activeStation;
+        activeStation = station;
+        selectedTrack = track;
+        playbackHasQueue = true;
+        playbackPlaying = false;
+        playbackPreparing = true;
+        playbackWillPlay = true;
+        playbackError = false;
+        playbackTitle = track.title();
+        playbackMeta = track.artist() + " · " + track.album();
+        activeQueuePreview = new ArrayList<>(activeQueuePreview);
+        playbackQueueIndex = index;
+        setStreamingStatus("준비 중: " + track.title());
+        updateNowPlayingBar();
+        startPlayback(PlaybackService.playQueueIntent(this, station, activeQueuePreview, index));
     }
 
     private void toggleStreamPlayback() {
@@ -1683,15 +1774,27 @@ public final class MainActivity extends Activity {
     }
 
     private void previousTrack() {
-        if (playbackHasQueue) {
+        if (hasPreviousTrack()) {
             startPlayback(PlaybackService.commandIntent(this, PlaybackService.ACTION_PREVIOUS));
         }
     }
 
     private void nextTrack() {
-        if (playbackHasQueue) {
+        if (hasNextTrack()) {
             startPlayback(PlaybackService.commandIntent(this, PlaybackService.ACTION_NEXT));
         }
+    }
+
+    private boolean hasPreviousTrack() {
+        return playbackHasQueue
+                && playbackQueueSize > 1
+                && (playbackQueueIndex > 0 || playbackRepeatMode == PlaybackService.REPEAT_ALL);
+    }
+
+    private boolean hasNextTrack() {
+        return playbackHasQueue
+                && playbackQueueSize > 1
+                && (playbackQueueIndex < playbackQueueSize - 1 || playbackRepeatMode == PlaybackService.REPEAT_ALL);
     }
 
     private void toggleShuffle() {
@@ -1779,14 +1882,14 @@ public final class MainActivity extends Activity {
         LinearLayout top = new LinearLayout(this);
         top.setOrientation(LinearLayout.HORIZONTAL);
         top.setGravity(Gravity.CENTER_VERTICAL);
-        ImageButton close = iconButton(R.drawable.ic_keyboard_arrow_down, "플레이어 닫기", false);
+        ImageButton close = playerIconButton(R.drawable.ic_keyboard_arrow_down, "플레이어 닫기", false, true);
         close.setOnClickListener(view -> {
             if (playerDialog != null) {
                 playerDialog.dismiss();
             }
         });
         top.addView(close, new LinearLayout.LayoutParams(dp(44), dp(42)));
-        TextView mix = text(playbackMix, 13, R.color.ytet_muted, true);
+        TextView mix = text("재생 중", 13, R.color.ytet_muted, true);
         mix.setGravity(Gravity.CENTER);
         top.addView(mix, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         View spacer = new View(this);
@@ -1796,7 +1899,7 @@ public final class MainActivity extends Activity {
         root.addView(coverArtView(), coverParams());
         root.addView(text(playbackTitle, 23, R.color.ytet_text, true), marginBottom(6));
         root.addView(muted(playbackArtist + " · " + playbackAlbum, 14), marginBottom(4));
-        root.addView(muted(playbackFolder + queuePositionText(), 12), marginBottom(16));
+        root.addView(muted(queuePositionText(), 12), marginBottom(16));
 
         ProgressBar progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         progress.setMax((int) Math.max(1L, Math.min(Integer.MAX_VALUE, playbackDurationMs)));
@@ -1807,20 +1910,21 @@ public final class MainActivity extends Activity {
         LinearLayout controls = new LinearLayout(this);
         controls.setOrientation(LinearLayout.HORIZONTAL);
         controls.setGravity(Gravity.CENTER_VERTICAL);
-        ImageButton shuffle = iconButton(R.drawable.ic_shuffle, "셔플", playbackShuffleEnabled);
+        ImageButton shuffle = playerIconButton(R.drawable.ic_shuffle, "셔플", playbackShuffleEnabled, playbackHasQueue);
         shuffle.setOnClickListener(view -> toggleShuffle());
-        ImageButton previous = iconButton(R.drawable.ic_skip_previous, "이전 곡", false);
+        ImageButton previous = playerIconButton(R.drawable.ic_skip_previous, "이전 곡", false, hasPreviousTrack());
         previous.setOnClickListener(view -> previousTrack());
         ImageButton play = iconButton(playbackPlaying || playbackWillPlay ? R.drawable.ic_pause : R.drawable.ic_play_arrow,
                 playbackPlaying || playbackWillPlay ? "일시정지" : "재생",
                 true);
         play.setOnClickListener(view -> toggleStreamPlayback());
-        ImageButton next = iconButton(R.drawable.ic_skip_next, "다음 곡", false);
+        ImageButton next = playerIconButton(R.drawable.ic_skip_next, "다음 곡", false, hasNextTrack());
         next.setOnClickListener(view -> nextTrack());
-        ImageButton repeat = iconButton(
+        ImageButton repeat = playerIconButton(
                 playbackRepeatMode == PlaybackService.REPEAT_ONE ? R.drawable.ic_repeat_one : R.drawable.ic_repeat,
                 repeatDescription(),
-                playbackRepeatMode != PlaybackService.REPEAT_OFF
+                playbackRepeatMode != PlaybackService.REPEAT_OFF,
+                playbackHasQueue
         );
         repeat.setOnClickListener(view -> toggleRepeat());
         controls.addView(shuffle, playerControlParams(5));
@@ -1832,17 +1936,33 @@ public final class MainActivity extends Activity {
 
         LinearLayout tools = new LinearLayout(this);
         tools.setOrientation(LinearLayout.HORIZONTAL);
-        tools.setGravity(Gravity.TOP);
-        tools.addView(sleepTimerPanel(), new LinearLayout.LayoutParams(
+        tools.setGravity(Gravity.CENTER_VERTICAL);
+        boolean timerSelected = isSleepTimerActive() || (sleepTimerControlsVisible && sleepTimerMinutes > 0);
+        ImageButton timer = playerIconButton(R.drawable.ic_timer, "슬립 타이머", timerSelected, true);
+        timer.setOnClickListener(view -> {
+            if (sleepTimerControlsVisible) {
+                applySleepTimer(sleepTimerMinutes);
+                sleepTimerControlsVisible = false;
+            } else {
+                if (isSleepTimerActive()) {
+                    sleepTimerMinutes = remainingSleepTimerMinutes();
+                }
+                sleepTimerControlsVisible = true;
+            }
+            updateExpandedPlayer();
+        });
+        tools.addView(timer, new LinearLayout.LayoutParams(dp(58), dp(58)));
+        View timerControls = sleepTimerControlsVisible ? sleepTimerControlsPanel() : new View(this);
+        LinearLayout.LayoutParams timerParams = new LinearLayout.LayoutParams(
                 0,
-                dp(136),
+                sleepTimerControlsVisible ? dp(116) : dp(58),
                 1f
-        ));
-        ImageButton queue = iconButton(R.drawable.ic_queue_music, "재생목록", false);
+        );
+        timerParams.setMargins(dp(8), 0, dp(8), 0);
+        tools.addView(timerControls, timerParams);
+        ImageButton queue = playerIconButton(R.drawable.ic_queue_music, "재생목록", false, playbackHasQueue);
         queue.setOnClickListener(view -> showQueueDialog());
-        LinearLayout.LayoutParams queueParams = new LinearLayout.LayoutParams(dp(58), dp(58));
-        queueParams.setMargins(dp(12), dp(39), 0, 0);
-        tools.addView(queue, queueParams);
+        tools.addView(queue, new LinearLayout.LayoutParams(dp(58), dp(58)));
         root.addView(tools, matchWrap());
         return root;
     }
@@ -1904,7 +2024,7 @@ public final class MainActivity extends Activity {
         row.setBackground(rounded(current ? color(R.color.ytet_panel_alt) : color(R.color.ytet_panel), 8));
         row.addView(text(track.title(), 14, current ? R.color.ytet_text : R.color.ytet_muted, current), marginBottom(2));
         row.addView(muted(track.artist() + " · " + MusicLibrary.formatDuration(track.durationMs()), 12), matchWrap());
-        row.setOnClickListener(view -> playTrack(track));
+        row.setOnClickListener(view -> playQueueTrack(track, index));
         return row;
     }
 
@@ -1912,7 +2032,7 @@ public final class MainActivity extends Activity {
         if (playbackQueueIndex < 0 || playbackQueueSize <= 0) {
             return "";
         }
-        return " · " + (playbackQueueIndex + 1) + "/" + playbackQueueSize;
+        return (playbackQueueIndex + 1) + "/" + playbackQueueSize;
     }
 
     private String playbackProgressText() {
@@ -1939,32 +2059,26 @@ public final class MainActivity extends Activity {
         return "반복 꺼짐";
     }
 
-    private View sleepTimerPanel() {
+    private View sleepTimerControlsPanel() {
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.HORIZONTAL);
         panel.setGravity(Gravity.CENTER_VERTICAL);
-        panel.setPadding(dp(12), dp(10), dp(12), dp(10));
-        panel.setBackground(rounded(color(R.color.ytet_panel), 8));
-
-        ImageView icon = new ImageView(this);
-        icon.setImageResource(R.drawable.ic_timer);
-        icon.setColorFilter(isSleepTimerActive() ? color(R.color.ytet_accent) : color(R.color.ytet_muted));
-        panel.addView(icon, new LinearLayout.LayoutParams(dp(26), dp(26)));
+        panel.setPadding(0, 0, 0, 0);
 
         LinearLayout copy = new LinearLayout(this);
         copy.setOrientation(LinearLayout.VERTICAL);
-        copy.setPadding(dp(12), 0, dp(8), 0);
+        copy.setPadding(0, 0, dp(8), 0);
         copy.addView(label("슬립 타이머"), marginBottom(2));
         copy.addView(muted(sleepTimerStatusText(), 12), matchWrap());
         panel.addView(copy, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
         SleepTimerDialView dial = new SleepTimerDialView(this);
-        dial.setSelectedMinutes(isSleepTimerActive() ? remainingSleepTimerMinutes() : sleepTimerMinutes);
+        dial.setSelectedMinutes(sleepTimerMinutes);
         dial.setTimerActive(isSleepTimerActive());
         dial.setOnTimerChangeListener((minutes, committed) -> {
             sleepTimerMinutes = minutes;
             if (committed) {
-                applySleepTimer(minutes);
+                updateExpandedPlayer();
             }
         });
         panel.addView(dial, new LinearLayout.LayoutParams(dp(116), LinearLayout.LayoutParams.MATCH_PARENT));
@@ -1973,7 +2087,7 @@ public final class MainActivity extends Activity {
 
     private void applySleepTimer(int minutes) {
         startPlayback(PlaybackService.sleepTimerIntent(this, minutes));
-        toast(minutes <= 0 ? "슬립 타이머를 껐습니다." : minutes + "분 뒤 재생을 멈춥니다.");
+        sleepTimerEndAtMs = minutes <= 0 ? 0L : System.currentTimeMillis() + minutes * 60_000L;
     }
 
     private boolean isSleepTimerActive() {
@@ -1989,10 +2103,10 @@ public final class MainActivity extends Activity {
     }
 
     private String sleepTimerStatusText() {
-        if (isSleepTimerActive()) {
-            return remainingSleepTimerMinutes() + "분 뒤 종료";
+        if (sleepTimerMinutes <= 0) {
+            return "다이얼을 드래그해서 설정";
         }
-        return "다이얼을 드래그해서 설정";
+        return "← 아이콘을 클릭해서 설정 완료";
     }
 
     private void showQueueDialog() {
@@ -2024,7 +2138,7 @@ public final class MainActivity extends Activity {
         LinearLayout top = new LinearLayout(this);
         top.setOrientation(LinearLayout.HORIZONTAL);
         top.setGravity(Gravity.CENTER_VERTICAL);
-        ImageButton close = iconButton(R.drawable.ic_keyboard_arrow_down, "재생목록 닫기", false);
+        ImageButton close = playerIconButton(R.drawable.ic_keyboard_arrow_down, "재생목록 닫기", false, true);
         close.setOnClickListener(view -> {
             if (queueDialog != null) {
                 queueDialog.dismiss();
@@ -2169,7 +2283,7 @@ public final class MainActivity extends Activity {
                             ? "보관함에 음악이 없습니다. 추출한 음원은 기본적으로 "
                             + DefaultMediaPaths.displayPath(MediaType.AUDIO)
                             + "에 저장됩니다."
-                            : "보관함 스캔 완료";
+                            : "";
                     renderLibraryDependentTabs();
                 });
             } catch (Exception exception) {
@@ -2205,7 +2319,7 @@ public final class MainActivity extends Activity {
                     libraryLoading = false;
                     libraryStatus = tracks.isEmpty()
                             ? emptyLibraryStatus()
-                            : librarySourceLabel() + " 스캔 완료";
+                            : "";
                     renderLibraryDependentTabs();
                 });
             } catch (Exception exception) {
@@ -2735,6 +2849,21 @@ public final class MainActivity extends Activity {
         return button;
     }
 
+    private ImageButton playerIconButton(int iconRes, String description, boolean active, boolean enabled) {
+        ImageButton button = new ImageButton(this);
+        button.setImageResource(iconRes);
+        button.setContentDescription(description);
+        button.setColorFilter(enabled
+                ? (active ? color(R.color.ytet_accent) : color(R.color.ytet_text))
+                : color(R.color.ytet_muted));
+        button.setBackgroundColor(Color.TRANSPARENT);
+        button.setPadding(dp(11), dp(11), dp(11), dp(11));
+        button.setScaleType(ImageView.ScaleType.CENTER);
+        button.setEnabled(enabled);
+        button.setAlpha(enabled ? 1f : 0.48f);
+        return button;
+    }
+
     private ImageButton toolbarIconButton(int iconRes, String description, boolean selected) {
         ImageButton button = new ImageButton(this);
         button.setImageResource(iconRes);
@@ -2842,6 +2971,13 @@ public final class MainActivity extends Activity {
         return params;
     }
 
+    private LinearLayout.LayoutParams pullIndicatorParams() {
+        return new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                libraryLoading ? dp(72) : 0
+        );
+    }
+
     private LinearLayout.LayoutParams coverParams() {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -2918,6 +3054,7 @@ public final class MainActivity extends Activity {
     private final class DragDismissLayout extends LinearLayout {
         private float startX;
         private float startY;
+        private boolean dismissedByDrag;
 
         DragDismissLayout(Context context) {
             super(context);
@@ -2925,22 +3062,41 @@ public final class MainActivity extends Activity {
 
         @Override
         public boolean dispatchTouchEvent(MotionEvent event) {
-            if (event.getAction() == MotionEvent.ACTION_DOWN) {
+            int action = event.getActionMasked();
+            if (action == MotionEvent.ACTION_DOWN) {
                 startX = event.getRawX();
                 startY = event.getRawY();
-            } else if (event.getAction() == MotionEvent.ACTION_MOVE && !suppressPlayerDragDismiss) {
+                dismissedByDrag = false;
+                setTranslationY(0f);
+            } else if (action == MotionEvent.ACTION_MOVE && !suppressPlayerDragDismiss) {
                 float dx = event.getRawX() - startX;
                 float dy = event.getRawY() - startY;
-                if (dy > dp(112) && dy > Math.abs(dx) * 1.25f) {
-                    if (queueDialog != null && queueDialog.isShowing()) {
-                        queueDialog.dismiss();
-                    } else if (playerDialog != null && playerDialog.isShowing()) {
-                        playerDialog.dismiss();
-                    }
+                if (dy > dp(8) && dy > Math.abs(dx)) {
+                    setTranslationY(Math.min(dp(96), dy * 0.32f));
+                }
+                if (!dismissedByDrag && dy > dp(56) && dy > Math.abs(dx)) {
+                    dismissedByDrag = true;
+                    dismissTopPlayerSurface();
                     return true;
+                }
+            } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                if (dismissedByDrag) {
+                    dismissedByDrag = false;
+                    return true;
+                }
+                if (getTranslationY() > 0f) {
+                    animate().translationY(0f).setDuration(140L).start();
                 }
             }
             return super.dispatchTouchEvent(event);
+        }
+
+        private void dismissTopPlayerSurface() {
+            if (queueDialog != null && queueDialog.isShowing()) {
+                queueDialog.dismiss();
+            } else if (playerDialog != null && playerDialog.isShowing()) {
+                playerDialog.dismiss();
+            }
         }
     }
 
@@ -2991,9 +3147,15 @@ public final class MainActivity extends Activity {
             RectF centerBand = new RectF(dp(8), height * 0.34f, width - dp(8), height * 0.66f);
             canvas.drawRoundRect(centerBand, dp(14), dp(14), paint);
 
-            drawDialValue(canvas, timerText(previousTimerValue()), width / 2f, height * 0.24f, 15, 0x88FFFFFF);
+            int previous = previousTimerValue();
+            int next = nextTimerValue();
+            if (previous != selectedMinutes) {
+                drawDialValue(canvas, timerText(previous), width / 2f, height * 0.24f, 15, 0x88FFFFFF);
+            }
             drawDialValue(canvas, timerText(selectedMinutes), width / 2f, height * 0.53f, 24, Color.WHITE);
-            drawDialValue(canvas, timerText(nextTimerValue()), width / 2f, height * 0.82f, 15, 0x88FFFFFF);
+            if (next != selectedMinutes) {
+                drawDialValue(canvas, timerText(next), width / 2f, height * 0.82f, 15, 0x88FFFFFF);
+            }
         }
 
         @Override
