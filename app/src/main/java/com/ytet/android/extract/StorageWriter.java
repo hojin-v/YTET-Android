@@ -28,6 +28,8 @@ import java.util.Locale;
 import java.util.Map;
 
 public final class StorageWriter {
+    private static final int MAX_STORAGE_NAME_LENGTH = 160;
+
     public void ensureDefaultFolders() {
         File downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
         new File(downloads, DefaultMediaPaths.APP_FOLDER + "/" + DefaultMediaPaths.MUSIC_FOLDER).mkdirs();
@@ -65,7 +67,7 @@ public final class StorageWriter {
             Uri targetParentUri = parentUriForFile(resolver, parentUri, baseDir, file, folderCache);
             Uri targetUri;
             try {
-                targetUri = DocumentsContract.createDocument(resolver, targetParentUri, mimeType, file.getName());
+                targetUri = DocumentsContract.createDocument(resolver, targetParentUri, mimeType, targetDisplayName(file));
             } catch (Exception exception) {
                 throw new ExtractionException("저장 파일을 만들 수 없습니다: " + displayName, exception);
             }
@@ -103,21 +105,28 @@ public final class StorageWriter {
     ) throws ExtractionException {
         ContentResolver resolver = context.getContentResolver();
         List<CopiedFile> copiedFiles = new ArrayList<>();
+        List<String> scanPaths = new ArrayList<>();
+        List<String> scanMimeTypes = new ArrayList<>();
         for (File file : files) {
             String displayName = relativeDisplayName(baseDir, file);
+            String targetName = targetDisplayName(file);
+            String targetRelativePath = targetRelativePath(mediaType, baseDir, file);
             String mimeType = guessMimeType(file);
             ContentValues values = new ContentValues();
-            values.put(MediaStore.MediaColumns.DISPLAY_NAME, file.getName());
+            values.put(MediaStore.MediaColumns.DISPLAY_NAME, targetName);
             values.put(MediaStore.MediaColumns.MIME_TYPE, mimeType);
-            values.put(MediaStore.MediaColumns.RELATIVE_PATH, targetRelativePath(mediaType, baseDir, file));
+            values.put(MediaStore.MediaColumns.RELATIVE_PATH, targetRelativePath);
             values.put(MediaStore.MediaColumns.SIZE, file.length());
             values.put(MediaStore.MediaColumns.IS_PENDING, 1);
 
             Uri targetUri;
             try {
-                targetUri = resolver.insert(collectionUriFor(mediaType, mimeType), values);
+                targetUri = resolver.insert(defaultDownloadsCollectionUri(), values);
             } catch (Exception exception) {
-                throw new ExtractionException("기본 저장소에 파일을 만들 수 없습니다: " + displayName, exception);
+                throw new ExtractionException(
+                        "기본 저장소에 파일을 만들 수 없습니다: " + displayName + errorDetail(exception),
+                        exception
+                );
             }
             if (targetUri == null) {
                 throw new ExtractionException("기본 저장소 파일 URI를 만들 수 없습니다: " + displayName);
@@ -137,8 +146,11 @@ public final class StorageWriter {
             ContentValues complete = new ContentValues();
             complete.put(MediaStore.MediaColumns.IS_PENDING, 0);
             resolver.update(targetUri, complete, null, null);
+            scanPaths.add(defaultScanPath(targetRelativePath, targetName));
+            scanMimeTypes.add(mimeType);
             copiedFiles.add(new CopiedFile(displayName, mimeType, file.length(), targetUri.toString()));
         }
+        scanCopiedFiles(context, scanPaths, scanMimeTypes);
         return copiedFiles;
     }
 
@@ -188,7 +200,7 @@ public final class StorageWriter {
             File file,
             Map<String, Uri> folderCache
     ) throws ExtractionException {
-        String relativeParent = relativeParentPath(baseDir, file);
+        String relativeParent = safeRelativePath(relativeParentPath(baseDir, file));
         if (relativeParent.isEmpty()) {
             return rootUri;
         }
@@ -247,19 +259,28 @@ public final class StorageWriter {
         return new File(Environment.getExternalStorageDirectory(), relativePath).getAbsolutePath();
     }
 
-    private Uri collectionUriFor(MediaType mediaType, String mimeType) {
-        if (mediaType == MediaType.VIDEO && mimeType != null && mimeType.startsWith("video/")) {
-            return MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
-        }
-        if (mediaType == MediaType.AUDIO && mimeType != null && mimeType.startsWith("audio/")) {
-            return MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
+    private Uri defaultDownloadsCollectionUri() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            return MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
         }
         return MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
     }
 
     private String targetRelativePath(MediaType mediaType, File baseDir, File file) {
-        String parent = DefaultMediaPaths.normalizeRelativePath(relativeParentPath(baseDir, file));
+        String parent = DefaultMediaPaths.normalizeRelativePath(safeRelativePath(relativeParentPath(baseDir, file)));
         return DefaultMediaPaths.extractionRelativePath(mediaType) + parent;
+    }
+
+    private String targetDisplayName(File file) {
+        return safePathSegment(file == null ? "" : file.getName(), "YTET");
+    }
+
+    private String defaultScanPath(String relativePath, String displayName) {
+        String cleanRelativePath = DefaultMediaPaths.cleanRelativePath(relativePath);
+        File parent = cleanRelativePath.isEmpty()
+                ? Environment.getExternalStorageDirectory()
+                : new File(Environment.getExternalStorageDirectory(), cleanRelativePath);
+        return new File(parent, displayName).getAbsolutePath();
     }
 
     private void copy(InputStream input, OutputStream output) throws IOException {
@@ -279,8 +300,9 @@ public final class StorageWriter {
     }
 
     private String relativeDisplayName(File baseDir, File file) {
-        String relativePath = relativePath(baseDir, file);
-        return relativePath.isEmpty() ? file.getName() : relativePath;
+        String parentPath = safeRelativePath(relativeParentPath(baseDir, file));
+        String displayName = targetDisplayName(file);
+        return parentPath.isEmpty() ? displayName : parentPath + "/" + displayName;
     }
 
     private String relativeParentPath(File baseDir, File file) {
@@ -306,6 +328,57 @@ public final class StorageWriter {
         } catch (IllegalArgumentException exception) {
             return "";
         }
+    }
+
+    private String safeRelativePath(String path) {
+        String cleanPath = DefaultMediaPaths.cleanRelativePath(path);
+        if (cleanPath.isEmpty()) {
+            return "";
+        }
+        StringBuilder builder = new StringBuilder();
+        for (String segment : cleanPath.split("/")) {
+            String safeSegment = safePathSegment(segment, "");
+            if (safeSegment.isEmpty()) {
+                continue;
+            }
+            if (builder.length() > 0) {
+                builder.append('/');
+            }
+            builder.append(safeSegment);
+        }
+        return builder.toString();
+    }
+
+    private String safePathSegment(String value, String fallback) {
+        String cleaned = value == null ? "" : value.trim();
+        cleaned = cleaned.replaceAll("[\\\\/:*?\"<>|\\r\\n\\p{Cntrl}]+", " ");
+        cleaned = cleaned.replaceAll("\\s+", " ").trim();
+        while (cleaned.endsWith(".") || cleaned.endsWith(" ")) {
+            cleaned = cleaned.substring(0, cleaned.length() - 1).trim();
+        }
+        if (cleaned.isEmpty()) {
+            cleaned = fallback == null ? "" : fallback.trim();
+        }
+        if (cleaned.isEmpty()) {
+            return "";
+        }
+        if (cleaned.length() <= MAX_STORAGE_NAME_LENGTH) {
+            return cleaned;
+        }
+        int dot = cleaned.lastIndexOf('.');
+        if (dot > 0 && dot < cleaned.length() - 1 && cleaned.length() - dot <= 12) {
+            String extension = cleaned.substring(dot);
+            return cleaned.substring(0, Math.max(1, MAX_STORAGE_NAME_LENGTH - extension.length())).trim() + extension;
+        }
+        return cleaned.substring(0, MAX_STORAGE_NAME_LENGTH).trim();
+    }
+
+    private String errorDetail(Exception exception) {
+        String message = exception == null ? null : exception.getMessage();
+        if (message == null || message.trim().isEmpty()) {
+            return "";
+        }
+        return " (" + message.trim() + ")";
     }
 
     private String guessMimeType(File file) {

@@ -506,7 +506,7 @@ def enhance_music_metadata(info, progress_listener, logger):
         client = MusicBrainzClient(logger)
         entries = [entry for entry in info.get("entries") or [] if isinstance(entry, dict)]
         if entries:
-            enhance_playlist_metadata(info, entries, client, logger)
+            enhance_playlist_metadata(info, entries, client, logger, progress_listener)
         else:
             metadata = match_recording_metadata(info, client)
             if metadata:
@@ -581,19 +581,24 @@ class MusicBrainzClient:
         return data
 
 
-def enhance_playlist_metadata(info, entries, client, logger):
+def enhance_playlist_metadata(info, entries, client, logger, progress_listener=None):
     artist_candidate, album_candidate = playlist_artist_album_candidates(info)
+    if album_candidate:
+        notify(progress_listener, 91, "메타데이터", "MusicBrainz 앨범 후보 검색 중")
     release = match_release_for_playlist(entries, artist_candidate, album_candidate, client)
     if release:
         matched = apply_release_metadata(entries, release)
         logger.info(f"MusicBrainz release matched {matched}/{len(entries)} tracks")
 
-    for entry in entries:
+    total = len(entries)
+    for index, entry in enumerate(entries, start=1):
         if entry.get("__ytet_metadata"):
             continue
+        notify(progress_listener, 91, "메타데이터", f"MusicBrainz 검색 중 {index}/{total}")
         metadata = match_recording_metadata(entry, client, artist_candidate=artist_candidate, album_candidate=album_candidate)
         if metadata:
             apply_metadata_override(entry, metadata)
+    notify(progress_listener, 91, "메타데이터", "MusicBrainz 검색 완료")
 
 
 def playlist_artist_album_candidates(info):

@@ -51,6 +51,18 @@ class FakeProgressListener:
         self.events.append((percent, stage, message))
 
 
+class FakeMusicBrainzClient:
+    def search(self, entity, query, limit=5):
+        if entity == "release":
+            return {"releases": []}
+        if entity == "recording":
+            return {"recordings": []}
+        return {}
+
+    def lookup_release(self, release_id):
+        return {}
+
+
 class YtetYdlOptionsTest(unittest.TestCase):
     def setUp(self):
         self.listener = FakeProgressListener()
@@ -233,6 +245,23 @@ class YtetYdlOptionsTest(unittest.TestCase):
         self.assertEqual("매미", ytet_ydl.metadata_artist(entries[0]))
         self.assertEqual("Album Title", ytet_ydl.metadata_album(entries[0]))
         self.assertEqual((1, 2), ytet_ydl.metadata_track_number(entries[0]))
+
+    def test_playlist_musicbrainz_reports_entry_progress(self):
+        entries = [{"title": "First"}, {"title": "Second"}]
+
+        ytet_ydl.enhance_playlist_metadata(
+            {"title": "Artist / Album"},
+            entries,
+            FakeMusicBrainzClient(),
+            self.logger,
+            self.listener,
+        )
+
+        messages = [event[2] for event in self.listener.events]
+        self.assertIn("MusicBrainz 앨범 후보 검색 중", messages)
+        self.assertIn("MusicBrainz 검색 중 1/2", messages)
+        self.assertIn("MusicBrainz 검색 중 2/2", messages)
+        self.assertEqual("MusicBrainz 검색 완료", messages[-1])
 
     def test_high_score_recording_result_allows_artist_alias_difference(self):
         info = {"title": "LOVE SONG (Lyric Video/Eng)", "artist": "매미"}

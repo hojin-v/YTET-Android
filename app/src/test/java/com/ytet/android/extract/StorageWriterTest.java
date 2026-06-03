@@ -28,11 +28,27 @@ public final class StorageWriterTest {
     }
 
     @Test
+    public void relativeDisplayNameSanitizesPlaylistFolderAndFileName() throws Exception {
+        File workspace = new File("/tmp/workspace");
+        File output = new File(workspace, "Album: Best?/001 - A*B?C.m4a");
+
+        assertEquals("Album Best/001 - A B C.m4a", relativeDisplayName(workspace, output));
+    }
+
+    @Test
     public void defaultAudioPathPreservesPlaylistFolderUnderYtetMusic() throws Exception {
         File workspace = new File("/tmp/workspace");
         File output = new File(workspace, "Album/001 - Song.m4a");
 
         assertEquals("Download/YTET/Music/Album/", targetRelativePath(MediaType.AUDIO, workspace, output));
+    }
+
+    @Test
+    public void defaultAudioPathSanitizesPlaylistFolderUnderYtetMusic() throws Exception {
+        File workspace = new File("/tmp/workspace");
+        File output = new File(workspace, "Album: Best?/001 - Song.m4a");
+
+        assertEquals("Download/YTET/Music/Album Best/", targetRelativePath(MediaType.AUDIO, workspace, output));
     }
 
     @Test
