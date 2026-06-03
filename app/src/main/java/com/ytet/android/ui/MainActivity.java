@@ -1279,20 +1279,38 @@ public final class MainActivity extends Activity {
         shelf.addView(row, matchWrap());
         bar.addView(shelf, new LinearLayout.LayoutParams(0, dp(38), 1f));
 
-        Button sort = compactButton(librarySort.buttonLabel() + " ▾");
-        sort.setTextSize(12);
-        sort.setSingleLine(false);
-        sort.setMaxLines(2);
-        sort.setLineSpacing(0f, 0.92f);
-        sort.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
-        sort.setPadding(dp(2), 0, 0, 0);
-        sort.setBackgroundColor(Color.TRANSPARENT);
-        sort.setContentDescription("정렬: " + librarySort.label);
-        sort.setOnClickListener(view -> showLibrarySortDialog());
+        LinearLayout sort = librarySortButton();
         LinearLayout.LayoutParams sortParams = new LinearLayout.LayoutParams(dp(librarySort.buttonWidthDp()), dp(44));
         sortParams.setMargins(dp(4), 0, 0, 0);
         bar.addView(sort, sortParams);
         return bar;
+    }
+
+    private LinearLayout librarySortButton() {
+        LinearLayout sort = new LinearLayout(this);
+        sort.setOrientation(LinearLayout.HORIZONTAL);
+        sort.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
+        sort.setClickable(true);
+        sort.setFocusable(true);
+        sort.setBackgroundColor(Color.TRANSPARENT);
+        sort.setContentDescription("정렬: " + librarySort.label);
+        sort.setOnClickListener(view -> showLibrarySortDialog());
+
+        TextView label = text(librarySort.buttonLabel(), 12, R.color.ytet_text, true);
+        label.setSingleLine(false);
+        label.setMaxLines(2);
+        label.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
+        label.setIncludeFontPadding(false);
+        label.setLineSpacing(0f, 0.92f);
+        sort.addView(label, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView arrow = text("▾", 12, R.color.ytet_text, true);
+        arrow.setGravity(Gravity.CENTER);
+        arrow.setIncludeFontPadding(false);
+        LinearLayout.LayoutParams arrowParams = new LinearLayout.LayoutParams(dp(10), LinearLayout.LayoutParams.WRAP_CONTENT);
+        arrowParams.setMargins(dp(1), 0, 0, 0);
+        sort.addView(arrow, arrowParams);
+        return sort;
     }
 
     private Button libraryFilterChip(String label, LibraryFilter filter) {
@@ -5165,7 +5183,7 @@ public final class MainActivity extends Activity {
         }
 
         private int buttonWidthDp() {
-            return this == MOST_PLAYED || this == LEAST_PLAYED ? 66 : 52;
+            return this == MOST_PLAYED || this == LEAST_PLAYED ? 76 : 62;
         }
 
         private static LibrarySort fromKey(String key) {
