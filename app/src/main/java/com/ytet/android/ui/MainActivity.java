@@ -21,6 +21,7 @@ import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Typeface;
@@ -163,6 +164,8 @@ public final class MainActivity extends Activity {
     private int playbackQueueSize;
     private boolean playbackShuffleEnabled;
     private int playbackRepeatMode = PlaybackService.REPEAT_OFF;
+    private boolean playbackSeeking;
+    private long playbackSeekPreviewMs;
     private List<DeviceAudioTrack> activeQueuePreview = new ArrayList<>();
     private long[] playbackQueueTrackIds = new long[0];
     private boolean queuePreviewLoading;
@@ -2038,10 +2041,10 @@ public final class MainActivity extends Activity {
         return new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, new int[]{base, end});
     }
 
-    private GradientDrawable expandedPlayerBackground() {
+    private GradientDrawable expandedPlayerBackground(boolean roundedTop) {
         int base = playbackThemeColor;
         int background = color(R.color.ytet_background);
-        return new GradientDrawable(
+        GradientDrawable drawable = new GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
                 new int[]{
                         base,
@@ -2050,6 +2053,11 @@ public final class MainActivity extends Activity {
                         background
                 }
         );
+        if (roundedTop) {
+            float radius = dp(22);
+            drawable.setCornerRadii(new float[]{radius, radius, radius, radius, 0f, 0f, 0f, 0f});
+        }
+        return drawable;
     }
 
     private int readArtworkThemeColor(String artworkUri) {
@@ -2182,7 +2190,7 @@ public final class MainActivity extends Activity {
     }
 
     private void updateExpandedPlayer() {
-        if (playerDialog == null || !playerDialog.isShowing() || suppressPlayerDragDismiss) {
+        if (playerDialog == null || !playerDialog.isShowing() || suppressPlayerDragDismiss || playbackSeeking) {
             return;
         }
         playerDialog.setContentView(buildExpandedPlayerContent());
@@ -2195,9 +2203,10 @@ public final class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
         ));
-        root.setPadding(dp(20), dp(26), dp(20), dp(10));
+        root.setPadding(dp(20), dp(22), dp(20), dp(8));
         updatePlaybackThemeColor(false);
-        root.setBackground(expandedPlayerBackground());
+        root.setBackground(expandedPlayerBackground(false));
+        root.setPlayerSurfaceStyle(true);
 
         LinearLayout top = new LinearLayout(this);
         top.setOrientation(LinearLayout.HORIZONTAL);
@@ -2214,21 +2223,48 @@ public final class MainActivity extends Activity {
         top.addView(mix, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         View spacer = new View(this);
         top.addView(spacer, new LinearLayout.LayoutParams(dp(44), dp(42)));
-        root.addView(top, marginBottom(20));
+        root.addView(top, marginBottom(14));
 
         root.addView(coverArtView(), coverParams());
         if (hasSleepTimer()) {
-            root.addView(activeSleepTimerRow(), marginBottom(12));
+            root.addView(activeSleepTimerRow(), marginBottom(8));
         }
-        root.addView(text(playbackTitle, 23, R.color.ytet_text, true), marginBottom(6));
-        root.addView(muted(playbackArtist + " · " + playbackAlbum, 14), marginBottom(4));
-        root.addView(muted(queuePositionText(), 12), marginBottom(16));
+        root.addView(text(playbackTitle, 23, R.color.ytet_text, true), marginBottom(4));
+        root.addView(muted(playbackArtist + " · " + playbackAlbum, 14), marginBottom(2));
+        root.addView(muted(queuePositionText(), 12), marginBottom(8));
 
-        ProgressBar progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
-        progress.setMax((int) Math.max(1L, Math.min(Integer.MAX_VALUE, playbackDurationMs)));
-        progress.setProgress((int) Math.max(0L, Math.min(progress.getMax(), playbackPositionMs)));
-        root.addView(progress, marginBottom(8));
-        root.addView(muted(playbackProgressText(), 12), marginBottom(18));
+        PlaybackSeekBarView progress = new PlaybackSeekBarView(this);
+        progress.setProgress(playbackDurationMs, playbackSeeking ? playbackSeekPreviewMs : playbackPositionMs);
+        progress.setOnSeekChangeListener(new SeekChangeListener() {
+            @Override
+            public void onSeekStarted(long positionMs) {
+                playbackSeeking = true;
+                playbackSeekPreviewMs = positionMs;
+                startPlayback(PlaybackService.commandIntent(MainActivity.this, PlaybackService.ACTION_PAUSE));
+            }
+
+            @Override
+            public void onSeekPreview(long positionMs) {
+                playbackSeekPreviewMs = positionMs;
+            }
+
+            @Override
+            public void onSeekCommitted(long positionMs) {
+                playbackSeeking = false;
+                playbackPositionMs = positionMs;
+                playbackSeekPreviewMs = positionMs;
+                startPlayback(PlaybackService.seekIntent(MainActivity.this, positionMs));
+                updateExpandedPlayer();
+            }
+
+            @Override
+            public void onSeekCanceled() {
+                playbackSeeking = false;
+                updateExpandedPlayer();
+            }
+        });
+        root.addView(progress, controlParams(42, 0));
+        root.addView(muted(playbackProgressText(), 12), marginBottom(10));
         root.addView(new View(this), new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 0,
@@ -2260,7 +2296,7 @@ public final class MainActivity extends Activity {
         controls.addView(play, playerControlParams(5));
         controls.addView(next, playerControlParams(5));
         controls.addView(repeat, playerControlParams(0));
-        root.addView(controls, marginBottom(14));
+        root.addView(controls, marginBottom(8));
 
         LinearLayout tools = new LinearLayout(this);
         tools.setOrientation(LinearLayout.HORIZONTAL);
@@ -2283,7 +2319,7 @@ public final class MainActivity extends Activity {
         View timerControls = sleepTimerControlsVisible ? sleepTimerControlsPanel() : new View(this);
         LinearLayout.LayoutParams timerParams = new LinearLayout.LayoutParams(
                 0,
-                dp(64),
+                dp(60),
                 1f
         );
         timerParams.setMargins(dp(8), 0, dp(8), 0);
@@ -2293,7 +2329,7 @@ public final class MainActivity extends Activity {
         tools.addView(queue, new LinearLayout.LayoutParams(dp(58), dp(58)));
         root.addView(tools, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(64)
+                dp(60)
         ));
         return root;
     }
@@ -3417,7 +3453,7 @@ public final class MainActivity extends Activity {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 dp(284)
         );
-        params.setMargins(0, 0, 0, dp(22));
+        params.setMargins(0, 0, 0, dp(14));
         return params;
     }
 
@@ -3485,13 +3521,187 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private final class PlaybackSeekBarView extends View {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Rect textBounds = new Rect();
+        private final RectF rect = new RectF();
+        private final Path arrow = new Path();
+        private SeekChangeListener listener;
+        private long durationMs = 1L;
+        private long positionMs;
+        private long previewPositionMs;
+        private boolean dragging;
+
+        PlaybackSeekBarView(Context context) {
+            super(context);
+            setWillNotDraw(false);
+            setFocusable(true);
+        }
+
+        void setProgress(long duration, long position) {
+            durationMs = Math.max(1L, duration);
+            positionMs = clampPlaybackPosition(position);
+            if (!dragging) {
+                previewPositionMs = positionMs;
+            }
+            invalidate();
+        }
+
+        void setOnSeekChangeListener(SeekChangeListener seekChangeListener) {
+            listener = seekChangeListener;
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            float left = seekTrackLeft();
+            float right = seekTrackRight();
+            float centerY = seekTrackCenterY();
+            float trackHeight = dp(4);
+            float thumbX = thumbX(dragging ? previewPositionMs : positionMs);
+
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(Color.argb(64, 255, 255, 255));
+            rect.set(left, centerY - trackHeight / 2f, right, centerY + trackHeight / 2f);
+            canvas.drawRoundRect(rect, trackHeight, trackHeight, paint);
+
+            paint.setColor(Color.WHITE);
+            rect.set(left, centerY - trackHeight / 2f, Math.max(left, thumbX), centerY + trackHeight / 2f);
+            canvas.drawRoundRect(rect, trackHeight, trackHeight, paint);
+
+            if (dragging) {
+                drawSeekBubble(canvas, thumbX, centerY);
+            }
+
+            paint.setColor(Color.WHITE);
+            canvas.drawCircle(thumbX, centerY, dragging ? dp(8) : dp(5), paint);
+        }
+
+        @Override
+        public boolean onTouchEvent(MotionEvent event) {
+            int action = event.getActionMasked();
+            if (action == MotionEvent.ACTION_DOWN) {
+                if (!isInsideThumbTouchArea(event.getX(), event.getY())) {
+                    return false;
+                }
+                suppressPlayerDragDismiss = true;
+                dragging = true;
+                getParent().requestDisallowInterceptTouchEvent(true);
+                updatePreviewFromX(event.getX());
+                setPressed(true);
+                if (listener != null) {
+                    listener.onSeekStarted(previewPositionMs);
+                }
+                invalidate();
+                return true;
+            }
+            if (action == MotionEvent.ACTION_MOVE && dragging) {
+                updatePreviewFromX(event.getX());
+                if (listener != null) {
+                    listener.onSeekPreview(previewPositionMs);
+                }
+                invalidate();
+                return true;
+            }
+            if ((action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) && dragging) {
+                updatePreviewFromX(event.getX());
+                dragging = false;
+                suppressPlayerDragDismiss = false;
+                getParent().requestDisallowInterceptTouchEvent(false);
+                setPressed(false);
+                if (listener != null) {
+                    if (action == MotionEvent.ACTION_UP) {
+                        listener.onSeekCommitted(previewPositionMs);
+                    } else {
+                        listener.onSeekCanceled();
+                    }
+                }
+                invalidate();
+                return true;
+            }
+            return super.onTouchEvent(event);
+        }
+
+        private void drawSeekBubble(Canvas canvas, float thumbX, float trackY) {
+            String text = MusicLibrary.formatDuration(previewPositionMs);
+            paint.setTypeface(Typeface.DEFAULT_BOLD);
+            paint.setTextSize(12f * getResources().getDisplayMetrics().scaledDensity);
+            paint.setTextAlign(Paint.Align.CENTER);
+            paint.getTextBounds(text, 0, text.length(), textBounds);
+
+            float bubbleWidth = Math.max(dp(58), textBounds.width() + dp(24));
+            float bubbleHeight = dp(26);
+            float centerX = Math.max(bubbleWidth / 2f + dp(2), Math.min(getWidth() - bubbleWidth / 2f - dp(2), thumbX));
+            float top = Math.max(0f, trackY - dp(33));
+            float bottom = top + bubbleHeight;
+
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(Color.argb(218, 12, 12, 14));
+            rect.set(centerX - bubbleWidth / 2f, top, centerX + bubbleWidth / 2f, bottom);
+            canvas.drawRoundRect(rect, dp(9), dp(9), paint);
+
+            arrow.reset();
+            arrow.moveTo(thumbX - dp(6), bottom - dp(1));
+            arrow.lineTo(thumbX + dp(6), bottom - dp(1));
+            arrow.lineTo(thumbX, Math.min(trackY - dp(4), bottom + dp(7)));
+            arrow.close();
+            canvas.drawPath(arrow, paint);
+
+            paint.setColor(Color.WHITE);
+            canvas.drawText(text, centerX, top + bubbleHeight / 2f + textBounds.height() / 2f - dp(1), paint);
+        }
+
+        private boolean isInsideThumbTouchArea(float x, float y) {
+            float dx = Math.abs(x - thumbX(positionMs));
+            float dy = Math.abs(y - seekTrackCenterY());
+            return dx <= dp(30) && dy <= dp(22);
+        }
+
+        private void updatePreviewFromX(float x) {
+            float left = seekTrackLeft();
+            float right = seekTrackRight();
+            float clampedX = Math.max(left, Math.min(right, x));
+            float progress = (clampedX - left) / Math.max(1f, right - left);
+            previewPositionMs = clampPlaybackPosition(Math.round(progress * durationMs));
+        }
+
+        private long clampPlaybackPosition(long position) {
+            return Math.max(0L, Math.min(durationMs, position));
+        }
+
+        private float thumbX(long position) {
+            float left = seekTrackLeft();
+            float right = seekTrackRight();
+            float progress = durationMs <= 0L ? 0f : position / (float) durationMs;
+            return left + Math.max(0f, Math.min(1f, progress)) * (right - left);
+        }
+
+        private float seekTrackLeft() {
+            return dp(8);
+        }
+
+        private float seekTrackRight() {
+            return Math.max(seekTrackLeft(), getWidth() - dp(8));
+        }
+
+        private float seekTrackCenterY() {
+            return getHeight() - dp(11);
+        }
+    }
+
     private final class DragDismissLayout extends LinearLayout {
         private float startX;
         private float startY;
+        private boolean dragCanStart;
         private boolean draggingDown;
+        private boolean playerSurfaceStyle;
 
         DragDismissLayout(Context context) {
             super(context);
+        }
+
+        void setPlayerSurfaceStyle(boolean enabled) {
+            playerSurfaceStyle = enabled;
         }
 
         @Override
@@ -3500,11 +3710,13 @@ public final class MainActivity extends Activity {
             if (action == MotionEvent.ACTION_DOWN) {
                 startX = event.getRawX();
                 startY = event.getRawY();
+                dragCanStart = canStartDragFrom(event);
                 draggingDown = false;
                 animate().cancel();
                 setAlpha(1f);
                 setTranslationY(0f);
-            } else if (action == MotionEvent.ACTION_MOVE && !suppressPlayerDragDismiss) {
+                setDragRounded(false);
+            } else if (action == MotionEvent.ACTION_MOVE && dragCanStart && !suppressPlayerDragDismiss) {
                 float dx = event.getRawX() - startX;
                 float dy = event.getRawY() - startY;
                 if (draggingDown || (dy > dp(8) && dy > Math.abs(dx) * 0.85f)) {
@@ -3512,21 +3724,33 @@ public final class MainActivity extends Activity {
                     float translation = Math.max(0f, Math.min(getHeight(), dy));
                     setTranslationY(translation);
                     setAlpha(1f - Math.min(0.18f, translation / Math.max(1f, getHeight()) * 0.18f));
+                    setDragRounded(true);
                     return true;
                 }
             } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
                 if (draggingDown) {
                     boolean shouldDismiss = action == MotionEvent.ACTION_UP && getTranslationY() >= dp(56);
+                    dragCanStart = false;
                     draggingDown = false;
                     if (shouldDismiss) {
                         animateDismissTopPlayerSurface();
                     } else {
-                        animate().translationY(0f).alpha(1f).setDuration(150L).start();
+                        animate()
+                                .translationY(0f)
+                                .alpha(1f)
+                                .setDuration(150L)
+                                .withEndAction(() -> setDragRounded(false))
+                                .start();
                     }
                     return true;
                 }
                 if (getTranslationY() > 0f) {
-                    animate().translationY(0f).alpha(1f).setDuration(150L).start();
+                    animate()
+                            .translationY(0f)
+                            .alpha(1f)
+                            .setDuration(150L)
+                            .withEndAction(() -> setDragRounded(false))
+                            .start();
                 }
             }
             return super.dispatchTouchEvent(event);
@@ -3540,9 +3764,61 @@ public final class MainActivity extends Activity {
                     .withEndAction(() -> {
                         setTranslationY(0f);
                         setAlpha(1f);
+                        setDragRounded(false);
                         dismissTopPlayerSurface();
                     })
                     .start();
+        }
+
+        private boolean canStartDragFrom(MotionEvent event) {
+            return !isTouchInsideDragBlocker(this, event.getRawX(), event.getRawY());
+        }
+
+        private boolean isTouchInsideDragBlocker(View view, float rawX, float rawY) {
+            if (view.getVisibility() != View.VISIBLE) {
+                return false;
+            }
+            if (view != this && isDragBlocker(view) && isRawPointInsideView(view, rawX, rawY)) {
+                return true;
+            }
+            if (view instanceof ViewGroup) {
+                ViewGroup group = (ViewGroup) view;
+                for (int index = group.getChildCount() - 1; index >= 0; index--) {
+                    if (isTouchInsideDragBlocker(group.getChildAt(index), rawX, rawY)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        private boolean isDragBlocker(View view) {
+            return view instanceof Button
+                    || view instanceof ImageButton
+                    || view instanceof EditText
+                    || view instanceof Spinner
+                    || view instanceof CheckBox
+                    || view instanceof RadioButton
+                    || view instanceof RadioGroup
+                    || view instanceof ProgressBar
+                    || view instanceof PlaybackSeekBarView
+                    || view instanceof SleepTimerDialView
+                    || (view.isClickable() && view.isEnabled());
+        }
+
+        private boolean isRawPointInsideView(View view, float rawX, float rawY) {
+            int[] location = new int[2];
+            view.getLocationOnScreen(location);
+            return rawX >= location[0]
+                    && rawX <= location[0] + view.getWidth()
+                    && rawY >= location[1]
+                    && rawY <= location[1] + view.getHeight();
+        }
+
+        private void setDragRounded(boolean rounded) {
+            if (playerSurfaceStyle) {
+                setBackground(expandedPlayerBackground(rounded));
+            }
         }
 
         private void dismissTopPlayerSurface() {
@@ -3599,10 +3875,12 @@ public final class MainActivity extends Activity {
             wheel.set(dp(4), dp(8), width - dp(4), height - dp(8));
 
             paint.setStyle(Paint.Style.FILL);
-            paint.setColor(color(R.color.ytet_panel_alt));
+            paint.setColor(Color.argb(38, 0, 0, 0));
             canvas.drawRoundRect(wheel, dp(16), dp(16), paint);
 
-            paint.setColor(timerActive ? color(R.color.ytet_accent_dark) : color(R.color.ytet_panel));
+            paint.setColor(timerActive
+                    ? blendColors(playbackThemeColor, color(R.color.ytet_background), 0.42f)
+                    : Color.argb(92, 0, 0, 0));
             RectF centerBand = new RectF(dp(8), height * 0.26f, width - dp(8), height * 0.74f);
             canvas.drawRoundRect(centerBand, dp(13), dp(13), paint);
 
@@ -3708,6 +3986,16 @@ public final class MainActivity extends Activity {
 
     private interface TimerChangeListener {
         void onChanged(int minutes, boolean committed);
+    }
+
+    private interface SeekChangeListener {
+        void onSeekStarted(long positionMs);
+
+        void onSeekPreview(long positionMs);
+
+        void onSeekCommitted(long positionMs);
+
+        void onSeekCanceled();
     }
 
     private static final class TabItem {

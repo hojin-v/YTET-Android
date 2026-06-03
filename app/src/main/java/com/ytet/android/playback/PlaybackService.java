@@ -45,6 +45,7 @@ public final class PlaybackService extends Service {
     public static final String ACTION_NEXT = "com.ytet.android.action.PLAYBACK_NEXT";
     public static final String ACTION_PREVIOUS = "com.ytet.android.action.PLAYBACK_PREVIOUS";
     public static final String ACTION_STOP = "com.ytet.android.action.PLAYBACK_STOP";
+    public static final String ACTION_SEEK_TO = "com.ytet.android.action.PLAYBACK_SEEK_TO";
     public static final String ACTION_TOGGLE_SHUFFLE = "com.ytet.android.action.PLAYBACK_TOGGLE_SHUFFLE";
     public static final String ACTION_TOGGLE_REPEAT = "com.ytet.android.action.PLAYBACK_TOGGLE_REPEAT";
     public static final String ACTION_SET_SLEEP_TIMER = "com.ytet.android.action.PLAYBACK_SET_SLEEP_TIMER";
@@ -83,6 +84,7 @@ public final class PlaybackService extends Service {
     public static final String EXTRA_SLEEP_TIMER_END_AT_MS = "com.ytet.android.extra.PLAYBACK_SLEEP_TIMER_END_AT_MS";
     public static final String EXTRA_SLEEP_TIMER_REMAINING_MS = "com.ytet.android.extra.PLAYBACK_SLEEP_TIMER_REMAINING_MS";
     public static final String EXTRA_SLEEP_TIMER_PAUSED = "com.ytet.android.extra.PLAYBACK_SLEEP_TIMER_PAUSED";
+    public static final String EXTRA_SEEK_POSITION_MS = "com.ytet.android.extra.SEEK_POSITION_MS";
 
     private static final String EXTRA_MIX_TITLE = "com.ytet.android.extra.MIX_TITLE";
     private static final String EXTRA_MIX_SUBTITLE = "com.ytet.android.extra.MIX_SUBTITLE";
@@ -171,6 +173,13 @@ public final class PlaybackService extends Service {
         return intent;
     }
 
+    public static Intent seekIntent(Context context, long positionMs) {
+        Intent intent = new Intent(context, PlaybackService.class);
+        intent.setAction(ACTION_SEEK_TO);
+        intent.putExtra(EXTRA_SEEK_POSITION_MS, positionMs);
+        return intent;
+    }
+
     public static Intent sleepTimerIntent(Context context, int minutes) {
         Intent intent = new Intent(context, PlaybackService.class);
         intent.setAction(minutes <= 0 ? ACTION_CANCEL_SLEEP_TIMER : ACTION_SET_SLEEP_TIMER);
@@ -218,6 +227,11 @@ public final class PlaybackService extends Service {
             }
 
             @Override
+            public void onSeekTo(long pos) {
+                seekTo(pos);
+            }
+
+            @Override
             public void onStop() {
                 stopPlayback();
             }
@@ -247,6 +261,8 @@ public final class PlaybackService extends Service {
             playNext();
         } else if (ACTION_PREVIOUS.equals(action)) {
             playPrevious();
+        } else if (ACTION_SEEK_TO.equals(action)) {
+            seekTo(intent.getLongExtra(EXTRA_SEEK_POSITION_MS, 0L));
         } else if (ACTION_STOP.equals(action)) {
             stopPlayback();
         } else if (ACTION_TOGGLE_SHUFFLE.equals(action)) {
@@ -510,6 +526,23 @@ public final class PlaybackService extends Service {
 
     private void playNext() {
         moveToNextTrack(false);
+    }
+
+    private void seekTo(long positionMs) {
+        if (mediaPlayer == null) {
+            broadcastState();
+            return;
+        }
+        long clamped = Math.max(0L, Math.min(playbackDuration(), positionMs));
+        try {
+            mediaPlayer.seekTo(clamped, MediaPlayer.SEEK_CLOSEST);
+        } catch (IllegalStateException exception) {
+            return;
+        }
+        errorStatus = null;
+        updateTransportState();
+        showNotification();
+        broadcastState();
     }
 
     private void moveToNextTrack(boolean fromCompletion) {
@@ -904,7 +937,8 @@ public final class PlaybackService extends Service {
                 | PlaybackState.ACTION_STOP;
         if (track != null) {
             actions |= PlaybackState.ACTION_SKIP_TO_PREVIOUS
-                    | PlaybackState.ACTION_SKIP_TO_NEXT;
+                    | PlaybackState.ACTION_SKIP_TO_NEXT
+                    | PlaybackState.ACTION_SEEK_TO;
         }
         PlaybackState.Builder builder = new PlaybackState.Builder()
                 .setActions(actions)
@@ -968,6 +1002,18 @@ public final class PlaybackService extends Service {
         } catch (IllegalStateException exception) {
             return 0;
         }
+    }
+
+    private long playbackDuration() {
+        if (mediaPlayer != null) {
+            try {
+                return Math.max(0L, mediaPlayer.getDuration());
+            } catch (IllegalStateException ignored) {
+                // Fall back to metadata below.
+            }
+        }
+        DeviceAudioTrack track = currentTrack();
+        return track == null ? 0L : Math.max(0L, track.durationMs());
     }
 
     private void broadcastState() {
