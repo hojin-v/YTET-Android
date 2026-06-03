@@ -16,6 +16,8 @@ import android.content.IntentSender;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
@@ -82,6 +84,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.io.InputStream;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutorService;
 
@@ -151,6 +154,8 @@ public final class MainActivity extends Activity {
     private String playbackAlbum = "앨범 정보 없음";
     private String playbackFolder = "알 수 없는 폴더";
     private String playbackAlbumArtUri = "";
+    private String playbackThemeAlbumArtUri = "";
+    private int playbackThemeColor = 0xFF17181D;
     private String playbackMix = "로컬 음악";
     private long playbackDurationMs;
     private long playbackPositionMs;
@@ -488,7 +493,7 @@ public final class MainActivity extends Activity {
         bar.setOrientation(LinearLayout.HORIZONTAL);
         bar.setGravity(Gravity.CENTER_VERTICAL);
         bar.setPadding(dp(16), dp(10), dp(16), dp(10));
-        bar.setBackgroundColor(color(R.color.ytet_panel));
+        bar.setBackground(nowPlayingBarBackground(true));
         bar.setOnClickListener(view -> showExpandedPlayer());
 
         nowPlayingCover = new FrameLayout(this);
@@ -1833,6 +1838,7 @@ public final class MainActivity extends Activity {
         }
         activeStation = station;
         activeQueuePreview = new ArrayList<>(queue);
+        applyPreviewTrackTheme(queue.get(0));
         playbackHasQueue = true;
         playbackPlaying = false;
         playbackPreparing = true;
@@ -1852,6 +1858,7 @@ public final class MainActivity extends Activity {
         MusicStation station = singleTrackStation(track);
         activeStation = station;
         playbackHasQueue = true;
+        applyPreviewTrackTheme(track);
         playbackPlaying = false;
         playbackPreparing = true;
         playbackWillPlay = true;
@@ -1875,6 +1882,7 @@ public final class MainActivity extends Activity {
         activeStation = station;
         selectedTrack = track;
         playbackHasQueue = true;
+        applyPreviewTrackTheme(track);
         playbackPlaying = false;
         playbackPreparing = true;
         playbackWillPlay = true;
@@ -1952,10 +1960,12 @@ public final class MainActivity extends Activity {
     }
 
     private void updateNowPlayingBar() {
-        if (nowPlayingTitle == null || nowPlayingMeta == null || playPauseButton == null) {
+        if (nowPlayingBar == null || nowPlayingTitle == null || nowPlayingMeta == null || playPauseButton == null) {
             return;
         }
         if (!playbackHasQueue && activeStation == null) {
+            updatePlaybackThemeColor(true);
+            nowPlayingBar.setBackground(nowPlayingBarBackground(true));
             setNowPlayingCover(true);
             nowPlayingTitle.setText("로컬 재생 대기");
             nowPlayingMeta.setText("기기 음악을 스캔하면 재생할 수 있습니다.");
@@ -1963,6 +1973,8 @@ public final class MainActivity extends Activity {
             playPauseButton.setContentDescription("재생");
             return;
         }
+        updatePlaybackThemeColor(false);
+        nowPlayingBar.setBackground(nowPlayingBarBackground(false));
         setNowPlayingCover(false);
         nowPlayingTitle.setText(playbackTitle);
         nowPlayingMeta.setText(playbackPreparing || playbackError ? streamStatus : miniPlaybackMeta());
@@ -1994,6 +2006,152 @@ public final class MainActivity extends Activity {
         placeholder.setGravity(Gravity.CENTER);
         placeholder.setBackground(rounded(idle ? color(R.color.ytet_panel_alt) : color(R.color.ytet_accent_dark), 8));
         return placeholder;
+    }
+
+    private void applyPreviewTrackTheme(DeviceAudioTrack track) {
+        if (track == null) {
+            return;
+        }
+        playbackTrackId = track.id();
+        playbackArtist = valueOrDefault(track.artist(), "알 수 없는 아티스트");
+        playbackAlbum = valueOrDefault(track.album(), "앨범 정보 없음");
+        playbackAlbumArtUri = valueOrDefault(track.albumArtUri(), "");
+        updatePlaybackThemeColor(false);
+    }
+
+    private void updatePlaybackThemeColor(boolean idle) {
+        String artworkUri = idle ? "" : valueOrDefault(playbackAlbumArtUri, "");
+        if (artworkUri.equals(playbackThemeAlbumArtUri)) {
+            return;
+        }
+        playbackThemeAlbumArtUri = artworkUri;
+        playbackThemeColor = artworkUri.isEmpty()
+                ? fallbackPlayerThemeColor(idle)
+                : readArtworkThemeColor(artworkUri);
+    }
+
+    private GradientDrawable nowPlayingBarBackground(boolean idle) {
+        int base = idle ? color(R.color.ytet_panel) : playbackThemeColor;
+        int end = idle
+                ? color(R.color.ytet_panel)
+                : blendColors(base, color(R.color.ytet_panel), 0.46f);
+        return new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, new int[]{base, end});
+    }
+
+    private GradientDrawable expandedPlayerBackground() {
+        int base = playbackThemeColor;
+        int background = color(R.color.ytet_background);
+        return new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{
+                        base,
+                        blendColors(base, background, 0.36f),
+                        blendColors(base, background, 0.72f),
+                        background
+                }
+        );
+    }
+
+    private int readArtworkThemeColor(String artworkUri) {
+        Bitmap bitmap = null;
+        try {
+            Uri uri = Uri.parse(artworkUri);
+            BitmapFactory.Options bounds = new BitmapFactory.Options();
+            bounds.inJustDecodeBounds = true;
+            try (InputStream input = getContentResolver().openInputStream(uri)) {
+                BitmapFactory.decodeStream(input, null, bounds);
+            }
+
+            BitmapFactory.Options options = new BitmapFactory.Options();
+            options.inPreferredConfig = Bitmap.Config.ARGB_8888;
+            options.inSampleSize = artworkSampleSize(bounds.outWidth, bounds.outHeight);
+            try (InputStream input = getContentResolver().openInputStream(uri)) {
+                bitmap = BitmapFactory.decodeStream(input, null, options);
+            }
+            if (bitmap == null) {
+                return fallbackPlayerThemeColor(false);
+            }
+            return normalizeArtworkThemeColor(sampleArtworkColor(bitmap));
+        } catch (Exception exception) {
+            return fallbackPlayerThemeColor(false);
+        } finally {
+            if (bitmap != null) {
+                bitmap.recycle();
+            }
+        }
+    }
+
+    private int artworkSampleSize(int width, int height) {
+        int sampleSize = 1;
+        int largest = Math.max(width, height);
+        while (largest / sampleSize > 96) {
+            sampleSize *= 2;
+        }
+        return Math.max(1, sampleSize);
+    }
+
+    private int sampleArtworkColor(Bitmap bitmap) {
+        int width = bitmap.getWidth();
+        int height = bitmap.getHeight();
+        int stepX = Math.max(1, width / 42);
+        int stepY = Math.max(1, height / 42);
+        float[] hsv = new float[3];
+        long red = 0L;
+        long green = 0L;
+        long blue = 0L;
+        long weightTotal = 0L;
+        for (int y = 0; y < height; y += stepY) {
+            for (int x = 0; x < width; x += stepX) {
+                int pixel = bitmap.getPixel(x, y);
+                if (Color.alpha(pixel) < 160) {
+                    continue;
+                }
+                Color.colorToHSV(pixel, hsv);
+                if (hsv[2] < 0.08f || (hsv[2] > 0.94f && hsv[1] < 0.18f)) {
+                    continue;
+                }
+                long weight = Math.max(1L, Math.round(1f + hsv[1] * 5f));
+                red += Color.red(pixel) * weight;
+                green += Color.green(pixel) * weight;
+                blue += Color.blue(pixel) * weight;
+                weightTotal += weight;
+            }
+        }
+        if (weightTotal == 0L) {
+            return fallbackPlayerThemeColor(false);
+        }
+        return Color.rgb(
+                (int) (red / weightTotal),
+                (int) (green / weightTotal),
+                (int) (blue / weightTotal)
+        );
+    }
+
+    private int normalizeArtworkThemeColor(int color) {
+        float[] hsv = new float[3];
+        Color.colorToHSV(color, hsv);
+        if (hsv[1] < 0.12f) {
+            hsv[1] = 0.06f;
+            hsv[2] = 0.23f;
+        } else {
+            hsv[1] = Math.max(0.34f, Math.min(0.84f, hsv[1] * 1.12f));
+            hsv[2] = Math.max(0.18f, Math.min(0.40f, hsv[2] * 0.58f));
+        }
+        return Color.HSVToColor(hsv);
+    }
+
+    private int fallbackPlayerThemeColor(boolean idle) {
+        return idle ? color(R.color.ytet_panel) : color(R.color.ytet_accent_dark);
+    }
+
+    private int blendColors(int fromColor, int toColor, float amount) {
+        float clamped = Math.max(0f, Math.min(1f, amount));
+        float inverse = 1f - clamped;
+        return Color.rgb(
+                Math.round(Color.red(fromColor) * inverse + Color.red(toColor) * clamped),
+                Math.round(Color.green(fromColor) * inverse + Color.green(toColor) * clamped),
+                Math.round(Color.blue(fromColor) * inverse + Color.blue(toColor) * clamped)
+        );
     }
 
     private String miniPlaybackMeta() {
@@ -2038,7 +2196,8 @@ public final class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT
         ));
         root.setPadding(dp(20), dp(26), dp(20), dp(10));
-        root.setBackgroundColor(color(R.color.ytet_background));
+        updatePlaybackThemeColor(false);
+        root.setBackground(expandedPlayerBackground());
 
         LinearLayout top = new LinearLayout(this);
         top.setOrientation(LinearLayout.HORIZONTAL);
