@@ -1365,7 +1365,7 @@ public final class MainActivity extends Activity {
         librarySort = sort;
         getPreferences().edit().putString(PREF_LIBRARY_SORT, sort.key).apply();
         selectedTrack = null;
-        refreshLibraryResultsOnly();
+        renderCurrentTab();
     }
 
     private View libraryViewToolbar() {
