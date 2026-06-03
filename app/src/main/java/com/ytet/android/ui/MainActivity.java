@@ -112,9 +112,9 @@ public final class MainActivity extends Activity {
     private TextView nowPlayingTitle;
     private TextView nowPlayingMeta;
     private ImageButton playPauseButton;
-    private Button homeTabButton;
-    private Button libraryTabButton;
-    private Button extractorTabButton;
+    private TabItem homeTabButton;
+    private TabItem libraryTabButton;
+    private TabItem extractorTabButton;
     private TextView updateStatusText;
     private Button updateActionButton;
     private Dialog playerDialog;
@@ -512,25 +512,40 @@ public final class MainActivity extends Activity {
     private LinearLayout buildBottomTabs() {
         LinearLayout tabs = new LinearLayout(this);
         tabs.setOrientation(LinearLayout.HORIZONTAL);
-        tabs.setPadding(dp(10), dp(10), dp(10), dp(16));
-        tabs.setBackgroundColor(color(R.color.ytet_background));
+        tabs.setPadding(dp(10), dp(4), dp(10), dp(12));
+        tabs.setBackgroundColor(0x800B0B0D);
 
-        homeTabButton = tabButton("홈", Tab.HOME);
-        libraryTabButton = tabButton("내 음악", Tab.LIBRARY);
-        extractorTabButton = tabButton("추출기", Tab.EXTRACTOR);
-        tabs.addView(homeTabButton, tabParams());
-        tabs.addView(libraryTabButton, tabParams());
-        tabs.addView(extractorTabButton, tabParams());
+        homeTabButton = tabButton("홈", Tab.HOME, R.drawable.ic_tab_home_outline, R.drawable.ic_tab_home_filled);
+        libraryTabButton = tabButton("내 음악", Tab.LIBRARY, R.drawable.ic_tab_library_outline, R.drawable.ic_tab_library_filled);
+        extractorTabButton = tabButton("추출기", Tab.EXTRACTOR, R.drawable.ic_tab_extract_outline, R.drawable.ic_tab_extract_filled);
+        tabs.addView(homeTabButton.root, tabParams());
+        tabs.addView(libraryTabButton.root, tabParams());
+        tabs.addView(extractorTabButton.root, tabParams());
         return tabs;
     }
 
-    private Button tabButton(String label, Tab tab) {
-        Button button = new Button(this);
-        button.setText(label);
-        button.setTextSize(13);
-        button.setAllCaps(false);
-        button.setOnClickListener(view -> showTab(tab));
-        return button;
+    private TabItem tabButton(String label, Tab tab, int outlineIcon, int filledIcon) {
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setGravity(Gravity.CENTER);
+        root.setPadding(0, dp(2), 0, dp(2));
+        root.setBackgroundColor(Color.TRANSPARENT);
+        root.setOnClickListener(view -> showTab(tab));
+
+        ImageView icon = new ImageView(this);
+        icon.setScaleType(ImageView.ScaleType.CENTER);
+        root.addView(icon, new LinearLayout.LayoutParams(dp(24), dp(24)));
+
+        TextView text = text(label, 11, R.color.ytet_muted, true);
+        text.setGravity(Gravity.CENTER);
+        text.setIncludeFontPadding(false);
+        LinearLayout.LayoutParams textParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        textParams.setMargins(0, dp(3), 0, 0);
+        root.addView(text, textParams);
+        return new TabItem(root, icon, text, outlineIcon, filledIcon);
     }
 
     private void showTab(Tab tab) {
@@ -3176,12 +3191,13 @@ public final class MainActivity extends Activity {
         styleTab(extractorTabButton, currentTab == Tab.EXTRACTOR);
     }
 
-    private void styleTab(Button button, boolean selected) {
-        if (button == null) {
+    private void styleTab(TabItem tab, boolean selected) {
+        if (tab == null) {
             return;
         }
-        button.setTextColor(selected ? 0xFFFFFFFF : color(R.color.ytet_muted));
-        button.setBackground(rounded(selected ? color(R.color.ytet_accent) : color(R.color.ytet_panel), 8));
+        tab.icon.setImageResource(selected ? tab.filledIcon : tab.outlineIcon);
+        tab.label.setTextColor(selected ? 0xFFFFFFFF : color(R.color.ytet_muted));
+        tab.root.setBackgroundColor(Color.TRANSPARENT);
     }
 
     private LinearLayout.LayoutParams matchWrap() {
@@ -3256,7 +3272,7 @@ public final class MainActivity extends Activity {
     }
 
     private LinearLayout.LayoutParams tabParams() {
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(46), 1f);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(48), 1f);
         params.setMargins(dp(4), 0, dp(4), 0);
         return params;
     }
@@ -3479,6 +3495,22 @@ public final class MainActivity extends Activity {
 
     private interface TimerChangeListener {
         void onChanged(int minutes, boolean committed);
+    }
+
+    private static final class TabItem {
+        private final LinearLayout root;
+        private final ImageView icon;
+        private final TextView label;
+        private final int outlineIcon;
+        private final int filledIcon;
+
+        private TabItem(LinearLayout root, ImageView icon, TextView label, int outlineIcon, int filledIcon) {
+            this.root = root;
+            this.icon = icon;
+            this.label = label;
+            this.outlineIcon = outlineIcon;
+            this.filledIcon = filledIcon;
+        }
     }
 
     private static final class LibraryGroup {
