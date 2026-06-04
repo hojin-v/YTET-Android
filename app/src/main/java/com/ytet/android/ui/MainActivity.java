@@ -77,6 +77,7 @@ import com.ytet.android.extract.StorageWriter;
 import com.ytet.android.library.DeviceAudioTrack;
 import com.ytet.android.library.DeviceMusicLibrary;
 import com.ytet.android.library.MusicLibrary;
+import com.ytet.android.library.TrackMetadataOverrides;
 import com.ytet.android.playback.PlaybackService;
 import com.ytet.android.playback.PlaybackStats;
 import com.ytet.android.stream.MusicStation;
@@ -2517,6 +2518,12 @@ public final class MainActivity extends Activity {
             dialog.dismiss();
             shareSelectedTrack();
         });
+        Button edit = detailActionButton("수정");
+        edit.setOnClickListener(view -> {
+            selectedTrack = track;
+            dialog.dismiss();
+            showEditTrackMetadataDialog(track);
+        });
         Button delete = detailActionButton("삭제");
         delete.setOnClickListener(view -> {
             selectedTrack = track;
@@ -2524,10 +2531,98 @@ public final class MainActivity extends Activity {
             deleteSelectedTrack();
         });
         actions.addView(share, fixedButtonParams(76, 38, 8));
+        actions.addView(edit, fixedButtonParams(76, 38, 8));
         actions.addView(delete, fixedButtonParams(76, 38, 0));
         body.addView(actions, matchWrap());
         dialog.show();
         styleDetailDialog(dialog);
+    }
+
+    private void showEditTrackMetadataDialog(DeviceAudioTrack track) {
+        LinearLayout body = dialogBody("정보 수정");
+        EditText titleInput = metadataEditField("제목", track.title());
+        EditText artistInput = metadataEditField("아티스트", track.artist());
+        EditText albumInput = metadataEditField("앨범", track.album());
+        body.addView(titleInput, marginBottom(10));
+        body.addView(artistInput, marginBottom(10));
+        body.addView(albumInput, marginBottom(14));
+        body.addView(muted("앱 안의 표시 정보를 수정합니다. 실제 파일명과 파일 내부 태그는 변경하지 않습니다.", 11), marginBottom(14));
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setView(body)
+                .create();
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setGravity(Gravity.END);
+        Button cancel = detailActionButton("취소");
+        cancel.setOnClickListener(view -> dialog.dismiss());
+        Button save = detailActionButton("저장");
+        save.setOnClickListener(view -> {
+            DeviceAudioTrack edited = TrackMetadataOverrides.save(
+                    this,
+                    track,
+                    titleInput.getText().toString(),
+                    artistInput.getText().toString(),
+                    albumInput.getText().toString()
+            );
+            applyEditedTrack(edited);
+            dialog.dismiss();
+            toast("표시 정보를 수정했습니다.");
+        });
+        actions.addView(cancel, fixedButtonParams(76, 38, 8));
+        actions.addView(save, fixedButtonParams(76, 38, 0));
+        body.addView(actions, matchWrap());
+        dialog.show();
+        styleDetailDialog(dialog);
+    }
+
+    private EditText metadataEditField(String hint, String value) {
+        EditText input = new EditText(this);
+        input.setText(value);
+        input.setHint(hint);
+        input.setSingleLine(true);
+        input.setTextColor(color(R.color.ytet_text));
+        input.setHintTextColor(color(R.color.ytet_muted));
+        input.setTextSize(15);
+        input.setSelectAllOnFocus(false);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        input.setImeOptions(EditorInfo.IME_ACTION_NEXT);
+        input.setPadding(dp(12), 0, dp(12), 0);
+        input.setBackground(roundedStroke(0x22000000, 0x22FFFFFF, 8, 1));
+        return input;
+    }
+
+    private void applyEditedTrack(DeviceAudioTrack edited) {
+        if (edited == null) {
+            return;
+        }
+        selectedTrack = edited;
+        libraryTracks = replaceEditedTrack(libraryTracks, edited);
+        homeTracks = replaceEditedTrack(homeTracks, edited);
+        activeQueuePreview = replaceEditedTrack(activeQueuePreview, edited);
+        if (playbackTrackId == edited.id()) {
+            playbackTitle = edited.title();
+            playbackArtist = edited.artist();
+            playbackAlbum = edited.album();
+            playbackMeta = edited.artist() + " · " + edited.album();
+            playbackAlbumArtUri = edited.albumArtUri();
+        }
+        renderLibraryDependentTabs();
+        updateNowPlayingBar();
+        updateExpandedPlayer();
+        updateQueueDialog();
+    }
+
+    private List<DeviceAudioTrack> replaceEditedTrack(List<DeviceAudioTrack> tracks, DeviceAudioTrack edited) {
+        List<DeviceAudioTrack> replaced = new ArrayList<>();
+        if (tracks == null) {
+            return replaced;
+        }
+        for (DeviceAudioTrack track : tracks) {
+            replaced.add(track != null && track.id() == edited.id() ? edited : track);
+        }
+        return replaced;
     }
 
     private LinearLayout dialogBody(String title) {

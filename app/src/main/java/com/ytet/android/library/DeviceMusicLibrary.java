@@ -38,7 +38,7 @@ public final class DeviceMusicLibrary {
                 return tracks;
             }
             while (cursor.moveToNext()) {
-                tracks.add(trackFromCursor(cursor));
+                tracks.add(trackFromCursor(context, cursor));
             }
         }
         return tracks;
@@ -77,7 +77,7 @@ public final class DeviceMusicLibrary {
                     continue;
                 }
                 while (cursor.moveToNext()) {
-                    DeviceAudioTrack track = trackFromCursor(cursor);
+                    DeviceAudioTrack track = trackFromCursor(context, cursor);
                     loaded.put(track.id(), track);
                 }
             }
@@ -150,10 +150,10 @@ public final class DeviceMusicLibrary {
         return prefixes;
     }
 
-    private DeviceAudioTrack trackFromCursor(Cursor cursor) {
+    private DeviceAudioTrack trackFromCursor(Context context, Cursor cursor) {
         long id = getLong(cursor, MediaStore.Audio.Media._ID);
         Uri contentUri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id);
-        return new DeviceAudioTrack(
+        return TrackMetadataOverrides.apply(context, new DeviceAudioTrack(
                 id,
                 getString(cursor, MediaStore.Audio.Media.TITLE),
                 getString(cursor, MediaStore.Audio.Media.ARTIST),
@@ -167,7 +167,7 @@ public final class DeviceMusicLibrary {
                 secondsToMillis(getLong(cursor, MediaStore.Audio.Media.DATE_ADDED)),
                 getLong(cursor, MediaStore.Audio.Media.DURATION),
                 getLong(cursor, MediaStore.Audio.Media.SIZE)
-        );
+        ));
     }
 
     private long secondsToMillis(long value) {

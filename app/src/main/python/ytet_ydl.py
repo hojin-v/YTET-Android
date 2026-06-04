@@ -111,6 +111,8 @@ def extract(
             if enhance_metadata and not is_single_video_playlist(info):
                 info = enhance_music_metadata(info, progress_listener, logger)
             embed_audio_covers(workspace, info, logger, ydl)
+            if enhance_metadata:
+                rename_metadata_matched_audio_files(workspace, info, logger, ydl)
             if include_playlist:
                 relocate_playlist_folder_for_metadata(workspace, info, logger)
     except YtetExtractionError:
@@ -1004,6 +1006,58 @@ def embed_audio_cover(workspace, info, logger, ydl=None, fallback_to_first=True,
         audio.save()
     except Exception as error:
         logger.warning(f"오디오 메타데이터 임베딩 실패: {error}")
+
+
+def rename_metadata_matched_audio_files(workspace, info, logger, ydl=None):
+    entries = info.get("entries") if isinstance(info, dict) else None
+    if entries:
+        for entry in entries:
+            if isinstance(entry, dict):
+                rename_metadata_matched_audio_file(workspace, entry, logger, ydl)
+        return
+    rename_metadata_matched_audio_file(workspace, info, logger, ydl)
+
+
+def rename_metadata_matched_audio_file(workspace, info, logger, ydl=None):
+    if not isinstance(info, dict) or not isinstance(info.get("__ytet_metadata"), dict):
+        return
+    artist = metadata_override(info, "artist")
+    title = metadata_override(info, "title")
+    if not artist or not title:
+        return
+    audio_path = audio_path_for_info(workspace, info, ydl)
+    if not audio_path:
+        return
+    parent = os.path.dirname(audio_path)
+    _stem, extension = os.path.splitext(audio_path)
+    safe_name = sanitize_filename(f"{artist} - {title}")
+    if not safe_name:
+        return
+    target = os.path.join(parent, safe_name + extension)
+    if os.path.abspath(audio_path) == os.path.abspath(target):
+        return
+    target = unique_workspace_path(target)
+    try:
+        os.replace(audio_path, target)
+        update_audio_info_path(info, audio_path, target)
+        logger.info(f"MusicBrainz 파일명 적용: {os.path.basename(target)}")
+    except Exception as error:
+        logger.warning(f"MusicBrainz 파일명 적용 실패: {error}")
+
+
+def update_audio_info_path(info, old_path, new_path):
+    for key in ("filepath", "_filename", "filename"):
+        if info.get(key) == old_path:
+            info[key] = new_path
+    requested_downloads = info.get("requested_downloads")
+    if not isinstance(requested_downloads, list):
+        return
+    for item in requested_downloads:
+        if not isinstance(item, dict):
+            continue
+        for key in ("filepath", "_filename", "filename"):
+            if item.get(key) == old_path:
+                item[key] = new_path
 
 
 def relocate_playlist_folder_for_metadata(workspace, info, logger):
