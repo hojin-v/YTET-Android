@@ -146,6 +146,8 @@ public final class MainActivity extends Activity {
     private Dialog queueDialog;
     private AlertDialog updateDialog;
     private OnBackInvokedCallback backInvokedCallback;
+    private PlaybackSeekBarView expandedPlaybackSeekBar;
+    private TextView expandedPlaybackProgressText;
 
     private EditText urlInput;
     private RadioGroup mediaGroup;
@@ -347,6 +349,7 @@ public final class MainActivity extends Activity {
                 playbackQueueTrackIds = new long[0];
             }
             updateNowPlayingBar();
+            updateExpandedPlaybackProgress();
             updateExpandedPlayer();
         }
     };
@@ -2545,7 +2548,7 @@ public final class MainActivity extends Activity {
         applyTrackSelectionBackground(card, track);
         card.setOnClickListener(view -> {
             selectLibraryTrack(track);
-            playTrack(track);
+            playVisibleLibraryTrack(track);
         });
         registerLibraryTrackView(track, card);
 
@@ -2581,7 +2584,7 @@ public final class MainActivity extends Activity {
         applyTrackSelectionBackground(row, track);
         row.setOnClickListener(view -> {
             selectLibraryTrack(track);
-            playTrack(track);
+            playVisibleLibraryTrack(track);
         });
         registerLibraryTrackView(track, row);
 
@@ -2721,8 +2724,11 @@ public final class MainActivity extends Activity {
         EditText titleInput = metadataEditField("제목", track.title());
         EditText artistInput = metadataEditField("아티스트", track.artist());
         EditText albumInput = metadataEditField("앨범", track.album());
+        body.addView(metadataEditLabel("제목"), marginBottom(4));
         body.addView(titleInput, marginBottom(10));
+        body.addView(metadataEditLabel("아티스트"), marginBottom(4));
         body.addView(artistInput, marginBottom(10));
+        body.addView(metadataEditLabel("앨범"), marginBottom(4));
         body.addView(albumInput, marginBottom(14));
         body.addView(muted("앱 안의 표시 정보를 수정합니다. 실제 파일명과 파일 내부 태그는 변경하지 않습니다.", 11), marginBottom(14));
 
@@ -2755,18 +2761,26 @@ public final class MainActivity extends Activity {
         styleDetailDialog(dialog);
     }
 
+    private TextView metadataEditLabel(String label) {
+        TextView view = muted(label, 12);
+        view.setTypeface(Typeface.DEFAULT_BOLD);
+        return view;
+    }
+
     private EditText metadataEditField(String hint, String value) {
         EditText input = new EditText(this);
         input.setText(value);
         input.setHint(hint);
         input.setSingleLine(true);
+        input.setGravity(Gravity.CENTER_VERTICAL);
         input.setTextColor(color(R.color.ytet_text));
         input.setHintTextColor(color(R.color.ytet_muted));
         input.setTextSize(15);
+        input.setMinHeight(dp(50));
         input.setSelectAllOnFocus(false);
         input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
         input.setImeOptions(EditorInfo.IME_ACTION_NEXT);
-        input.setPadding(dp(12), 0, dp(12), 0);
+        input.setPadding(dp(14), 0, dp(14), 0);
         input.setBackground(roundedStroke(0x22000000, 0x22FFFFFF, 8, 1));
         return input;
     }
@@ -3022,6 +3036,56 @@ public final class MainActivity extends Activity {
         queue.add(track);
         activeQueuePreview = new ArrayList<>(queue);
         startPlayback(PlaybackService.playQueueIntent(this, station, queue));
+    }
+
+    private void playVisibleLibraryTrack(DeviceAudioTrack track) {
+        if (track == null) {
+            return;
+        }
+        List<DeviceAudioTrack> queue = visibleLibraryTracks();
+        int startIndex = indexOfTrack(queue, track);
+        if (queue.isEmpty() || startIndex < 0) {
+            playTrack(track);
+            return;
+        }
+        String trimmedQuery = librarySearchQuery == null ? "" : librarySearchQuery.trim();
+        boolean searching = !trimmedQuery.isEmpty();
+        MusicStation station = new MusicStation(
+                "library-visible-" + Integer.toHexString((librarySource + "|" + librarySort.key + "|" + trimmedQuery).hashCode()),
+                searching ? "검색 결과" : "전체 음악",
+                "내 음악",
+                searching ? trimmedQuery : "현재 목록 순서",
+                queue.size() + "곡 재생",
+                MusicStation.MixType.TRACK,
+                "",
+                color(R.color.ytet_accent)
+        );
+        activeStation = station;
+        activeQueuePreview = new ArrayList<>(queue);
+        applyPreviewTrackTheme(queue.get(startIndex));
+        playbackHasQueue = true;
+        playbackPlaying = false;
+        playbackPreparing = true;
+        playbackWillPlay = true;
+        playbackError = false;
+        playbackTitle = queue.get(startIndex).title();
+        playbackMeta = queue.get(startIndex).artist() + " · " + queue.get(startIndex).album();
+        setStreamingStatus("준비 중: " + queue.get(startIndex).title());
+        updateNowPlayingBar();
+        startPlayback(PlaybackService.playQueueIntent(this, station, queue, startIndex));
+    }
+
+    private int indexOfTrack(List<DeviceAudioTrack> tracks, DeviceAudioTrack target) {
+        if (tracks == null || target == null) {
+            return -1;
+        }
+        for (int index = 0; index < tracks.size(); index++) {
+            DeviceAudioTrack track = tracks.get(index);
+            if (track != null && track.id() == target.id()) {
+                return index;
+            }
+        }
+        return -1;
     }
 
     private void playQueueTrack(DeviceAudioTrack track, int index) {
@@ -3476,6 +3540,10 @@ public final class MainActivity extends Activity {
         if (playerDialog == null) {
             playerDialog = new Dialog(this, R.style.Theme_Ytet_PlayerDialog);
             playerDialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+            playerDialog.setOnDismissListener(dialog -> {
+                expandedPlaybackSeekBar = null;
+                expandedPlaybackProgressText = null;
+            });
         }
         applyExpandedPlayerWindow(playerDialog.getWindow());
         playerDialog.setContentView(buildExpandedPlayerContent());
@@ -3484,6 +3552,7 @@ public final class MainActivity extends Activity {
     }
 
     private void updateExpandedPlayer() {
+        updateExpandedPlaybackProgress();
         if (playerDialog == null
                 || !playerDialog.isShowing()
                 || suppressPlayerDragDismiss
@@ -3494,6 +3563,18 @@ public final class MainActivity extends Activity {
         applyExpandedPlayerWindow(playerDialog.getWindow());
         playerDialog.setContentView(buildExpandedPlayerContent());
         applyExpandedPlayerWindow(playerDialog.getWindow());
+    }
+
+    private void updateExpandedPlaybackProgress() {
+        if (playbackSeeking) {
+            return;
+        }
+        if (expandedPlaybackSeekBar != null) {
+            expandedPlaybackSeekBar.setProgress(playbackDurationMs, playbackPositionMs);
+        }
+        if (expandedPlaybackProgressText != null) {
+            expandedPlaybackProgressText.setText(playbackProgressText());
+        }
     }
 
     private View buildExpandedPlayerContent() {
@@ -3602,8 +3683,11 @@ public final class MainActivity extends Activity {
                 updateExpandedPlayer();
             }
         });
+        expandedPlaybackSeekBar = progress;
         content.addView(progress, controlParams(42, 0));
-        content.addView(muted(playbackProgressText(), 12), marginBottom(10));
+        TextView progressText = muted(playbackProgressText(), 12);
+        expandedPlaybackProgressText = progressText;
+        content.addView(progressText, marginBottom(10));
         content.addView(new View(this), new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 0,
