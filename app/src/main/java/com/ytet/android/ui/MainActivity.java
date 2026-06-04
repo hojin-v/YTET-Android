@@ -2767,7 +2767,22 @@ public final class MainActivity extends Activity {
         urlInput.setText(extractorUrl);
         urlInput.setHint("https://youtu.be/...");
         urlInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        styleInput(urlInput);
+        styleUrlInput(urlInput);
+        urlInput.setSelection(urlInput.getText().length());
+        urlInput.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence text, int start, int count, int after) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence text, int start, int before, int count) {
+                extractorUrl = text == null ? "" : text.toString();
+            }
+
+            @Override
+            public void afterTextChanged(Editable text) {
+            }
+        });
         root.addView(urlInput, controlParams(58, 18));
 
         root.addView(label("모드"), marginBottom(8));
@@ -4363,6 +4378,13 @@ public final class MainActivity extends Activity {
             return;
         }
         urlInput.setEnabled(!busy);
+        urlInput.setFocusable(!busy);
+        urlInput.setFocusableInTouchMode(!busy);
+        urlInput.setLongClickable(!busy);
+        if (busy) {
+            urlInput.clearFocus();
+            urlInput.setCursorVisible(false);
+        }
         mediaGroup.setEnabled(!busy);
         audioRadio.setEnabled(!busy);
         videoRadio.setEnabled(!busy);
@@ -4683,6 +4705,25 @@ public final class MainActivity extends Activity {
         input.setGravity(Gravity.CENTER_VERTICAL);
         input.setPadding(dp(12), 0, dp(12), 0);
         input.setBackground(rounded(color(R.color.ytet_panel_alt), 8));
+    }
+
+    private void styleUrlInput(EditText input) {
+        styleInput(input);
+        input.setTextSize(12);
+        input.setSelectAllOnFocus(false);
+        input.setHorizontallyScrolling(true);
+        input.setHorizontalFadingEdgeEnabled(true);
+        input.setFadingEdgeLength(dp(24));
+        input.setImeOptions(EditorInfo.IME_ACTION_DONE);
+        input.setPadding(dp(10), 0, dp(10), 0);
+        input.setOnClickListener(view -> {
+            input.requestFocus();
+            input.setCursorVisible(true);
+            showKeyboard(input);
+        });
+        input.setOnFocusChangeListener((view, hasFocus) -> {
+            input.setCursorVisible(hasFocus);
+        });
     }
 
     private GradientDrawable rounded(int fillColor, int radiusDp) {
