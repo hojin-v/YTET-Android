@@ -3270,12 +3270,21 @@ public final class MainActivity extends Activity {
         }
         window.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS
                 | WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION);
-        window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
-        window.setBackgroundDrawable(new ColorDrawable(statusColor));
-        window.setStatusBarColor(statusColor);
+        window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS
+                | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            WindowManager.LayoutParams attributes = window.getAttributes();
+            attributes.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
+            attributes.gravity = Gravity.TOP | Gravity.START;
+            attributes.width = WindowManager.LayoutParams.MATCH_PARENT;
+            attributes.height = WindowManager.LayoutParams.MATCH_PARENT;
+            window.setAttributes(attributes);
+        }
+        window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        window.setStatusBarColor(Color.TRANSPARENT);
         window.setNavigationBarColor(navigationColor);
         View decor = window.getDecorView();
-        decor.setBackgroundColor(statusColor);
+        decor.setBackgroundColor(Color.TRANSPARENT);
         int flags = decor.getSystemUiVisibility()
                 | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
                 | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
@@ -3465,7 +3474,7 @@ public final class MainActivity extends Activity {
             return;
         }
         if (playerDialog == null) {
-            playerDialog = new Dialog(this);
+            playerDialog = new Dialog(this, R.style.Theme_Ytet_PlayerDialog);
             playerDialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
         }
         applyExpandedPlayerWindow(playerDialog.getWindow());
@@ -3501,7 +3510,7 @@ public final class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT
         ));
         updatePlaybackThemeColor(false);
-        frame.setBackgroundColor(playerStatusBarColor());
+        frame.setBackgroundColor(Color.TRANSPARENT);
         root.setBackground(expandedPlayerBackground(false));
         root.setPlayerSurfaceStyle(true);
         frame.addView(root);
