@@ -128,6 +128,9 @@ public final class MainActivity extends Activity {
     private static final String LIBRARY_SOURCE_COLLECTION = "collection";
     private static final String LIBRARY_SOURCE_DEVICE = "device";
     private static final long LIBRARY_SEARCH_DEBOUNCE_MS = 120L;
+    private static final int LIBRARY_RENDER_LIMIT = 80;
+    private static final int LIBRARY_INITIAL_RENDER_ITEMS = 14;
+    private static final int LIBRARY_RENDER_BATCH_ITEMS = 12;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService libraryExecutor = Executors.newSingleThreadExecutor();
@@ -238,6 +241,7 @@ public final class MainActivity extends Activity {
     private ArtistDetailMode artistDetailMode = ArtistDetailMode.ALL;
     private EditText librarySearchInput;
     private LinearLayout libraryResultsContainer;
+    private int libraryRenderGeneration;
     private LibraryGroup focusedLibraryGroup;
     private LibraryFilter focusedLibraryGroupFilter;
     private LibraryGroup focusedParentArtistGroup;
@@ -1415,23 +1419,19 @@ public final class MainActivity extends Activity {
     }
 
     private void populateLibraryResults(LinearLayout root) {
+        int generation = ++libraryRenderGeneration;
         if (libraryFilter == LibraryFilter.ALL) {
             List<DeviceAudioTrack> visibleTracks = visibleLibraryTracks();
             if (visibleTracks.isEmpty()) {
                 root.addView(emptyLibraryView(), matchWrap());
                 return;
             }
-            int limit = Math.min(visibleTracks.size(), 80);
-            if (libraryGridView) {
-                addTrackCardGrid(root, visibleTracks, limit);
-            } else {
-                for (int i = 0; i < limit; i++) {
-                    root.addView(trackRow(visibleTracks.get(i)), marginBottom(8));
+            int limit = Math.min(visibleTracks.size(), LIBRARY_RENDER_LIMIT);
+            appendTrackItems(root, visibleTracks, limit, generation, () -> {
+                if (visibleTracks.size() > limit && isCurrentLibraryRender(root, generation)) {
+                    root.addView(muted("상위 " + limit + "곡만 표시 중입니다. 검색하면 목록을 좁힐 수 있습니다.", 12), matchWrap());
                 }
-            }
-            if (visibleTracks.size() > limit) {
-                root.addView(muted("상위 " + limit + "곡만 표시 중입니다. 검색하면 목록을 좁힐 수 있습니다.", 12), matchWrap());
-            }
+            });
             return;
         }
 
@@ -1444,17 +1444,12 @@ public final class MainActivity extends Activity {
             root.addView(emptyLibraryView(), matchWrap());
             return;
         }
-        int limit = Math.min(visibleGroups.size(), 80);
-        if (libraryGridView) {
-            addLibraryGroupCardGrid(root, visibleGroups, limit);
-        } else {
-            for (int i = 0; i < limit; i++) {
-                root.addView(libraryGroupRow(visibleGroups.get(i)), marginBottom(8));
+        int limit = Math.min(visibleGroups.size(), LIBRARY_RENDER_LIMIT);
+        appendLibraryGroupItems(root, visibleGroups, limit, generation, () -> {
+            if (visibleGroups.size() > limit && isCurrentLibraryRender(root, generation)) {
+                root.addView(muted("상위 " + limit + "개만 표시 중입니다. 검색하면 목록을 좁힐 수 있습니다.", 12), matchWrap());
             }
-        }
-        if (visibleGroups.size() > limit) {
-            root.addView(muted("상위 " + limit + "개만 표시 중입니다. 검색하면 목록을 좁힐 수 있습니다.", 12), matchWrap());
-        }
+        });
     }
 
     private View emptyLibraryView() {
@@ -1468,6 +1463,90 @@ public final class MainActivity extends Activity {
                 : emptyLibraryHint();
         empty.addView(muted(hint, 13), matchWrap());
         return empty;
+    }
+
+    private void appendTrackItems(
+            LinearLayout root,
+            List<DeviceAudioTrack> tracks,
+            int limit,
+            int generation,
+            Runnable onComplete
+    ) {
+        appendTrackItems(root, tracks, limit, generation, 0, onComplete);
+    }
+
+    private void appendTrackItems(
+            LinearLayout root,
+            List<DeviceAudioTrack> tracks,
+            int limit,
+            int generation,
+            int start,
+            Runnable onComplete
+    ) {
+        if (!isCurrentLibraryRender(root, generation)) {
+            return;
+        }
+        int batchSize = start == 0 ? LIBRARY_INITIAL_RENDER_ITEMS : LIBRARY_RENDER_BATCH_ITEMS;
+        int end = Math.min(limit, start + batchSize);
+        if (libraryGridView) {
+            addTrackCardGrid(root, tracks, start, end);
+        } else {
+            for (int index = start; index < end; index++) {
+                root.addView(trackRow(tracks.get(index)), marginBottom(8));
+            }
+        }
+        if (end >= limit) {
+            if (onComplete != null) {
+                onComplete.run();
+            }
+            return;
+        }
+        mainHandler.post(() -> appendTrackItems(root, tracks, limit, generation, end, onComplete));
+    }
+
+    private void appendLibraryGroupItems(
+            LinearLayout root,
+            List<LibraryGroup> groups,
+            int limit,
+            int generation,
+            Runnable onComplete
+    ) {
+        appendLibraryGroupItems(root, groups, limit, generation, 0, onComplete);
+    }
+
+    private void appendLibraryGroupItems(
+            LinearLayout root,
+            List<LibraryGroup> groups,
+            int limit,
+            int generation,
+            int start,
+            Runnable onComplete
+    ) {
+        if (!isCurrentLibraryRender(root, generation)) {
+            return;
+        }
+        int batchSize = start == 0 ? LIBRARY_INITIAL_RENDER_ITEMS : LIBRARY_RENDER_BATCH_ITEMS;
+        int end = Math.min(limit, start + batchSize);
+        if (libraryGridView) {
+            addLibraryGroupCardGrid(root, groups, start, end);
+        } else {
+            for (int index = start; index < end; index++) {
+                root.addView(libraryGroupRow(groups.get(index)), marginBottom(8));
+            }
+        }
+        if (end >= limit) {
+            if (onComplete != null) {
+                onComplete.run();
+            }
+            return;
+        }
+        mainHandler.post(() -> appendLibraryGroupItems(root, groups, limit, generation, end, onComplete));
+    }
+
+    private boolean isCurrentLibraryRender(LinearLayout root, int generation) {
+        return currentTab == Tab.LIBRARY
+                && libraryResultsContainer == root
+                && libraryRenderGeneration == generation;
     }
 
     private View libraryFilterBar() {
@@ -2433,12 +2512,13 @@ public final class MainActivity extends Activity {
         return fallback;
     }
 
-    private void addLibraryGroupCardGrid(LinearLayout root, List<LibraryGroup> groups, int limit) {
-        for (int index = 0; index < limit; index += 2) {
+    private void addLibraryGroupCardGrid(LinearLayout root, List<LibraryGroup> groups, int start, int end) {
+        int rowStart = start - (start % 2);
+        for (int index = rowStart; index < end; index += 2) {
             LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.HORIZONTAL);
             row.addView(libraryGroupCard(groups.get(index)), cardColumnParams(8));
-            if (index + 1 < limit) {
+            if (index + 1 < end) {
                 row.addView(libraryGroupCard(groups.get(index + 1)), cardColumnParams(0));
             } else {
                 row.addView(new View(this), cardColumnParams(0));
@@ -3159,12 +3239,13 @@ public final class MainActivity extends Activity {
         builder.append(value);
     }
 
-    private void addTrackCardGrid(LinearLayout root, List<DeviceAudioTrack> visibleTracks, int limit) {
-        for (int index = 0; index < limit; index += 2) {
+    private void addTrackCardGrid(LinearLayout root, List<DeviceAudioTrack> visibleTracks, int start, int end) {
+        int rowStart = start - (start % 2);
+        for (int index = rowStart; index < end; index += 2) {
             LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.HORIZONTAL);
             row.addView(trackCard(visibleTracks.get(index)), cardColumnParams(8));
-            if (index + 1 < limit) {
+            if (index + 1 < end) {
                 row.addView(trackCard(visibleTracks.get(index + 1)), cardColumnParams(0));
             } else {
                 row.addView(new View(this), cardColumnParams(0));
