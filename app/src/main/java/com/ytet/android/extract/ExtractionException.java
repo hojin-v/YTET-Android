@@ -1,6 +1,6 @@
 package com.ytet.android.extract;
 
-public final class ExtractionException extends Exception {
+public class ExtractionException extends Exception {
     public ExtractionException(String message) {
         super(message);
     }
@@ -9,4 +9,3 @@ public final class ExtractionException extends Exception {
         super(message, cause);
     }
 }
-

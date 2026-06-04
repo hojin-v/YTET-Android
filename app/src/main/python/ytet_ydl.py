@@ -23,6 +23,10 @@ class YtetExtractionError(Exception):
     pass
 
 
+class YtetCancellationError(Exception):
+    pass
+
+
 class YtetLogger:
     def __init__(self):
         self.messages = []
@@ -59,6 +63,7 @@ def extract(
     enhance_metadata=False,
     progress_listener=None,
     android_sdk=DEFAULT_ANDROID_SDK,
+    cancel_checker=None,
 ):
     if not isinstance(include_playlist, bool):
         old_progress_listener = include_playlist
@@ -79,6 +84,7 @@ def extract(
     logger = YtetLogger()
     media_type = str(media_type or "audio")
     android_sdk = as_int(android_sdk) or DEFAULT_ANDROID_SDK
+    check_canceled(cancel_checker)
 
     if media_type == "video":
         if include_playlist:
@@ -91,6 +97,7 @@ def extract(
             progress_listener,
             logger,
             android_sdk,
+            cancel_checker,
         )
         return
 
@@ -102,25 +109,39 @@ def extract(
         progress_listener,
         logger,
         include_playlist=bool(include_playlist),
+        cancel_checker=cancel_checker,
     )
 
     try:
         with YoutubeDL(options) as ydl:
+            check_canceled(cancel_checker)
             info = ydl.extract_info(url, download=True)
+            check_canceled(cancel_checker)
             mark_single_video_playlist(info)
             if enhance_metadata and not is_single_video_playlist(info):
-                info = enhance_music_metadata(info, progress_listener, logger)
+                info = enhance_music_metadata(info, progress_listener, logger, cancel_checker)
+                check_canceled(cancel_checker)
             embed_audio_covers(workspace, info, logger, ydl)
+            check_canceled(cancel_checker)
             if enhance_metadata:
                 rename_metadata_matched_audio_files(workspace, info, logger, ydl)
             if include_playlist:
                 relocate_playlist_folder_for_metadata(workspace, info, logger)
+            check_canceled(cancel_checker)
+    except YtetCancellationError:
+        raise
     except YtetExtractionError:
         raise
     except DownloadError as error:
-        raise YtetExtractionError(clean_error(str(error), logger)) from error
+        message = clean_error(str(error), logger)
+        if is_cancel_message(message):
+            raise YtetCancellationError("추출이 취소되었습니다.") from error
+        raise YtetExtractionError(message) from error
     except Exception as error:
-        raise YtetExtractionError(clean_error(str(error), logger)) from error
+        message = clean_error(str(error), logger)
+        if is_cancel_message(message):
+            raise YtetCancellationError("추출이 취소되었습니다.") from error
+        raise YtetExtractionError(message) from error
 
 def build_options(
     workspace,
@@ -130,6 +151,7 @@ def build_options(
     progress_listener,
     logger,
     include_playlist=False,
+    cancel_checker=None,
 ):
     options = {
         "cachedir": False,
@@ -138,9 +160,11 @@ def build_options(
         "noplaylist": not bool(include_playlist),
         "outtmpl": output_template(workspace, include_playlist),
         "overwrites": True,
-        "progress_hooks": [progress_hook(progress_listener)],
+        "progress_hooks": [progress_hook(progress_listener, cancel_checker)],
         "quiet": True,
     }
+    if include_playlist:
+        options["ignoreerrors"] = True
 
     if media_type == "video":
         raise YtetExtractionError("영상은 Android 병합 경로로 처리합니다.")
@@ -168,53 +192,67 @@ def extract_video(
     progress_listener,
     logger,
     android_sdk=DEFAULT_ANDROID_SDK,
+    cancel_checker=None,
 ):
     try:
+        check_canceled(cancel_checker)
         notify(progress_listener, 8, "분석", "영상 형식 확인 중")
-        with YoutubeDL(base_options(logger, progress_listener)) as ydl:
+        with YoutubeDL(base_options(logger, progress_listener, cancel_checker)) as ydl:
             info = ydl.extract_info(url, download=False)
 
+        check_canceled(cancel_checker)
         plan = video_track_plan(info, option, android_sdk)
         if plan["mode"] == "mux":
             notify(progress_listener, 12, "다운로드", "고화질 영상 트랙 다운로드 중")
-            download_one(url, workspace, plan["video"]["format_id"], "video-track.%(ext)s", logger, progress_listener)
+            download_one(url, workspace, plan["video"]["format_id"], "video-track.%(ext)s", logger, progress_listener, cancel_checker)
+            check_canceled(cancel_checker)
             notify(progress_listener, 52, "다운로드", "오디오 트랙 다운로드 중")
-            download_one(url, workspace, plan["audio"]["format_id"], "audio-track.%(ext)s", logger, progress_listener)
+            download_one(url, workspace, plan["audio"]["format_id"], "audio-track.%(ext)s", logger, progress_listener, cancel_checker)
         else:
             notify(progress_listener, 12, "다운로드", "단일 파일 영상 다운로드 중")
             outtmpl = "video-track.%(ext)s" if include_subtitles else final_outtmpl(info)
-            download_one(url, workspace, plan["format"], outtmpl, logger, progress_listener)
+            download_one(url, workspace, plan["format"], outtmpl, logger, progress_listener, cancel_checker)
 
+        check_canceled(cancel_checker)
         if include_subtitles:
             notify(progress_listener, 84, "자막", "자막 다운로드 중")
-            download_subtitles(url, workspace, info, logger, progress_listener)
+            download_subtitles(url, workspace, info, logger, progress_listener, cancel_checker)
         if plan["mode"] == "mux":
             write_mux_manifest(workspace, info, plan)
         elif include_subtitles:
             write_single_video_manifest(workspace, info)
+        check_canceled(cancel_checker)
+    except YtetCancellationError:
+        raise
     except YtetExtractionError:
         raise
     except DownloadError as error:
-        raise YtetExtractionError(clean_error(str(error), logger)) from error
+        message = clean_error(str(error), logger)
+        if is_cancel_message(message):
+            raise YtetCancellationError("추출이 취소되었습니다.") from error
+        raise YtetExtractionError(message) from error
     except Exception as error:
-        raise YtetExtractionError(clean_error(str(error), logger)) from error
+        message = clean_error(str(error), logger)
+        if is_cancel_message(message):
+            raise YtetCancellationError("추출이 취소되었습니다.") from error
+        raise YtetExtractionError(message) from error
 
 
-def base_options(logger, progress_listener):
+def base_options(logger, progress_listener, cancel_checker=None):
     return {
         "cachedir": False,
         "logger": logger,
         "no_warnings": False,
         "noplaylist": True,
         "overwrites": True,
-        "progress_hooks": [progress_hook(progress_listener)],
+        "progress_hooks": [progress_hook(progress_listener, cancel_checker)],
         "quiet": True,
     }
 
 
-def download_one(url, workspace, format_id, outtmpl, logger, progress_listener):
+def download_one(url, workspace, format_id, outtmpl, logger, progress_listener, cancel_checker=None):
     options = {
-        **base_options(logger, progress_listener),
+        **base_options(logger, progress_listener, cancel_checker),
         "format": format_id,
         "outtmpl": os.path.join(workspace, outtmpl),
     }
@@ -222,9 +260,9 @@ def download_one(url, workspace, format_id, outtmpl, logger, progress_listener):
         ydl.download([url])
 
 
-def download_subtitles(url, workspace, info, logger, progress_listener):
+def download_subtitles(url, workspace, info, logger, progress_listener, cancel_checker=None):
     options = {
-        **base_options(logger, progress_listener),
+        **base_options(logger, progress_listener, cancel_checker),
         "skip_download": True,
         "outtmpl": os.path.join(workspace, final_stem(info) + ".%(ext)s"),
         "writesubtitles": True,
@@ -499,22 +537,26 @@ def first_text(*values):
     return None
 
 
-def enhance_music_metadata(info, progress_listener, logger):
+def enhance_music_metadata(info, progress_listener, logger, cancel_checker=None):
     if not isinstance(info, dict):
         return info
     if is_single_video_playlist(info):
         logger.info("MusicBrainz 보정 건너뜀: 긴 단일 플레이리스트 영상")
         return info
     try:
+        check_canceled(cancel_checker)
         notify(progress_listener, 91, "메타데이터", "MusicBrainz 앨범 정보 검색 중")
         client = MusicBrainzClient(logger)
         entries = [entry for entry in info.get("entries") or [] if isinstance(entry, dict)]
         if entries:
-            enhance_playlist_metadata(info, entries, client, logger, progress_listener)
+            enhance_playlist_metadata(info, entries, client, logger, progress_listener, cancel_checker)
         else:
-            metadata = match_recording_metadata(info, client)
+            metadata = match_recording_metadata(info, client, cancel_checker=cancel_checker)
             if metadata:
                 apply_metadata_override(info, metadata)
+        check_canceled(cancel_checker)
+    except YtetCancellationError:
+        raise
     except Exception as error:
         logger.warning(f"MusicBrainz 보정 실패: {error}")
     return info
@@ -585,23 +627,26 @@ class MusicBrainzClient:
         return data
 
 
-def enhance_playlist_metadata(info, entries, client, logger, progress_listener=None):
+def enhance_playlist_metadata(info, entries, client, logger, progress_listener=None, cancel_checker=None):
+    check_canceled(cancel_checker)
     artist_candidate, album_candidate = playlist_artist_album_candidates(info)
     if album_candidate:
         notify(progress_listener, 91, "메타데이터", "MusicBrainz 앨범 후보 검색 중")
-    release = match_release_for_playlist(entries, artist_candidate, album_candidate, client)
+    release = match_release_for_playlist(entries, artist_candidate, album_candidate, client, cancel_checker)
     if release:
         matched = apply_release_metadata(entries, release)
         logger.info(f"MusicBrainz release matched {matched}/{len(entries)} tracks")
 
     total = len(entries)
     for index, entry in enumerate(entries, start=1):
+        check_canceled(cancel_checker)
         if entry.get("__ytet_metadata"):
             continue
         notify(progress_listener, 91, "메타데이터", f"MusicBrainz 검색 중 {index}/{total}")
-        metadata = match_recording_metadata(entry, client, artist_candidate=artist_candidate, album_candidate=album_candidate)
+        metadata = match_recording_metadata(entry, client, artist_candidate=artist_candidate, album_candidate=album_candidate, cancel_checker=cancel_checker)
         if metadata:
             apply_metadata_override(entry, metadata)
+    check_canceled(cancel_checker)
     notify(progress_listener, 91, "메타데이터", "MusicBrainz 검색 완료")
 
 
@@ -635,17 +680,20 @@ def clean_album_candidate(value):
     return clean_music_title(text)
 
 
-def match_release_for_playlist(entries, artist_candidate, album_candidate, client):
+def match_release_for_playlist(entries, artist_candidate, album_candidate, client, cancel_checker=None):
     if not album_candidate:
         return None
+    check_canceled(cancel_checker)
     clauses = [f'release:"{mb_escape(album_candidate)}"']
     if artist_candidate:
         clauses.append(f'artist:"{mb_escape(artist_candidate)}"')
     results = client.search("release", " AND ".join(clauses), limit=10).get("releases") or []
+    check_canceled(cancel_checker)
     minimum_matches = max(2, int(round(len(entries) * 0.5))) if len(entries) > 1 else 1
     best_release = None
     best_rank = None
     for release_candidate in results:
+        check_canceled(cancel_checker)
         release_id = release_candidate.get("id")
         if not release_id:
             continue
@@ -744,7 +792,8 @@ def best_track_match(entry, tracks, used=None):
     return best, best_score
 
 
-def match_recording_metadata(info, client, artist_candidate=None, album_candidate=None):
+def match_recording_metadata(info, client, artist_candidate=None, album_candidate=None, cancel_checker=None):
+    check_canceled(cancel_checker)
     titles = title_candidates(metadata_title(info))
     if not titles:
         return None
@@ -756,8 +805,10 @@ def match_recording_metadata(info, client, artist_candidate=None, album_candidat
     if album_candidate:
         clauses.append(f'release:"{mb_escape(album_candidate)}"')
     results = client.search("recording", " AND ".join(clauses), limit=5).get("recordings") or []
+    check_canceled(cancel_checker)
     if not results and artist and len(titles) > 1:
         results = client.search("recording", f'recording:"{mb_escape(titles[1])}" AND artistname:"{mb_escape(artist)}"', limit=5).get("recordings") or []
+        check_canceled(cancel_checker)
     best, score = best_recording_result(info, results, titles, artist)
     if not best or score < 0.80:
         return None
@@ -1355,8 +1406,9 @@ def find_subtitle_files(workspace):
     return sorted(files)
 
 
-def progress_hook(progress_listener):
+def progress_hook(progress_listener, cancel_checker=None):
     def hook(data):
+        check_canceled(cancel_checker)
         status = data.get("status")
         if status == "downloading":
             notify(progress_listener, download_percent(data), "다운로드", download_message(data))
@@ -1365,6 +1417,22 @@ def progress_hook(progress_listener):
             notify(progress_listener, cleanup_percent(data), "정리", playlist_message(data, filename or "다운로드 완료"))
 
     return hook
+
+
+def check_canceled(cancel_checker):
+    if cancel_checker is None:
+        return
+    try:
+        if bool(cancel_checker.isCanceled()):
+            raise YtetCancellationError("추출이 취소되었습니다.")
+    except YtetCancellationError:
+        raise
+    except Exception:
+        return
+
+
+def is_cancel_message(message):
+    return "취소" in str(message or "")
 
 
 def download_percent(data):

@@ -8,7 +8,7 @@ public interface ExtractorEngine {
     ExtractionResult extract(
             Context context,
             ExtractionRequest request,
-            ExtractionProgressListener progressListener
+            ExtractionProgressListener progressListener,
+            ExtractionCancellationSignal cancellationSignal
     ) throws ExtractionException;
 }
-

@@ -150,6 +150,7 @@ public final class MainActivity extends Activity {
     private Button chooseFolderButton;
     private Button resetOutputButton;
     private Button extractButton;
+    private Button cancelExtractButton;
     private TextView folderText;
     private TextView statusText;
     private TextView resultText;
@@ -236,6 +237,7 @@ public final class MainActivity extends Activity {
     private String extractionStatus = "대기 중";
     private String extractionResult = "-";
     private boolean extractionBusy;
+    private boolean extractionCancelRequested;
     private boolean receiverRegistered;
     private boolean playbackReceiverRegistered;
     private boolean updateReceiverRegistered;
@@ -260,11 +262,17 @@ public final class MainActivity extends Activity {
             String error = intent.getStringExtra(ExtractionService.EXTRA_ERROR);
             String result = intent.getStringExtra(ExtractionService.EXTRA_RESULT);
             boolean done = intent.getBooleanExtra(ExtractionService.EXTRA_DONE, false);
+            boolean canceled = intent.getBooleanExtra(ExtractionService.EXTRA_CANCELED, false);
 
             extractionPercent = percent;
-            if (error != null) {
+            if (canceled) {
+                extractionStatus = "취소됨";
+                extractionResult = result == null ? "추출을 취소했습니다." : result;
+                extractionCancelRequested = false;
+            } else if (error != null) {
                 extractionStatus = "오류";
                 extractionResult = error;
+                extractionCancelRequested = false;
             } else {
                 extractionStatus = progressStatus(stage, message);
                 if (result != null) {
@@ -274,6 +282,7 @@ public final class MainActivity extends Activity {
 
             if (done) {
                 extractionBusy = false;
+                extractionCancelRequested = false;
             } else {
                 extractionBusy = true;
             }
@@ -2847,9 +2856,15 @@ public final class MainActivity extends Activity {
         folderText = muted("", 13);
         root.addView(folderText, marginBottom(20));
 
+        LinearLayout extractionActions = new LinearLayout(this);
+        extractionActions.setOrientation(LinearLayout.HORIZONTAL);
         extractButton = primaryButton("추출");
         extractButton.setOnClickListener(view -> startExtraction());
-        root.addView(extractButton, marginBottom(18));
+        extractionActions.addView(extractButton, weightedControlParams(7, 8));
+        cancelExtractButton = dangerButton("취소");
+        cancelExtractButton.setOnClickListener(view -> cancelExtraction());
+        extractionActions.addView(cancelExtractButton, weightedControlParams(3, 0));
+        root.addView(extractionActions, marginBottom(18));
 
         progressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         progressBar.setMax(100);
@@ -4339,6 +4354,7 @@ public final class MainActivity extends Activity {
         extractionStatus = "작업을 준비하는 중";
         extractionResult = "-";
         extractionBusy = true;
+        extractionCancelRequested = false;
         applyExtractionStateToViews();
         setBusy(true);
 
@@ -4348,6 +4364,23 @@ public final class MainActivity extends Activity {
             startForegroundService(intent);
         } else {
             startService(intent);
+        }
+    }
+
+    private void cancelExtraction() {
+        if (!extractionBusy || extractionCancelRequested) {
+            return;
+        }
+        extractionCancelRequested = true;
+        extractionStatus = "취소 요청 중";
+        extractionResult = "진행 중인 추출을 중단하는 중입니다.";
+        applyExtractionStateToViews();
+        try {
+            startService(ExtractionService.cancelIntent(this));
+        } catch (Exception exception) {
+            extractionCancelRequested = false;
+            toast("취소 요청을 보낼 수 없습니다.");
+            applyExtractionStateToViews();
         }
     }
 
@@ -4395,6 +4428,10 @@ public final class MainActivity extends Activity {
         chooseFolderButton.setEnabled(!busy);
         resetOutputButton.setEnabled(!busy);
         extractButton.setEnabled(!busy);
+        if (cancelExtractButton != null) {
+            cancelExtractButton.setVisibility(busy ? View.VISIBLE : View.GONE);
+            cancelExtractButton.setEnabled(busy && !extractionCancelRequested);
+        }
     }
 
     private void saveCurrentTabInputs() {

@@ -16,21 +16,27 @@ import com.ytet.android.ui.MainActivity;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class ExtractionService extends Service {
     public static final String ACTION_PROGRESS = "com.ytet.android.action.EXTRACTION_PROGRESS";
+    public static final String ACTION_CANCEL = "com.ytet.android.action.CANCEL_EXTRACTION";
     public static final String EXTRA_PERCENT = "com.ytet.android.extra.PERCENT";
     public static final String EXTRA_STAGE = "com.ytet.android.extra.STAGE";
     public static final String EXTRA_MESSAGE = "com.ytet.android.extra.MESSAGE";
     public static final String EXTRA_RESULT = "com.ytet.android.extra.RESULT";
     public static final String EXTRA_ERROR = "com.ytet.android.extra.ERROR";
     public static final String EXTRA_DONE = "com.ytet.android.extra.DONE";
+    public static final String EXTRA_CANCELED = "com.ytet.android.extra.CANCELED";
 
     private static final String CHANNEL_ID = "ytet_extraction";
     private static final int NOTIFICATION_ID = 4207;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final ExtractorEngine engine = new YtDlpPythonEngine();
+    private final AtomicBoolean cancelRequested = new AtomicBoolean(false);
+    private volatile Future<?> currentTask;
 
     @Override
     public void onCreate() {
@@ -40,6 +46,12 @@ public final class ExtractionService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        if (intent != null && ACTION_CANCEL.equals(intent.getAction())) {
+            requestCancellation();
+            return START_NOT_STICKY;
+        }
+
+        cancelRequested.set(false);
         startForeground(NOTIFICATION_ID, notification(0, "준비", "추출 작업 준비 중"));
 
         final ExtractionRequest request;
@@ -51,18 +63,27 @@ public final class ExtractionService extends Service {
             return START_NOT_STICKY;
         }
 
-        executor.execute(() -> {
+        currentTask = executor.submit(() -> {
             try {
-                ExtractionResult result = engine.extract(this, request, this::publishProgress);
+                ExtractionResult result = engine.extract(this, request, this::publishProgress, this::isCancellationRequested);
                 publishDone(result.summary());
+            } catch (ExtractionCanceledException exception) {
+                publishCanceled();
             } catch (ExtractionException exception) {
                 sendError(exception.getMessage());
             } finally {
+                currentTask = null;
                 stopSelf(startId);
             }
         });
 
         return START_NOT_STICKY;
+    }
+
+    public static Intent cancelIntent(Context context) {
+        Intent intent = new Intent(context, ExtractionService.class);
+        intent.setAction(ACTION_CANCEL);
+        return intent;
     }
 
     @Override
@@ -86,6 +107,21 @@ public final class ExtractionService extends Service {
         intent.putExtra(EXTRA_STAGE, stage);
         intent.putExtra(EXTRA_MESSAGE, message);
         sendBroadcast(intent);
+    }
+
+    private void requestCancellation() {
+        cancelRequested.set(true);
+        Future<?> task = currentTask;
+        if (task == null || task.isDone()) {
+            publishCanceled();
+            stopSelf();
+            return;
+        }
+        publishProgress(0, "취소", "추출을 취소하는 중");
+    }
+
+    private boolean isCancellationRequested() {
+        return cancelRequested.get() || Thread.currentThread().isInterrupted();
     }
 
     private void publishDone(String result) {
@@ -118,6 +154,22 @@ public final class ExtractionService extends Service {
         sendBroadcast(intent);
     }
 
+    private void publishCanceled() {
+        detachForegroundNotification();
+        NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        manager.notify(NOTIFICATION_ID, notification(0, "취소됨", "추출을 취소했습니다.", true, false));
+
+        Intent intent = new Intent(ACTION_PROGRESS);
+        intent.setPackage(getPackageName());
+        intent.putExtra(EXTRA_PERCENT, 0);
+        intent.putExtra(EXTRA_STAGE, "취소됨");
+        intent.putExtra(EXTRA_MESSAGE, "추출을 취소했습니다.");
+        intent.putExtra(EXTRA_RESULT, "추출을 취소했습니다.");
+        intent.putExtra(EXTRA_DONE, true);
+        intent.putExtra(EXTRA_CANCELED, true);
+        sendBroadcast(intent);
+    }
+
     private Notification notification(int percent, String stage, String message) {
         return notification(percent, stage, message, percent >= 100, false);
     }
@@ -135,6 +187,10 @@ public final class ExtractionService extends Service {
                 .setOngoing(!finished)
                 .setOnlyAlertOnce(!finished);
 
+        if (!finished) {
+            builder.addAction(R.drawable.ic_close, "취소", cancelPendingIntent());
+        }
+
         if (failed) {
             builder.setProgress(0, 0, false);
         } else if (percent > 0 && percent < 100) {
@@ -144,6 +200,15 @@ public final class ExtractionService extends Service {
         }
 
         return builder.build();
+    }
+
+    private PendingIntent cancelPendingIntent() {
+        return PendingIntent.getService(
+                this,
+                1,
+                cancelIntent(this),
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
     }
 
     private PendingIntent contentIntent() {

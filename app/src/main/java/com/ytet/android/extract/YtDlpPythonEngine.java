@@ -28,7 +28,8 @@ public final class YtDlpPythonEngine implements ExtractorEngine {
     public ExtractionResult extract(
             Context context,
             ExtractionRequest request,
-            ExtractionProgressListener progressListener
+            ExtractionProgressListener progressListener,
+            ExtractionCancellationSignal cancellationSignal
     ) throws ExtractionException {
         File workspace = new File(context.getCacheDir(), "ytet-" + System.currentTimeMillis());
         if (!workspace.mkdirs()) {
@@ -36,9 +37,11 @@ public final class YtDlpPythonEngine implements ExtractorEngine {
         }
 
         try {
+            throwIfCanceled(cancellationSignal);
             progressListener.onProgress(3, "준비", "Python yt-dlp 초기화 중");
             ensurePython(context);
 
+            throwIfCanceled(cancellationSignal);
             progressListener.onProgress(5, "추출", "yt-dlp 실행 중");
             PyObject module = Python.getInstance().getModule("ytet_ydl");
             module.callAttr(
@@ -51,14 +54,18 @@ public final class YtDlpPythonEngine implements ExtractorEngine {
                     request.includePlaylist(),
                     request.enhanceMetadata(),
                     progressListener,
-                    Build.VERSION.SDK_INT
+                    Build.VERSION.SDK_INT,
+                    cancellationSignal
             );
 
+            throwIfCanceled(cancellationSignal);
             MediaTrackMuxer.mergeWorkspace(workspace, progressListener);
 
+            throwIfCanceled(cancellationSignal);
             progressListener.onProgress(92, "저장", "결과 파일 정리 중");
             List<File> outputFiles = ExtractionOutputs.collectOutputFiles(workspace);
 
+            throwIfCanceled(cancellationSignal);
             progressListener.onProgress(95, "저장", request.usesDefaultOutput()
                     ? "기본 YTET 폴더로 복사 중"
                     : "선택한 Android 폴더로 복사 중");
@@ -69,7 +76,11 @@ public final class YtDlpPythonEngine implements ExtractorEngine {
 
             return new ExtractionResult(copiedFiles, ExtractionOutputs.buildSummary(request, copiedFiles));
         } catch (PyException exception) {
-            throw new ExtractionException(cleanPythonError(exception), exception);
+            String message = cleanPythonError(exception);
+            if (isCancelMessage(message)) {
+                throw new ExtractionCanceledException(message, exception);
+            }
+            throw new ExtractionException(message, exception);
         } finally {
             deleteRecursively(workspace);
         }
@@ -94,6 +105,16 @@ public final class YtDlpPythonEngine implements ExtractorEngine {
             return lastLine.substring(separator + 2);
         }
         return lastLine;
+    }
+
+    private void throwIfCanceled(ExtractionCancellationSignal cancellationSignal) throws ExtractionCanceledException {
+        if (cancellationSignal != null && cancellationSignal.isCanceled()) {
+            throw new ExtractionCanceledException("추출이 취소되었습니다.");
+        }
+    }
+
+    private boolean isCancelMessage(String message) {
+        return message != null && message.contains("취소");
     }
 
     private void deleteRecursively(File file) {
