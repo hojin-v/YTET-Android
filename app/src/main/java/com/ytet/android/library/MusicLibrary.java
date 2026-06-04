@@ -67,7 +67,7 @@ public final class MusicLibrary {
 
     public static String representativeArtist(String artist) {
         String clean = artist == null || artist.trim().isEmpty() ? "알 수 없는 아티스트" : artist.trim();
-        String[] parts = clean.split("(?i)\\s*(?:,|，|、|;|；|\\||\\s+/\\s+|\\s+w\\.?\\s+|\\s+w\\s*/\\s*|\\s+feat\\.?\\s+|\\s+ft\\.?\\s+|\\s+featuring\\s+|\\s+with\\s+|\\s+[x×&]\\s+)\\s*");
+        String[] parts = clean.split("(?i)\\s*(?:,|，|、|;|；|\\||\\s+/\\s+|\\s+feat\\.?\\s+|\\s+ft\\.?\\s+|\\s+featuring\\s+|\\s+with\\s+|\\s+[x×&]\\s+)\\s*");
         for (String part : parts) {
             if (part != null && !part.trim().isEmpty()) {
                 return part.trim();
