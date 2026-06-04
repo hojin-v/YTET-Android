@@ -129,10 +129,11 @@ public final class ExtractionOutputsTest {
 
         assertTrue(summary.contains("부분 완료"));
         assertTrue(summary.contains("성공: 1개 · 실패/건너뜀: 1개 · 전체: 2개"));
-        assertTrue(summary.contains("성공 항목:"));
-        assertTrue(summary.contains("1. artist - title"));
         assertTrue(summary.contains("실패/건너뜀 항목:"));
         assertTrue(summary.contains("2. 2번째 항목 (비공개 또는 사용할 수 없는 항목)"));
+        assertTrue(summary.contains("성공 항목:"));
+        assertTrue(summary.contains("1. artist - title"));
+        assertTrue(summary.indexOf("실패/건너뜀 항목:") < summary.indexOf("성공 항목:"));
         assertTrue(summary.contains("플레이리스트: 전체 항목 순서대로 추출"));
         assertTrue(summary.contains("메타데이터 보정: MusicBrainz 검색 사용"));
     }

@@ -114,6 +114,10 @@ def extract(
     )
 
     try:
+        expected_playlist_items = []
+        if include_playlist:
+            notify(progress_listener, 6, "분석", "플레이리스트 항목 확인 중")
+            expected_playlist_items = probe_playlist_items(url, logger, cancel_checker)
         with YoutubeDL(options) as ydl:
             check_canceled(cancel_checker)
             info = ydl.extract_info(url, download=True)
@@ -127,7 +131,7 @@ def extract(
             if enhance_metadata:
                 rename_metadata_matched_audio_files(workspace, info, logger, ydl)
             if include_playlist:
-                write_playlist_extraction_report(workspace, info, logger, ydl)
+                write_playlist_extraction_report(workspace, info, logger, ydl, expected_playlist_items)
                 relocate_playlist_folder_for_metadata(workspace, info, logger)
             check_canceled(cancel_checker)
     except YtetCancellationError:
@@ -178,6 +182,56 @@ def build_options(
     else:
         options["format"] = "ba[ext=m4a]/ba/best"
     return options
+
+
+def playlist_probe_options(logger):
+    return {
+        "cachedir": False,
+        "extract_flat": "in_playlist",
+        "ignoreerrors": True,
+        "logger": logger,
+        "no_warnings": False,
+        "noplaylist": False,
+        "quiet": True,
+    }
+
+
+def probe_playlist_items(url, logger, cancel_checker=None):
+    check_canceled(cancel_checker)
+    try:
+        with YoutubeDL(playlist_probe_options(logger)) as ydl:
+            info = ydl.extract_info(url, download=False)
+        check_canceled(cancel_checker)
+        return expected_playlist_items(info)
+    except YtetCancellationError:
+        raise
+    except Exception as error:
+        logger.warning(f"플레이리스트 항목 확인 실패: {error}")
+        return []
+
+
+def expected_playlist_items(info):
+    if not isinstance(info, dict):
+        return []
+    entries = info.get("entries")
+    if not isinstance(entries, list):
+        return []
+    items = []
+    for position, entry in enumerate(entries, start=1):
+        if isinstance(entry, dict):
+            index = playlist_item_index(entry, position)
+            items.append({
+                "index": index,
+                "keys": playlist_item_keys(entry),
+                "label": report_entry_label(entry, index),
+            })
+        else:
+            items.append({
+                "index": position,
+                "keys": set(),
+                "label": f"{position}번째 항목",
+            })
+    return items
 
 
 def output_template(workspace, include_playlist=False):
@@ -1084,50 +1138,78 @@ def rename_metadata_matched_audio_files(workspace, info, logger, ydl=None):
     rename_metadata_matched_audio_file(workspace, info, logger, ydl)
 
 
-def write_playlist_extraction_report(workspace, info, logger, ydl=None):
+def write_playlist_extraction_report(workspace, info, logger, ydl=None, expected_items=None):
     if not isinstance(info, dict):
         return
     entries = info.get("entries")
     if not isinstance(entries, list):
         return
-    total = as_int(info.get("n_entries") or info.get("playlist_count")) or len(entries)
+    expected_items = expected_items or []
+    total = len(expected_items) or as_int(info.get("n_entries") or info.get("playlist_count")) or len(entries)
+    expected_by_index = {
+        item["index"]: item
+        for item in expected_items
+        if item.get("index")
+    }
+    expected_by_key = {}
+    for item in expected_items:
+        for key in item.get("keys") or set():
+            expected_by_key[key] = item
+    matched_expected = set()
     succeeded = []
     failed = []
     for position, entry in enumerate(entries, start=1):
         if not isinstance(entry, dict):
-            failed.append({
-                "index": position,
-                "label": f"{position}번째 항목",
-                "reason": "비공개 또는 사용할 수 없는 항목",
-            })
+            expected = expected_by_index.get(position)
+            failed.append(report_item(
+                expected,
+                position,
+                f"{position}번째 항목",
+                reason="비공개 또는 사용할 수 없는 항목",
+            ))
+            mark_expected(matched_expected, expected)
             continue
         index = playlist_item_index(entry, position)
-        label = report_entry_label(entry, index)
+        expected = match_expected_playlist_item(entry, index, expected_by_key, expected_by_index)
+        label = (expected or {}).get("label") or report_entry_label(entry, index)
         audio_path = audio_path_for_info(workspace, entry, ydl)
         if audio_path and os.path.exists(audio_path) and os.path.splitext(audio_path)[1].lower() in AUDIO_EXTENSIONS:
             succeeded.append({
-                "index": index,
+                "index": (expected or {}).get("index") or index,
                 "label": label,
                 "file": os.path.basename(audio_path),
             })
         else:
+            failed.append(report_item(
+                expected,
+                index,
+                label,
+                reason=first_text(entry.get("reason"), entry.get("availability"), "결과 파일 없음"),
+            ))
+        mark_expected(matched_expected, expected)
+    for item in expected_items:
+        marker = expected_marker(item)
+        if marker and marker in matched_expected:
+            continue
+        failed.append(report_item(
+            item,
+            item.get("index"),
+            item.get("label"),
+            reason="추출 결과 없음",
+        ))
+    if not expected_items:
+        missing_count = max(0, total - len(entries))
+        if missing_count:
             failed.append({
-                "index": index,
-                "label": label,
-                "reason": first_text(entry.get("reason"), entry.get("availability"), "결과 파일 없음"),
+                "index": None,
+                "label": f"정보를 받지 못한 항목 {missing_count}개",
+                "reason": "비공개 또는 삭제되어 yt-dlp가 항목 정보를 반환하지 않음",
             })
-    missing_count = max(0, total - len(entries))
-    if missing_count:
-        failed.append({
-            "index": None,
-            "label": f"정보를 받지 못한 항목 {missing_count}개",
-            "reason": "비공개 또는 삭제되어 yt-dlp가 항목 정보를 반환하지 않음",
-        })
     report = {
         "kind": "playlist",
         "total": total,
-        "succeeded": succeeded,
-        "failed": failed,
+        "succeeded": sorted(succeeded, key=report_sort_key),
+        "failed": sorted(failed, key=report_sort_key),
     }
     try:
         with open(os.path.join(workspace, EXTRACTION_REPORT_NAME), "w", encoding="utf-8") as file:
@@ -1138,6 +1220,70 @@ def write_playlist_extraction_report(workspace, info, logger, ydl=None):
 
 def playlist_item_index(info, fallback):
     return as_int(info.get("playlist_index") or info.get("playlist_autonumber") or info.get("track_number")) or fallback
+
+
+def match_expected_playlist_item(entry, index, expected_by_key, expected_by_index):
+    for key in playlist_item_keys(entry):
+        if key in expected_by_key:
+            return expected_by_key[key]
+    return expected_by_index.get(index)
+
+
+def playlist_item_keys(info):
+    if not isinstance(info, dict):
+        return set()
+    keys = set()
+    for key in ("id", "url", "webpage_url", "original_url"):
+        value = first_text(info.get(key))
+        if not value:
+            continue
+        keys.add(value.strip().casefold())
+        video_id = youtube_video_id(value)
+        if video_id:
+            keys.add(video_id.casefold())
+    return keys
+
+
+def youtube_video_id(value):
+    text = str(value or "")
+    match = re.search(r"(?:[?&]v=|youtu\.be/|/shorts/)([A-Za-z0-9_-]{6,})", text)
+    if match:
+        return match.group(1)
+    if re.fullmatch(r"[A-Za-z0-9_-]{6,}", text):
+        return text
+    return None
+
+
+def report_item(expected, fallback_index, fallback_label, reason=None):
+    expected = expected if isinstance(expected, dict) else {}
+    return {
+        "index": expected.get("index") or fallback_index,
+        "label": expected.get("label") or fallback_label or "알 수 없는 항목",
+        "reason": reason,
+    }
+
+
+def expected_marker(item):
+    if not isinstance(item, dict):
+        return None
+    index = item.get("index")
+    if index:
+        return f"index:{index}"
+    keys = sorted(item.get("keys") or [])
+    if keys:
+        return f"key:{keys[0]}"
+    return None
+
+
+def mark_expected(marked, item):
+    marker = expected_marker(item)
+    if marker:
+        marked.add(marker)
+
+
+def report_sort_key(item):
+    index = as_int((item or {}).get("index"))
+    return (index is None, index or 0, str((item or {}).get("label") or ""))
 
 
 def report_entry_label(info, index=None):

@@ -78,8 +78,8 @@ final class ExtractionOutputs {
                 builder.append(" · 전체: ").append(report.totalCount()).append("개");
             }
             builder.append('\n');
-            appendReportItems(builder, "성공 항목", report.succeededLabels(), false);
             appendReportItems(builder, "실패/건너뜀 항목", report.failedLabels(), true);
+            appendReportItems(builder, "성공 항목", report.succeededLabels(), false);
         } else {
             builder.append("저장 완료\n");
         }
