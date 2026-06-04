@@ -12,6 +12,7 @@ required=(
   "$root/app/src/main/java/com/ytet/android/extract/ExtractionService.java"
   "$root/app/src/main/java/com/ytet/android/playback/PlaybackService.java"
   "$root/app/src/main/java/com/ytet/android/update/UpdateChecker.java"
+  "$root/app/src/main/java/com/ytet/android/update/UpdateApkProvider.java"
   "$root/app/src/main/java/com/ytet/android/update/UpdateInfo.java"
   "$root/app/src/main/java/com/ytet/android/stream/StationCatalog.java"
   "$root/app/src/main/java/com/ytet/android/library/MusicLibrary.java"
@@ -76,6 +77,8 @@ grep -q 'android.permission.REQUEST_INSTALL_PACKAGES' "$root/app/src/main/Androi
 grep -q 'android:allowBackup="false"' "$root/app/src/main/AndroidManifest.xml"
 grep -q 'android:icon="@drawable/ytet_launcher_icon"' "$root/app/src/main/AndroidManifest.xml"
 grep -q 'android:foregroundServiceType="mediaPlayback"' "$root/app/src/main/AndroidManifest.xml"
+grep -q 'android:name=".update.UpdateApkProvider"' "$root/app/src/main/AndroidManifest.xml"
+grep -q 'android:authorities="com.ytet.android.updateapk"' "$root/app/src/main/AndroidManifest.xml"
 grep -q 'ACTION_OPEN_DOCUMENT_TREE' "$root/app/src/main/java/com/ytet/android/ui/MainActivity.java"
 grep -q 'new YtDlpPythonEngine()' "$root/app/src/main/java/com/ytet/android/extract/ExtractionService.java"
 grep -q 'MediaSession' "$root/app/src/main/java/com/ytet/android/playback/PlaybackService.java"
@@ -89,7 +92,11 @@ grep -q 'EXTRA_ALBUM_ART_URI' "$root/app/src/main/java/com/ytet/android/playback
 grep -q 'EXTRA_QUEUE_TRACK_IDS' "$root/app/src/main/java/com/ytet/android/playback/PlaybackService.java"
 grep -q 'GitHub releases request' "$root/app/src/main/java/com/ytet/android/update/UpdateChecker.java"
 grep -q 'latestStableUpdateFromJson' "$root/app/src/main/java/com/ytet/android/update/UpdateChecker.java"
-grep -q 'DownloadManager' "$root/app/src/main/java/com/ytet/android/ui/MainActivity.java"
+grep -q 'UpdateApkProvider.uriFor' "$root/app/src/main/java/com/ytet/android/ui/MainActivity.java"
+grep -q 'ACTION_INSTALL_PACKAGE' "$root/app/src/main/java/com/ytet/android/ui/MainActivity.java"
+grep -q 'downloadUpdateApk' "$root/app/src/main/java/com/ytet/android/ui/MainActivity.java"
+grep -q 'AUTHORITY = "com.ytet.android.updateapk"' "$root/app/src/main/java/com/ytet/android/update/UpdateApkProvider.java"
+grep -q 'ParcelFileDescriptor.open' "$root/app/src/main/java/com/ytet/android/update/UpdateApkProvider.java"
 grep -q 'ACTION_MANAGE_UNKNOWN_APP_SOURCES' "$root/app/src/main/java/com/ytet/android/ui/MainActivity.java"
 grep -q 'showExtractionNotificationPermissionRationale' "$root/app/src/main/java/com/ytet/android/ui/MainActivity.java"
 grep -q '추출은 앱을 나가도 백그라운드에서 계속 진행됩니다' "$root/app/src/main/java/com/ytet/android/ui/MainActivity.java"
@@ -193,6 +200,11 @@ fi
 
 if grep -R "EXTRA_TRACK_TITLES\\|EXTRA_TRACK_ARTISTS\\|EXTRA_TRACK_ALBUMS\\|EXTRA_TRACK_URIS" "$root/app/src/main/java/com/ytet/android/playback" >/dev/null; then
   echo "oversized playback queue intent metadata found" >&2
+  exit 1
+fi
+
+if grep -R "DownloadManager" "$root/app/src/main/java/com/ytet/android/ui/MainActivity.java" >/dev/null; then
+  echo "legacy DownloadManager update install path found" >&2
   exit 1
 fi
 
