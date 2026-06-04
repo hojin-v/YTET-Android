@@ -63,7 +63,16 @@ public final class YtDlpPythonEngine implements ExtractorEngine {
 
             throwIfCanceled(cancellationSignal);
             progressListener.onProgress(92, "저장", "결과 파일 정리 중");
-            List<File> outputFiles = ExtractionOutputs.collectOutputFiles(workspace);
+            ExtractionOutputs.PlaylistReport report = ExtractionOutputs.readPlaylistReport(workspace);
+            List<File> outputFiles;
+            try {
+                outputFiles = ExtractionOutputs.collectOutputFiles(workspace);
+            } catch (ExtractionException exception) {
+                if (report.hasFailures()) {
+                    throw new ExtractionException(report.buildFailureSummary(), exception);
+                }
+                throw exception;
+            }
 
             throwIfCanceled(cancellationSignal);
             progressListener.onProgress(95, "저장", request.usesDefaultOutput()
@@ -72,9 +81,17 @@ public final class YtDlpPythonEngine implements ExtractorEngine {
             List<StorageWriter.CopiedFile> copiedFiles = request.usesDefaultOutput()
                     ? storageWriter.copyToDefaultPublicFolder(context, request.mediaType(), workspace, outputFiles)
                     : storageWriter.copyToTree(context, Uri.parse(request.outputTreeUri()), workspace, outputFiles);
-            progressListener.onProgress(100, "완료", "저장 완료");
+            progressListener.onProgress(
+                    100,
+                    report.hasFailures() ? "부분 완료" : "완료",
+                    report.hasFailures() ? "일부 항목 실패" : "저장 완료"
+            );
 
-            return new ExtractionResult(copiedFiles, ExtractionOutputs.buildSummary(request, copiedFiles));
+            return new ExtractionResult(
+                    copiedFiles,
+                    ExtractionOutputs.buildSummary(request, copiedFiles, report),
+                    report.hasFailures()
+            );
         } catch (PyException exception) {
             String message = cleanPythonError(exception);
             if (isCancelMessage(message)) {

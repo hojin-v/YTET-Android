@@ -1,5 +1,6 @@
 package com.ytet.android.extract;
 
+import com.ytet.android.core.AudioFormat;
 import com.ytet.android.core.ExtractionRequest;
 import com.ytet.android.core.MediaType;
 import com.ytet.android.core.VideoQuality;
@@ -91,7 +92,7 @@ public final class ExtractionOutputsTest {
                 "content://tree/output/video"
         );
 
-        String summary = ExtractionOutputs.buildSummary(request, List.of(copiedFile));
+        String summary = ExtractionOutputs.buildSummary(request, List.of(copiedFile), ExtractionOutputs.PlaylistReport.empty());
 
         assertTrue(summary.contains("저장 완료"));
         assertTrue(summary.contains("검증: Android 저장소에 복사된 파일 확인"));
@@ -99,6 +100,41 @@ public final class ExtractionOutputsTest {
         assertTrue(summary.contains("자막 요청: 예"));
         assertTrue(summary.contains("파일: channel - title.mp4 (1.5 KB)"));
         assertTrue(summary.contains("위치: content://tree/output/video"));
+    }
+
+    @Test
+    public void summaryHighlightsPartialPlaylistFailures() throws Exception {
+        ExtractionRequest request = new ExtractionRequest(
+                "https://m.youtube.com/playlist?list=PLxA687tYuMWjhuxOF-2lJZr0SP51HZn2t",
+                "content://tree/output",
+                MediaType.AUDIO,
+                AudioFormat.M4A.value(),
+                false,
+                true,
+                true
+        );
+        StorageWriter.CopiedFile copiedFile = new StorageWriter.CopiedFile(
+                "playlist/001 - artist - title.m4a",
+                "audio/mp4",
+                2048,
+                "content://tree/output/audio"
+        );
+        ExtractionOutputs.PlaylistReport report = new ExtractionOutputs.PlaylistReport(
+                2,
+                List.of("1. artist - title"),
+                List.of("2. 2번째 항목 (비공개 또는 사용할 수 없는 항목)")
+        );
+
+        String summary = ExtractionOutputs.buildSummary(request, List.of(copiedFile), report);
+
+        assertTrue(summary.contains("부분 완료"));
+        assertTrue(summary.contains("성공: 1개 · 실패/건너뜀: 1개 · 전체: 2개"));
+        assertTrue(summary.contains("성공 항목:"));
+        assertTrue(summary.contains("1. artist - title"));
+        assertTrue(summary.contains("실패/건너뜀 항목:"));
+        assertTrue(summary.contains("2. 2번째 항목 (비공개 또는 사용할 수 없는 항목)"));
+        assertTrue(summary.contains("플레이리스트: 전체 항목 순서대로 추출"));
+        assertTrue(summary.contains("메타데이터 보정: MusicBrainz 검색 사용"));
     }
 
     private void write(File dir, String name) throws IOException {

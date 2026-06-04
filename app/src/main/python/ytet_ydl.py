@@ -14,6 +14,7 @@ from yt_dlp.utils import DownloadError
 SUBTITLE_LANGUAGES = ["ko", "ko-KR", "en", "en-US", "en-GB"]
 AUDIO_EXTENSIONS = {".m4a", ".aac", ".flac", ".mp3", ".opus", ".ogg", ".wav", ".webm"}
 DEFAULT_ANDROID_SDK = 36
+EXTRACTION_REPORT_NAME = "ytet-extraction-report.json"
 MUSICBRAINZ_API_ROOT = "https://musicbrainz.org/ws/2"
 MUSICBRAINZ_USER_AGENT = "YTET-Android/0.1 (https://github.com/hojin/youtube-audio-extractor-android)"
 MUSICBRAINZ_MIN_INTERVAL = 1.05
@@ -126,6 +127,7 @@ def extract(
             if enhance_metadata:
                 rename_metadata_matched_audio_files(workspace, info, logger, ydl)
             if include_playlist:
+                write_playlist_extraction_report(workspace, info, logger, ydl)
                 relocate_playlist_folder_for_metadata(workspace, info, logger)
             check_canceled(cancel_checker)
     except YtetCancellationError:
@@ -1080,6 +1082,74 @@ def rename_metadata_matched_audio_files(workspace, info, logger, ydl=None):
                 rename_metadata_matched_audio_file(workspace, entry, logger, ydl)
         return
     rename_metadata_matched_audio_file(workspace, info, logger, ydl)
+
+
+def write_playlist_extraction_report(workspace, info, logger, ydl=None):
+    if not isinstance(info, dict):
+        return
+    entries = info.get("entries")
+    if not isinstance(entries, list):
+        return
+    total = as_int(info.get("n_entries") or info.get("playlist_count")) or len(entries)
+    succeeded = []
+    failed = []
+    for position, entry in enumerate(entries, start=1):
+        if not isinstance(entry, dict):
+            failed.append({
+                "index": position,
+                "label": f"{position}번째 항목",
+                "reason": "비공개 또는 사용할 수 없는 항목",
+            })
+            continue
+        index = playlist_item_index(entry, position)
+        label = report_entry_label(entry, index)
+        audio_path = audio_path_for_info(workspace, entry, ydl)
+        if audio_path and os.path.exists(audio_path) and os.path.splitext(audio_path)[1].lower() in AUDIO_EXTENSIONS:
+            succeeded.append({
+                "index": index,
+                "label": label,
+                "file": os.path.basename(audio_path),
+            })
+        else:
+            failed.append({
+                "index": index,
+                "label": label,
+                "reason": first_text(entry.get("reason"), entry.get("availability"), "결과 파일 없음"),
+            })
+    missing_count = max(0, total - len(entries))
+    if missing_count:
+        failed.append({
+            "index": None,
+            "label": f"정보를 받지 못한 항목 {missing_count}개",
+            "reason": "비공개 또는 삭제되어 yt-dlp가 항목 정보를 반환하지 않음",
+        })
+    report = {
+        "kind": "playlist",
+        "total": total,
+        "succeeded": succeeded,
+        "failed": failed,
+    }
+    try:
+        with open(os.path.join(workspace, EXTRACTION_REPORT_NAME), "w", encoding="utf-8") as file:
+            json.dump(report, file, ensure_ascii=False)
+    except Exception as error:
+        logger.warning(f"플레이리스트 결과 리포트 작성 실패: {error}")
+
+
+def playlist_item_index(info, fallback):
+    return as_int(info.get("playlist_index") or info.get("playlist_autonumber") or info.get("track_number")) or fallback
+
+
+def report_entry_label(info, index=None):
+    title = first_text(metadata_title(info), info.get("fulltitle"), info.get("title"), info.get("webpage_url"), info.get("id"))
+    artist = metadata_artist(info)
+    if artist and title and comparable_text(artist) not in comparable_text(title):
+        return f"{artist} - {title}"
+    if title:
+        return title
+    if index:
+        return f"{index}번째 항목"
+    return "알 수 없는 항목"
 
 
 def rename_metadata_matched_audio_file(workspace, info, logger, ydl=None):

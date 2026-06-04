@@ -66,7 +66,7 @@ public final class ExtractionService extends Service {
         currentTask = executor.submit(() -> {
             try {
                 ExtractionResult result = engine.extract(this, request, this::publishProgress, this::isCancellationRequested);
-                publishDone(result.summary());
+                publishDone(result.summary(), result.hasPartialFailure());
             } catch (ExtractionCanceledException exception) {
                 publishCanceled();
             } catch (ExtractionException exception) {
@@ -124,16 +124,18 @@ public final class ExtractionService extends Service {
         return cancelRequested.get() || Thread.currentThread().isInterrupted();
     }
 
-    private void publishDone(String result) {
+    private void publishDone(String result, boolean partialFailure) {
+        String stage = partialFailure ? "부분 완료" : "완료";
+        String message = partialFailure ? "일부 항목 실패" : "저장 완료";
         detachForegroundNotification();
         NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-        manager.notify(NOTIFICATION_ID, notification(100, "완료", "저장 완료", true, false));
+        manager.notify(NOTIFICATION_ID, notification(100, stage, message, true, false));
 
         Intent intent = new Intent(ACTION_PROGRESS);
         intent.setPackage(getPackageName());
         intent.putExtra(EXTRA_PERCENT, 100);
-        intent.putExtra(EXTRA_STAGE, "완료");
-        intent.putExtra(EXTRA_MESSAGE, "저장 완료");
+        intent.putExtra(EXTRA_STAGE, stage);
+        intent.putExtra(EXTRA_MESSAGE, message);
         intent.putExtra(EXTRA_RESULT, result);
         intent.putExtra(EXTRA_DONE, true);
         sendBroadcast(intent);
