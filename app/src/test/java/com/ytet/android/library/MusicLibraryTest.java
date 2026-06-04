@@ -78,21 +78,28 @@ public final class MusicLibraryTest {
     @Test
     public void usesRepresentativeArtistForArtistStations() {
         DeviceAudioTrack first = track(1, "Alpha", "Artist A, Guest One", "Camera");
-        DeviceAudioTrack second = track(2, "Beta", "Artist A feat. Guest Two", "Downloads");
-        DeviceAudioTrack third = track(3, "Gamma", "Artist A w. Guest Three", "Camera");
-        DeviceAudioTrack fourth = track(4, "Delta", "Artist A w/ Guest Four", "Downloads");
-        DeviceAudioTrack fifth = track(5, "Epsilon", "Artist B", "Camera");
+        DeviceAudioTrack second = track(2, "Beta", "Artist A ft Guest Two", "Downloads");
+        DeviceAudioTrack third = track(3, "Gamma", "Artist A feat Guest Three", "Camera");
+        DeviceAudioTrack fourth = track(4, "Delta", "Artist A featuring Guest Four", "Downloads");
+        DeviceAudioTrack fifth = track(5, "Epsilon", "Artist A w. Guest Five", "Camera");
+        DeviceAudioTrack sixth = track(6, "Zeta", "Artist A w/ Guest Six", "Downloads");
+        DeviceAudioTrack seventh = track(7, "Eta", "Artist B", "Camera");
 
         MusicStation artist = station(MusicStation.MixType.ARTIST, "Artist A");
-        List<DeviceAudioTrack> artistTracks = MusicLibrary.tracksForStation(List.of(first, second, third, fourth, fifth), artist);
+        List<DeviceAudioTrack> artistTracks = MusicLibrary.tracksForStation(List.of(first, second, third, fourth, fifth, sixth, seventh), artist);
 
-        assertEquals(4, artistTracks.size());
+        assertEquals(6, artistTracks.size());
         assertEquals("Artist A", MusicLibrary.representativeArtist(first));
+        assertEquals("Artist A feat. Guest Two", second.artist());
+        assertEquals("Artist A feat. Guest Three", third.artist());
+        assertEquals("Artist A feat. Guest Four", fourth.artist());
+        assertEquals("Artist A with. Guest Five", fifth.artist());
+        assertEquals("Artist A with. Guest Six", sixth.artist());
         assertEquals("Artist A", MusicLibrary.representativeArtist(second));
-        assertEquals("Artist A with Guest Three", third.artist());
-        assertEquals("Artist A with Guest Four", fourth.artist());
         assertEquals("Artist A", MusicLibrary.representativeArtist(third));
         assertEquals("Artist A", MusicLibrary.representativeArtist(fourth));
+        assertEquals("Artist A", MusicLibrary.representativeArtist(fifth));
+        assertEquals("Artist A", MusicLibrary.representativeArtist(sixth));
     }
 
     private DeviceAudioTrack track(long id, String title, String folder) {

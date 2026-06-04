@@ -70,7 +70,7 @@ public final class MusicLibrary {
         if (clean.isEmpty()) {
             clean = "알 수 없는 아티스트";
         }
-        String[] parts = clean.split("(?i)\\s*(?:,|，|、|;|；|\\||\\s+/\\s+|\\s+feat\\.?\\s+|\\s+ft\\.?\\s+|\\s+featuring\\s+|\\s+with\\s+|\\s+[x×&]\\s+)\\s*");
+        String[] parts = clean.split("(?i)\\s*(?:,|，|、|;|；|\\||\\s+/\\s+|\\s+feat\\.?\\s+|\\s+with\\.?\\s+|\\s+[x×&]\\s+)\\s*");
         for (String part : parts) {
             if (part != null && !part.trim().isEmpty()) {
                 return part.trim();
@@ -84,8 +84,12 @@ public final class MusicLibrary {
         if (clean.isEmpty()) {
             return "";
         }
-        clean = clean.replaceAll("(?i)\\s+w\\.?\\s+", " with ");
-        clean = clean.replaceAll("(?i)\\s+w\\s*/\\s*", " with ");
+        clean = clean.replaceAll("\\s+w\\.?\\s+", " with. ");
+        clean = clean.replaceAll("\\s+w\\s*/\\s*", " with. ");
+        clean = clean.replaceAll("(?i)\\s+with\\.?\\s+", " with. ");
+        clean = clean.replaceAll("(?i)\\s+ft\\.?\\s+", " feat. ");
+        clean = clean.replaceAll("(?i)\\s+feat\\.?\\s+", " feat. ");
+        clean = clean.replaceAll("(?i)\\s+featuring\\s+", " feat. ");
         return clean.replaceAll("\\s+", " ").trim();
     }
 
