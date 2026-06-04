@@ -846,8 +846,8 @@ def normalize_artist_text(value):
     text = normalize_text(value)
     if not text:
         return None
-    text = re.sub(r"\s+w\.?\s+", " with. ", text)
-    text = re.sub(r"\s+w\s*/\s*", " with. ", text)
+    text = re.sub(r"(?i)\s+w\.?\s+", " with. ", text)
+    text = re.sub(r"(?i)\s+w\s*/\s*", " with. ", text)
     text = re.sub(r"(?i)\s+with\.?\s+", " with. ", text)
     text = re.sub(r"(?i)\s+ft\.?\s+", " feat. ", text)
     text = re.sub(r"(?i)\s+feat\.?\s+", " feat. ", text)

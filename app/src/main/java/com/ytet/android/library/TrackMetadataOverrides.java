@@ -24,6 +24,7 @@ public final class TrackMetadataOverrides {
         if (title.equals(track.title()) && artist.equals(track.artist()) && album.equals(track.album())) {
             return track;
         }
+        String representativeArtist = artist.equals(track.artist()) ? track.representativeArtist() : null;
         return new DeviceAudioTrack(
                 track.id(),
                 title,
@@ -37,7 +38,8 @@ public final class TrackMetadataOverrides {
                 track.trackNumber(),
                 track.dateAddedMs(),
                 track.durationMs(),
-                track.sizeBytes()
+                track.sizeBytes(),
+                representativeArtist
         );
     }
 

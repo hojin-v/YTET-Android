@@ -62,7 +62,7 @@ public final class MusicLibrary {
     }
 
     public static String representativeArtist(DeviceAudioTrack track) {
-        return representativeArtist(track == null ? null : track.artist());
+        return track == null ? representativeArtist((String) null) : track.representativeArtist();
     }
 
     public static String representativeArtist(String artist) {
@@ -84,8 +84,8 @@ public final class MusicLibrary {
         if (clean.isEmpty()) {
             return "";
         }
-        clean = clean.replaceAll("\\s+w\\.?\\s+", " with. ");
-        clean = clean.replaceAll("\\s+w\\s*/\\s*", " with. ");
+        clean = clean.replaceAll("(?i)\\s+w\\.?\\s+", " with. ");
+        clean = clean.replaceAll("(?i)\\s+w\\s*/\\s*", " with. ");
         clean = clean.replaceAll("(?i)\\s+with\\.?\\s+", " with. ");
         clean = clean.replaceAll("(?i)\\s+ft\\.?\\s+", " feat. ");
         clean = clean.replaceAll("(?i)\\s+feat\\.?\\s+", " feat. ");

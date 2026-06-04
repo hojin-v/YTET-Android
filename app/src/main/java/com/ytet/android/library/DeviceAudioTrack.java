@@ -4,6 +4,7 @@ public final class DeviceAudioTrack {
     private final long id;
     private final String title;
     private final String artist;
+    private final String representativeArtist;
     private final String album;
     private final String displayName;
     private final String folder;
@@ -59,9 +60,44 @@ public final class DeviceAudioTrack {
             long durationMs,
             long sizeBytes
     ) {
+        this(
+                id,
+                title,
+                artist,
+                album,
+                displayName,
+                folder,
+                contentUri,
+                albumArtUri,
+                albumId,
+                trackNumber,
+                dateAddedMs,
+                durationMs,
+                sizeBytes,
+                null
+        );
+    }
+
+    public DeviceAudioTrack(
+            long id,
+            String title,
+            String artist,
+            String album,
+            String displayName,
+            String folder,
+            String contentUri,
+            String albumArtUri,
+            long albumId,
+            int trackNumber,
+            long dateAddedMs,
+            long durationMs,
+            long sizeBytes,
+            String representativeArtist
+    ) {
         this.id = id;
         this.title = clean(title, "제목 없음");
         this.artist = MusicLibrary.normalizeArtistDisplay(clean(artist, "알 수 없는 아티스트"));
+        this.representativeArtist = representativeArtist(representativeArtist, this.artist);
         this.album = clean(album, "앨범 정보 없음");
         this.displayName = clean(displayName, this.title);
         this.folder = clean(folder, "알 수 없는 폴더");
@@ -84,6 +120,10 @@ public final class DeviceAudioTrack {
 
     public String artist() {
         return artist;
+    }
+
+    public String representativeArtist() {
+        return representativeArtist;
     }
 
     public String album() {
@@ -128,5 +168,20 @@ public final class DeviceAudioTrack {
 
     private static String clean(String value, String fallback) {
         return value == null || value.trim().isEmpty() ? fallback : value.trim();
+    }
+
+    private static String representativeArtist(String value, String displayArtist) {
+        String clean = MusicLibrary.normalizeArtistDisplay(value);
+        if (clean.isEmpty() || isCompilationArtist(clean)) {
+            clean = displayArtist;
+        }
+        return MusicLibrary.representativeArtist(clean);
+    }
+
+    private static boolean isCompilationArtist(String value) {
+        String clean = value == null ? "" : value.trim().toLowerCase();
+        return "various artists".equals(clean)
+                || "various".equals(clean)
+                || "여러 아티스트".equals(clean);
     }
 }

@@ -89,6 +89,7 @@ public final class MusicLibraryTest {
         List<DeviceAudioTrack> artistTracks = MusicLibrary.tracksForStation(List.of(first, second, third, fourth, fifth, sixth, seventh), artist);
 
         assertEquals(6, artistTracks.size());
+        assertEquals("Artist A, Guest One", first.artist());
         assertEquals("Artist A", MusicLibrary.representativeArtist(first));
         assertEquals("Artist A feat. Guest Two", second.artist());
         assertEquals("Artist A feat. Guest Three", third.artist());
@@ -102,11 +103,41 @@ public final class MusicLibraryTest {
         assertEquals("Artist A", MusicLibrary.representativeArtist(sixth));
     }
 
+    @Test
+    public void preservesDisplayArtistWhileUsingStoredRepresentativeArtist() {
+        DeviceAudioTrack collaborator = track(
+                8,
+                "Theta",
+                "Post Malone with. Fleet Foxes",
+                "Downloads",
+                "Post Malone"
+        );
+        DeviceAudioTrack compilationFallback = track(
+                9,
+                "Iota",
+                "Post Malone feat. Doja Cat",
+                "Downloads",
+                "Various Artists"
+        );
+
+        MusicStation artist = station(MusicStation.MixType.ARTIST, "Post Malone");
+
+        assertEquals("Post Malone with. Fleet Foxes", collaborator.artist());
+        assertEquals("Post Malone", collaborator.representativeArtist());
+        assertEquals("Post Malone feat. Doja Cat", compilationFallback.artist());
+        assertEquals("Post Malone", compilationFallback.representativeArtist());
+        assertEquals(2, MusicLibrary.tracksForStation(List.of(collaborator, compilationFallback), artist).size());
+    }
+
     private DeviceAudioTrack track(long id, String title, String folder) {
         return track(id, title, "Artist", folder);
     }
 
     private DeviceAudioTrack track(long id, String title, String artist, String folder) {
+        return track(id, title, artist, folder, null);
+    }
+
+    private DeviceAudioTrack track(long id, String title, String artist, String folder, String representativeArtist) {
         return new DeviceAudioTrack(
                 id,
                 title,
@@ -115,8 +146,13 @@ public final class MusicLibraryTest {
                 title + ".mp3",
                 folder,
                 "content://audio/" + id,
+                "",
+                0L,
+                0,
+                0L,
                 1000,
-                1024
+                1024,
+                representativeArtist
         );
     }
 

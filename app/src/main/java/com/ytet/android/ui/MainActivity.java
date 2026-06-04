@@ -2338,6 +2338,7 @@ public final class MainActivity extends Activity {
     private boolean trackMatchesQuery(DeviceAudioTrack track, String query) {
         return containsIgnoreCase(track.title(), query)
                 || containsIgnoreCase(track.artist(), query)
+                || containsIgnoreCase(track.representativeArtist(), query)
                 || containsIgnoreCase(track.album(), query)
                 || containsIgnoreCase(track.folder(), query)
                 || containsIgnoreCase(track.displayName(), query);

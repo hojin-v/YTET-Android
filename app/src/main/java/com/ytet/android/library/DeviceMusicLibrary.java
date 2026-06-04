@@ -97,6 +97,7 @@ public final class DeviceMusicLibrary {
         projection.add(MediaStore.Audio.Media._ID);
         projection.add(MediaStore.Audio.Media.TITLE);
         projection.add(MediaStore.Audio.Media.ARTIST);
+        projection.add(MediaStore.Audio.Media.ALBUM_ARTIST);
         projection.add(MediaStore.Audio.Media.ALBUM);
         projection.add(MediaStore.Audio.Media.ALBUM_ID);
         projection.add(MediaStore.Audio.Media.TRACK);
@@ -166,7 +167,8 @@ public final class DeviceMusicLibrary {
                 normalizedTrackNumber(getLong(cursor, MediaStore.Audio.Media.TRACK)),
                 secondsToMillis(getLong(cursor, MediaStore.Audio.Media.DATE_ADDED)),
                 getLong(cursor, MediaStore.Audio.Media.DURATION),
-                getLong(cursor, MediaStore.Audio.Media.SIZE)
+                getLong(cursor, MediaStore.Audio.Media.SIZE),
+                getString(cursor, MediaStore.Audio.Media.ALBUM_ARTIST)
         ));
     }
 
