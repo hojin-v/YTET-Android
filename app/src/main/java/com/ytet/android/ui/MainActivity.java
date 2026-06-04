@@ -33,6 +33,8 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.MediaStore;
 import android.provider.Settings;
 import android.text.Editable;
@@ -40,7 +42,9 @@ import android.text.InputType;
 import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputMethodManager;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
@@ -111,7 +115,9 @@ public final class MainActivity extends Activity {
     private static final String PREF_LIBRARY_SORT = "library_sort";
     private static final String LIBRARY_SOURCE_COLLECTION = "collection";
     private static final String LIBRARY_SOURCE_DEVICE = "device";
+    private static final long LIBRARY_SEARCH_DEBOUNCE_MS = 120L;
 
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService libraryExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService updateExecutor = Executors.newSingleThreadExecutor();
     private final DeviceMusicLibrary deviceMusicLibrary = new DeviceMusicLibrary();
@@ -203,6 +209,8 @@ public final class MainActivity extends Activity {
     private LibraryFilter libraryFilter = LibraryFilter.ALL;
     private LibrarySort librarySort = LibrarySort.NEWEST;
     private String librarySearchQuery = "";
+    private String pendingLibrarySearchQuery = "";
+    private final Runnable librarySearchCommit = () -> commitLibrarySearch(pendingLibrarySearchQuery);
     private boolean libraryGridView;
     private boolean librarySearchVisible;
     private ArtistDetailMode artistDetailMode = ArtistDetailMode.ALL;
@@ -221,6 +229,7 @@ public final class MainActivity extends Activity {
     private DeviceAudioTrack selectedTrack;
     private DeviceAudioTrack pendingDeleteTrack;
     private final Map<Long, View> libraryTrackItemViews = new HashMap<>();
+    private final Map<Long, String> librarySearchIndex = new HashMap<>();
 
     private String outputTreeUri;
     private int extractionPercent;
@@ -419,6 +428,7 @@ public final class MainActivity extends Activity {
             updateDialog = null;
         }
         unregisterBackNavigationCallback();
+        mainHandler.removeCallbacks(librarySearchCommit);
         libraryExecutor.shutdownNow();
         updateExecutor.shutdownNow();
         super.onDestroy();
@@ -648,6 +658,9 @@ public final class MainActivity extends Activity {
     private void renderCurrentTab() {
         if (contentScrollView == null) {
             return;
+        }
+        if (currentTab == Tab.LIBRARY) {
+            flushLibrarySearchInput();
         }
         contentScrollView.removeAllViews();
         View view;
@@ -1441,7 +1454,7 @@ public final class MainActivity extends Activity {
     }
 
     private View librarySearchInputRow() {
-        librarySearchInput = new EditText(this);
+        librarySearchInput = new LibrarySearchEditText(this);
         librarySearchInput.setSingleLine(true);
         librarySearchInput.setText(librarySearchQuery);
         librarySearchInput.setHint("검색");
@@ -1452,8 +1465,18 @@ public final class MainActivity extends Activity {
         librarySearchInput.setPadding(dp(2), 0, dp(2), 0);
         librarySearchInput.setBackgroundColor(Color.TRANSPARENT);
         librarySearchInput.setSelection(librarySearchInput.getText().length());
+        librarySearchInput.setOnFocusChangeListener((view, hasFocus) -> {
+            if (view instanceof EditText) {
+                ((EditText) view).setCursorVisible(hasFocus);
+            }
+        });
+        librarySearchInput.setOnClickListener(view -> librarySearchInput.setCursorVisible(true));
         librarySearchInput.setOnEditorActionListener((view, actionId, event) -> {
-            if (actionId == EditorInfo.IME_ACTION_SEARCH) {
+            boolean enterKey = event != null
+                    && event.getAction() == KeyEvent.ACTION_DOWN
+                    && event.getKeyCode() == KeyEvent.KEYCODE_ENTER;
+            if (actionId == EditorInfo.IME_ACTION_SEARCH || enterKey) {
+                finishLibrarySearchInput(view);
                 return true;
             }
             return false;
@@ -1465,7 +1488,7 @@ public final class MainActivity extends Activity {
 
             @Override
             public void onTextChanged(CharSequence text, int start, int before, int count) {
-                applyLibrarySearch(text == null ? "" : text.toString());
+                scheduleLibrarySearch(text == null ? "" : text.toString());
             }
 
             @Override
@@ -1556,7 +1579,13 @@ public final class MainActivity extends Activity {
         return LIBRARY_SOURCE_DEVICE.equals(librarySource);
     }
 
-    private void applyLibrarySearch(String query) {
+    private void scheduleLibrarySearch(String query) {
+        pendingLibrarySearchQuery = query == null ? "" : query;
+        mainHandler.removeCallbacks(librarySearchCommit);
+        mainHandler.postDelayed(librarySearchCommit, LIBRARY_SEARCH_DEBOUNCE_MS);
+    }
+
+    private void commitLibrarySearch(String query) {
         String nextQuery = query == null ? "" : query;
         if (nextQuery.equals(librarySearchQuery)) {
             return;
@@ -1567,9 +1596,37 @@ public final class MainActivity extends Activity {
         refreshLibraryResultsOnly();
     }
 
+    private void flushLibrarySearchInput() {
+        if (librarySearchInput != null) {
+            pendingLibrarySearchQuery = librarySearchInput.getText().toString();
+        }
+        mainHandler.removeCallbacks(librarySearchCommit);
+        String nextQuery = pendingLibrarySearchQuery == null ? "" : pendingLibrarySearchQuery;
+        if (!nextQuery.equals(librarySearchQuery)) {
+            librarySearchQuery = nextQuery;
+            librarySearchVisible = true;
+            selectedTrack = null;
+        }
+    }
+
+    private void finishLibrarySearchInput(View view) {
+        String query = view instanceof TextView ? ((TextView) view).getText().toString() : pendingLibrarySearchQuery;
+        pendingLibrarySearchQuery = query == null ? "" : query;
+        mainHandler.removeCallbacks(librarySearchCommit);
+        commitLibrarySearch(pendingLibrarySearchQuery);
+        hideKeyboard(view);
+        view.clearFocus();
+        if (view instanceof EditText) {
+            ((EditText) view).setCursorVisible(false);
+        }
+    }
+
     private void closeLibrarySearch() {
+        mainHandler.removeCallbacks(librarySearchCommit);
+        hideKeyboard(librarySearchInput);
         librarySearchVisible = false;
         librarySearchQuery = "";
+        pendingLibrarySearchQuery = "";
         librarySearchInput = null;
         selectedTrack = null;
         renderCurrentTab();
@@ -1590,7 +1647,29 @@ public final class MainActivity extends Activity {
             return;
         }
         librarySearchInput.requestFocus();
+        librarySearchInput.setCursorVisible(true);
         librarySearchInput.setSelection(librarySearchInput.getText().length());
+        showKeyboard(librarySearchInput);
+    }
+
+    private void hideKeyboard(View view) {
+        if (view == null) {
+            return;
+        }
+        InputMethodManager inputMethodManager = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (inputMethodManager != null) {
+            inputMethodManager.hideSoftInputFromWindow(view.getWindowToken(), 0);
+        }
+    }
+
+    private void showKeyboard(View view) {
+        if (view == null) {
+            return;
+        }
+        InputMethodManager inputMethodManager = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+        if (inputMethodManager != null) {
+            inputMethodManager.showSoftInput(view, InputMethodManager.SHOW_IMPLICIT);
+        }
     }
 
     private boolean shouldShowLibrarySearchInput() {
@@ -2336,16 +2415,37 @@ public final class MainActivity extends Activity {
     }
 
     private boolean trackMatchesQuery(DeviceAudioTrack track, String query) {
-        return containsIgnoreCase(track.title(), query)
-                || containsIgnoreCase(track.artist(), query)
-                || containsIgnoreCase(track.representativeArtist(), query)
-                || containsIgnoreCase(track.album(), query)
-                || containsIgnoreCase(track.folder(), query)
-                || containsIgnoreCase(track.displayName(), query);
+        return searchIndex(track).contains(query);
     }
 
-    private boolean containsIgnoreCase(String value, String query) {
-        return value != null && value.toLowerCase(Locale.ROOT).contains(query);
+    private String searchIndex(DeviceAudioTrack track) {
+        if (track == null) {
+            return "";
+        }
+        String cached = librarySearchIndex.get(track.id());
+        if (cached != null) {
+            return cached;
+        }
+        StringBuilder builder = new StringBuilder();
+        appendSearchText(builder, track.title());
+        appendSearchText(builder, track.artist());
+        appendSearchText(builder, track.representativeArtist());
+        appendSearchText(builder, track.album());
+        appendSearchText(builder, track.folder());
+        appendSearchText(builder, track.displayName());
+        String value = builder.toString().toLowerCase(Locale.ROOT);
+        librarySearchIndex.put(track.id(), value);
+        return value;
+    }
+
+    private void appendSearchText(StringBuilder builder, String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return;
+        }
+        if (builder.length() > 0) {
+            builder.append('\n');
+        }
+        builder.append(value);
     }
 
     private void addTrackCardGrid(LinearLayout root, List<DeviceAudioTrack> visibleTracks, int limit) {
@@ -2602,6 +2702,7 @@ public final class MainActivity extends Activity {
         libraryTracks = replaceEditedTrack(libraryTracks, edited);
         homeTracks = replaceEditedTrack(homeTracks, edited);
         activeQueuePreview = replaceEditedTrack(activeQueuePreview, edited);
+        librarySearchIndex.remove(edited.id());
         if (playbackTrackId == edited.id()) {
             playbackTitle = edited.title();
             playbackArtist = edited.artist();
@@ -3918,6 +4019,7 @@ public final class MainActivity extends Activity {
                 List<DeviceAudioTrack> tracks = deviceMusicLibrary.loadTracks(this, libraryScanRelativePaths());
                 runOnUiThread(() -> {
                     libraryTracks = tracks;
+                    librarySearchIndex.clear();
                     libraryLoaded = true;
                     libraryLoading = false;
                     libraryStatus = tracks.isEmpty()
@@ -3930,6 +4032,7 @@ public final class MainActivity extends Activity {
                     libraryLoaded = true;
                     libraryLoading = false;
                     libraryTracks = new ArrayList<>();
+                    librarySearchIndex.clear();
                     selectedTrack = null;
                     libraryStatus = "스캔 실패: " + exception.getMessage();
                     renderLibraryDependentTabs();
@@ -4272,6 +4375,9 @@ public final class MainActivity extends Activity {
     private void saveCurrentTabInputs() {
         if (currentTab == Tab.EXTRACTOR) {
             saveExtractorInputs();
+        } else if (currentTab == Tab.LIBRARY) {
+            flushLibrarySearchInput();
+            hideKeyboard(librarySearchInput);
         }
     }
 
@@ -5205,6 +5311,22 @@ public final class MainActivity extends Activity {
         void onSeekCommitted(long positionMs);
 
         void onSeekCanceled();
+    }
+
+    private final class LibrarySearchEditText extends EditText {
+        private LibrarySearchEditText(Context context) {
+            super(context);
+        }
+
+        @Override
+        public boolean onKeyPreIme(int keyCode, KeyEvent event) {
+            if (keyCode == KeyEvent.KEYCODE_BACK
+                    && event != null
+                    && event.getAction() == KeyEvent.ACTION_UP) {
+                finishLibrarySearchInput(this);
+            }
+            return super.onKeyPreIme(keyCode, event);
+        }
     }
 
     private static final class TabItem {
