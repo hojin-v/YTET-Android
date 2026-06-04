@@ -37,5 +37,10 @@
             android:name=".playback.PlaybackService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
+        <provider
+            android:name=".update.UpdateApkProvider"
+            android:authorities="com.ytet.android.updateapk"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 </manifest>

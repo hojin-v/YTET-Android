@@ -4,18 +4,17 @@ import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.Dialog;
-import android.app.DownloadManager;
 import android.app.PendingIntent;
 import android.app.RecoverableSecurityException;
 import android.content.ActivityNotFoundException;
 import android.content.BroadcastReceiver;
+import android.content.ClipData;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.IntentSender;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
-import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
@@ -46,7 +45,9 @@ import android.view.KeyEvent;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.view.MotionEvent;
+import android.view.VelocityTracker;
 import android.view.View;
+import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowInsets;
@@ -87,6 +88,7 @@ import com.ytet.android.playback.PlaybackStats;
 import com.ytet.android.stream.MusicStation;
 import com.ytet.android.stream.StationCatalog;
 import com.ytet.android.update.UpdateChecker;
+import com.ytet.android.update.UpdateApkProvider;
 import com.ytet.android.update.UpdateInfo;
 
 import java.util.ArrayList;
@@ -96,7 +98,12 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutorService;
 
@@ -106,10 +113,11 @@ public final class MainActivity extends Activity {
     private static final int REQUEST_DELETE_AUDIO = 1209;
     private static final int REQUEST_AUDIO_LIBRARY = 1210;
     private static final int REQUEST_WRITE_LIBRARY = 1211;
-    private static final long NO_DOWNLOAD_ID = -1L;
+    private static final String UPDATE_APK_MIME = "application/vnd.android.package-archive";
     private static final String PREFS = "ytet_android";
     private static final String PREF_OUTPUT_TREE = "output_tree";
     private static final String PREF_UPDATE_DOWNLOAD_ID = "update_download_id";
+    private static final String PREF_UPDATE_APK_PATH = "update_apk_path";
     private static final String PREF_UPDATE_TAG = "update_tag";
     private static final String PREF_LIBRARY_SOURCE = "library_source";
     private static final String PREF_LIBRARY_SORT = "library_sort";
@@ -192,6 +200,7 @@ public final class MainActivity extends Activity {
     private boolean sleepTimerPaused;
     private boolean sleepTimerControlsVisible;
     private boolean suppressPlayerDragDismiss;
+    private boolean playerDragDismissActive;
     private String extractorUrl = "";
     private MediaType extractorMediaType = MediaType.AUDIO;
     private String extractorOption = AudioFormat.M4A.value();
@@ -240,13 +249,12 @@ public final class MainActivity extends Activity {
     private boolean extractionCancelRequested;
     private boolean receiverRegistered;
     private boolean playbackReceiverRegistered;
-    private boolean updateReceiverRegistered;
     private boolean updateChecking;
     private boolean updateChecked;
     private boolean updateDownloading;
     private String updateStatus = "정식 릴리즈 업데이트만 확인합니다.";
     private UpdateInfo availableUpdate;
-    private long updateDownloadId = NO_DOWNLOAD_ID;
+    private String updateApkPath = "";
     private boolean extractionPendingNotificationPermission;
 
     private final BroadcastReceiver progressReceiver = new BroadcastReceiver() {
@@ -343,26 +351,13 @@ public final class MainActivity extends Activity {
         }
     };
 
-    private final BroadcastReceiver updateDownloadReceiver = new BroadcastReceiver() {
-        @Override
-        public void onReceive(Context context, Intent intent) {
-            if (!DownloadManager.ACTION_DOWNLOAD_COMPLETE.equals(intent.getAction())) {
-                return;
-            }
-            long downloadId = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, NO_DOWNLOAD_ID);
-            if (downloadId == updateDownloadId && downloadId != NO_DOWNLOAD_ID) {
-                handleUpdateDownloadComplete(downloadId);
-            }
-        }
-    };
-
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         outputTreeUri = getPreferences().getString(PREF_OUTPUT_TREE, null);
         librarySource = getPreferences().getString(PREF_LIBRARY_SOURCE, LIBRARY_SOURCE_COLLECTION);
         librarySort = LibrarySort.fromKey(getPreferences().getString(PREF_LIBRARY_SORT, LibrarySort.NEWEST.key));
-        updateDownloadId = getPreferences().getLong(PREF_UPDATE_DOWNLOAD_ID, NO_DOWNLOAD_ID);
+        updateApkPath = getPreferences().getString(PREF_UPDATE_APK_PATH, "");
         ensureDefaultMediaFolders();
         clearInstalledPendingUpdateIfNeeded();
         setContentView(buildContent());
@@ -393,15 +388,6 @@ public final class MainActivity extends Activity {
             playbackReceiverRegistered = true;
             startService(PlaybackService.commandIntent(this, PlaybackService.ACTION_REQUEST_STATE));
         }
-        if (!updateReceiverRegistered) {
-            IntentFilter filter = new IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                registerReceiver(updateDownloadReceiver, filter, Context.RECEIVER_EXPORTED);
-            } else {
-                registerReceiver(updateDownloadReceiver, filter);
-            }
-            updateReceiverRegistered = true;
-        }
         refreshPendingUpdateDownloadState();
     }
 
@@ -410,10 +396,6 @@ public final class MainActivity extends Activity {
         if (playbackReceiverRegistered) {
             unregisterReceiver(playbackReceiver);
             playbackReceiverRegistered = false;
-        }
-        if (updateReceiverRegistered) {
-            unregisterReceiver(updateDownloadReceiver);
-            updateReceiverRegistered = false;
         }
         if (receiverRegistered) {
             unregisterReceiver(progressReceiver);
@@ -874,7 +856,7 @@ public final class MainActivity extends Activity {
             return;
         }
         if (isDownloadedUpdateReady()) {
-            installDownloadedUpdate(updateDownloadId);
+            installDownloadedUpdate();
             return;
         }
         if (availableUpdate != null) {
@@ -944,7 +926,7 @@ public final class MainActivity extends Activity {
         Button install = detailActionButton("설치");
         install.setOnClickListener(view -> {
             dialog.dismiss();
-            installDownloadedUpdate(updateDownloadId);
+            installDownloadedUpdate();
         });
         actions.addView(close, fixedButtonParams(76, 38, 8));
         actions.addView(install, fixedButtonParams(76, 38, 0));
@@ -1016,50 +998,64 @@ public final class MainActivity extends Activity {
             return;
         }
         dismissUpdateDialog();
+        updateDownloading = true;
+        updateStatus = update.tagName() + " 업데이트 APK를 다운로드하는 중입니다.";
+        renderUpdateState();
+        File targetFile;
         try {
-            DownloadManager manager = downloadManager();
-            DownloadManager.Request request = new DownloadManager.Request(Uri.parse(update.apkUrl()));
-            request.setTitle("YTET " + update.tagName());
-            request.setDescription("정식 업데이트 APK 다운로드");
-            request.setMimeType("application/vnd.android.package-archive");
-            request.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
-            request.setDestinationInExternalFilesDir(
-                    this,
-                    Environment.DIRECTORY_DOWNLOADS,
-                    "updates/" + update.tagName() + "-" + System.currentTimeMillis() + ".apk"
-            );
-            updateDownloadId = manager.enqueue(request);
-            updateDownloading = true;
-            updateStatus = update.tagName() + " 업데이트 APK를 다운로드하는 중입니다.";
-            getPreferences().edit()
-                    .putLong(PREF_UPDATE_DOWNLOAD_ID, updateDownloadId)
-                    .putString(PREF_UPDATE_TAG, update.tagName())
-                    .apply();
-            renderUpdateState();
+            targetFile = new File(updateDownloadDir(), updateApkFileName(update));
         } catch (Exception exception) {
             updateDownloading = false;
             updateStatus = "업데이트 다운로드를 시작할 수 없습니다: " + safeMessage(exception);
             renderUpdateState();
-        }
-    }
-
-    private void handleUpdateDownloadComplete(long downloadId) {
-        int status = downloadStatus(downloadId);
-        updateDownloading = false;
-        if (status == DownloadManager.STATUS_SUCCESSFUL) {
-            updateStatus = "업데이트 다운로드가 완료되었습니다. 설치 화면을 여는 중입니다.";
-            renderUpdateState();
-            installDownloadedUpdate(downloadId);
             return;
         }
-        clearPendingUpdateDownload();
-        updateStatus = "업데이트 다운로드에 실패했습니다.";
-        renderUpdateState();
+
+        updateExecutor.execute(() -> {
+            File temporaryFile = new File(targetFile.getParentFile(), targetFile.getName() + ".part");
+            try {
+                downloadUpdateApk(update.apkUrl(), temporaryFile);
+                if (targetFile.exists() && !targetFile.delete()) {
+                    throw new IOException("이전 업데이트 파일을 교체할 수 없습니다.");
+                }
+                if (!temporaryFile.renameTo(targetFile)) {
+                    throw new IOException("업데이트 파일을 완료할 수 없습니다.");
+                }
+                deleteOtherUpdateApks(targetFile);
+                runOnUiThread(() -> {
+                    updateDownloading = false;
+                    updateApkPath = targetFile.getAbsolutePath();
+                    updateStatus = update.tagName() + " APK 다운로드가 완료되었습니다. 설치할 수 있습니다.";
+                    getPreferences().edit()
+                            .putString(PREF_UPDATE_APK_PATH, updateApkPath)
+                            .putString(PREF_UPDATE_TAG, update.tagName())
+                            .remove(PREF_UPDATE_DOWNLOAD_ID)
+                            .apply();
+                    renderUpdateState();
+                    installDownloadedUpdate();
+                });
+            } catch (Exception exception) {
+                if (temporaryFile.exists()) {
+                    temporaryFile.delete();
+                }
+                if (targetFile.exists()) {
+                    targetFile.delete();
+                }
+                runOnUiThread(() -> {
+                    updateDownloading = false;
+                    clearPendingUpdateDownload();
+                    updateStatus = "업데이트 다운로드에 실패했습니다: " + safeMessage(exception);
+                    renderUpdateState();
+                });
+            }
+        });
     }
 
-    private void installDownloadedUpdate(long downloadId) {
-        if (downloadId == NO_DOWNLOAD_ID || downloadStatus(downloadId) != DownloadManager.STATUS_SUCCESSFUL) {
+    private void installDownloadedUpdate() {
+        File apkFile = updateApkFile();
+        if (apkFile == null || !apkFile.isFile()) {
             toast("설치할 업데이트 APK가 아직 준비되지 않았습니다.");
+            clearPendingUpdateDownload();
             return;
         }
         dismissUpdateDialog();
@@ -1069,23 +1065,30 @@ public final class MainActivity extends Activity {
             openInstallPermissionSettings();
             return;
         }
-        Uri apkUri = downloadManager().getUriForDownloadedFile(downloadId);
-        if (apkUri == null) {
-            updateStatus = "다운로드한 APK를 열 수 없습니다. 다시 다운로드하세요.";
-            renderUpdateState();
-            return;
-        }
+        Uri apkUri = UpdateApkProvider.uriFor(this, apkFile);
 
-        Intent install = new Intent(Intent.ACTION_VIEW);
-        install.setDataAndType(apkUri, "application/vnd.android.package-archive");
+        Intent install = new Intent(Intent.ACTION_INSTALL_PACKAGE);
+        install.setData(apkUri);
+        install.setClipData(ClipData.newRawUri("YTET update", apkUri));
         install.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        install.putExtra(Intent.EXTRA_RETURN_RESULT, false);
         try {
             startActivity(install);
             updateStatus = "Android 설치 화면에서 업데이트를 승인하세요.";
             renderUpdateState();
         } catch (ActivityNotFoundException exception) {
-            updateStatus = "APK 설치 화면을 열 수 없습니다.";
-            renderUpdateState();
+            Intent fallback = new Intent(Intent.ACTION_VIEW);
+            fallback.setDataAndType(apkUri, UPDATE_APK_MIME);
+            fallback.setClipData(ClipData.newRawUri("YTET update", apkUri));
+            fallback.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            try {
+                startActivity(fallback);
+                updateStatus = "Android 설치 화면에서 업데이트를 승인하세요.";
+                renderUpdateState();
+            } catch (ActivityNotFoundException fallbackException) {
+                updateStatus = "APK 설치 화면을 열 수 없습니다.";
+                renderUpdateState();
+            }
         }
     }
 
@@ -1103,31 +1106,27 @@ public final class MainActivity extends Activity {
 
     private void refreshPendingUpdateDownloadState() {
         clearInstalledPendingUpdateIfNeeded();
-        if (updateDownloadId == NO_DOWNLOAD_ID) {
+        File apkFile = updateApkFile();
+        if (apkFile == null) {
             return;
         }
-        int status = downloadStatus(updateDownloadId);
-        if (status == DownloadManager.STATUS_SUCCESSFUL) {
+        if (apkFile.isFile()) {
             updateDownloading = false;
             String tag = getPreferences().getString(PREF_UPDATE_TAG, "다운로드한 업데이트");
             updateStatus = tag + " APK 다운로드가 완료되었습니다. 설치할 수 있습니다.";
             renderUpdateState();
             showDownloadedUpdateDialog(tag);
-        } else if (status == DownloadManager.STATUS_FAILED) {
-            clearPendingUpdateDownload();
-            updateDownloading = false;
-            updateStatus = "이전 업데이트 다운로드가 실패했습니다.";
-            renderUpdateState();
-        } else if (status == DownloadManager.STATUS_PENDING || status == DownloadManager.STATUS_RUNNING) {
-            updateDownloading = true;
-            updateStatus = "업데이트 APK를 다운로드하는 중입니다.";
-            renderUpdateState();
+            return;
         }
+        clearPendingUpdateDownload();
+        updateDownloading = false;
+        updateStatus = "이전 업데이트 파일을 찾을 수 없습니다.";
+        renderUpdateState();
     }
 
     private boolean isDownloadedUpdateReady() {
-        return updateDownloadId != NO_DOWNLOAD_ID
-                && downloadStatus(updateDownloadId) == DownloadManager.STATUS_SUCCESSFUL;
+        File apkFile = updateApkFile();
+        return apkFile != null && apkFile.isFile();
     }
 
     private void clearInstalledPendingUpdateIfNeeded() {
@@ -1138,25 +1137,14 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private int downloadStatus(long downloadId) {
-        if (downloadId == NO_DOWNLOAD_ID) {
-            return -1;
-        }
-        DownloadManager.Query query = new DownloadManager.Query().setFilterById(downloadId);
-        try (Cursor cursor = downloadManager().query(query)) {
-            if (cursor == null || !cursor.moveToFirst()) {
-                return -1;
-            }
-            int column = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS);
-            return column < 0 ? -1 : cursor.getInt(column);
-        } catch (Exception exception) {
-            return -1;
-        }
-    }
-
     private void clearPendingUpdateDownload() {
-        updateDownloadId = NO_DOWNLOAD_ID;
+        File apkFile = updateApkFile();
+        if (apkFile != null && apkFile.isFile()) {
+            apkFile.delete();
+        }
+        updateApkPath = "";
         getPreferences().edit()
+                .remove(PREF_UPDATE_APK_PATH)
                 .remove(PREF_UPDATE_DOWNLOAD_ID)
                 .remove(PREF_UPDATE_TAG)
                 .apply();
@@ -1172,8 +1160,85 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private DownloadManager downloadManager() {
-        return (DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE);
+    private File updateApkFile() {
+        if (updateApkPath == null || updateApkPath.trim().isEmpty()) {
+            return null;
+        }
+        return new File(updateApkPath);
+    }
+
+    private File updateDownloadDir() throws IOException {
+        File root = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+        if (root == null) {
+            root = getFilesDir();
+        }
+        File directory = new File(root, "updates");
+        if (!directory.isDirectory() && !directory.mkdirs()) {
+            throw new IOException("업데이트 폴더를 만들 수 없습니다.");
+        }
+        return directory;
+    }
+
+    private String updateApkFileName(UpdateInfo update) {
+        String tag = sanitizeFileSegment(update.tagName().isEmpty() ? "update" : update.tagName());
+        String assetName = sanitizeFileSegment(update.apkName().isEmpty() ? "YTET.apk" : update.apkName());
+        if (!assetName.toLowerCase(Locale.US).endsWith(".apk")) {
+            assetName = assetName + ".apk";
+        }
+        return tag + "-" + assetName;
+    }
+
+    private String sanitizeFileSegment(String value) {
+        String clean = value == null ? "" : value.trim().replaceAll("[^A-Za-z0-9._-]+", "_");
+        clean = clean.replaceAll("_+", "_");
+        return clean.isEmpty() ? "YTET.apk" : clean;
+    }
+
+    private void downloadUpdateApk(String apkUrl, File targetFile) throws IOException {
+        HttpURLConnection connection = (HttpURLConnection) new URL(apkUrl).openConnection();
+        connection.setConnectTimeout(12000);
+        connection.setReadTimeout(30000);
+        connection.setRequestProperty("User-Agent", "YTET-Android-Updater");
+        try {
+            int status = connection.getResponseCode();
+            if (status < 200 || status >= 300) {
+                throw new IOException("서버 응답 " + status);
+            }
+            File parent = targetFile.getParentFile();
+            if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
+                throw new IOException("업데이트 폴더를 만들 수 없습니다.");
+            }
+            try (InputStream input = connection.getInputStream();
+                 FileOutputStream output = new FileOutputStream(targetFile, false)) {
+                byte[] buffer = new byte[64 * 1024];
+                int read;
+                while ((read = input.read(buffer)) != -1) {
+                    output.write(buffer, 0, read);
+                }
+            }
+            if (targetFile.length() <= 0L) {
+                throw new IOException("빈 업데이트 파일입니다.");
+            }
+        } finally {
+            connection.disconnect();
+        }
+    }
+
+    private void deleteOtherUpdateApks(File keepFile) {
+        File directory = keepFile == null ? null : keepFile.getParentFile();
+        File[] files = directory == null ? null : directory.listFiles();
+        if (files == null) {
+            return;
+        }
+        for (File file : files) {
+            if (keepFile != null && keepFile.equals(file)) {
+                continue;
+            }
+            String name = file.getName().toLowerCase(Locale.US);
+            if (name.endsWith(".apk") || name.endsWith(".part")) {
+                file.delete();
+            }
+        }
     }
 
     private String currentAppVersionName() {
@@ -3180,7 +3245,13 @@ public final class MainActivity extends Activity {
         }
         window.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS
                 | WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION);
-        window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+        window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS
+                | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            WindowManager.LayoutParams attributes = window.getAttributes();
+            attributes.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
+            window.setAttributes(attributes);
+        }
         window.setBackgroundDrawable(new ColorDrawable(statusColor));
         window.setStatusBarColor(statusColor);
         window.setNavigationBarColor(navigationColor);
@@ -3200,11 +3271,11 @@ public final class MainActivity extends Activity {
         window.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS
                 | WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION);
         window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
-        window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
-        window.setStatusBarColor(Color.TRANSPARENT);
+        window.setBackgroundDrawable(new ColorDrawable(statusColor));
+        window.setStatusBarColor(statusColor);
         window.setNavigationBarColor(navigationColor);
         View decor = window.getDecorView();
-        decor.setBackgroundColor(Color.TRANSPARENT);
+        decor.setBackgroundColor(statusColor);
         int flags = decor.getSystemUiVisibility()
                 | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
                 | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
@@ -3230,7 +3301,7 @@ public final class MainActivity extends Activity {
 
     private int expandedPlayerStatusInset() {
         return expandedPlayerDrawsBehindSystemBars()
-                ? systemBarDimension("status_bar_height")
+                ? Math.max(systemBarDimension("status_bar_height"), dp(24))
                 : 0;
     }
 
@@ -3397,15 +3468,21 @@ public final class MainActivity extends Activity {
             playerDialog = new Dialog(this);
             playerDialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
         }
+        applyExpandedPlayerWindow(playerDialog.getWindow());
         playerDialog.setContentView(buildExpandedPlayerContent());
         playerDialog.show();
         applyExpandedPlayerWindow(playerDialog.getWindow());
     }
 
     private void updateExpandedPlayer() {
-        if (playerDialog == null || !playerDialog.isShowing() || suppressPlayerDragDismiss || playbackSeeking) {
+        if (playerDialog == null
+                || !playerDialog.isShowing()
+                || suppressPlayerDragDismiss
+                || playerDragDismissActive
+                || playbackSeeking) {
             return;
         }
+        applyExpandedPlayerWindow(playerDialog.getWindow());
         playerDialog.setContentView(buildExpandedPlayerContent());
         applyExpandedPlayerWindow(playerDialog.getWindow());
     }
@@ -3424,6 +3501,7 @@ public final class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT
         ));
         updatePlaybackThemeColor(false);
+        frame.setBackgroundColor(playerStatusBarColor());
         root.setBackground(expandedPlayerBackground(false));
         root.setPlayerSurfaceStyle(true);
         frame.addView(root);
@@ -3433,7 +3511,6 @@ public final class MainActivity extends Activity {
         View statusScrim = new View(this);
         statusScrim.setBackgroundColor(playerStatusScrimColor());
         statusScrim.setClickable(false);
-        statusScrim.setElevation(dp(2));
         frame.addView(statusScrim, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 statusInset
@@ -5106,12 +5183,16 @@ public final class MainActivity extends Activity {
     private final class DragDismissLayout extends LinearLayout {
         private float startX;
         private float startY;
+        private final int touchSlop;
+        private VelocityTracker velocityTracker;
         private boolean dragCanStart;
         private boolean draggingDown;
         private boolean playerSurfaceStyle;
 
         DragDismissLayout(Context context) {
             super(context);
+            touchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
+            setClickable(true);
         }
 
         void setPlayerSurfaceStyle(boolean enabled) {
@@ -5119,66 +5200,158 @@ public final class MainActivity extends Activity {
         }
 
         @Override
-        public boolean dispatchTouchEvent(MotionEvent event) {
+        public boolean onInterceptTouchEvent(MotionEvent event) {
             int action = event.getActionMasked();
             if (action == MotionEvent.ACTION_DOWN) {
-                startX = event.getRawX();
-                startY = event.getRawY();
-                dragCanStart = canStartDragFrom(event);
-                draggingDown = false;
-                animate().cancel();
-                setAlpha(1f);
-                setTranslationY(0f);
-                setDragRounded(false);
-            } else if (action == MotionEvent.ACTION_MOVE && dragCanStart && !suppressPlayerDragDismiss) {
-                float dx = event.getRawX() - startX;
-                float dy = event.getRawY() - startY;
-                if (draggingDown || (dy > dp(8) && dy > Math.abs(dx) * 0.85f)) {
-                    draggingDown = true;
-                    float translation = Math.max(0f, Math.min(getHeight(), dy));
-                    setTranslationY(translation);
-                    setAlpha(1f - Math.min(0.18f, translation / Math.max(1f, getHeight()) * 0.18f));
-                    setDragRounded(true);
+                beginDragTracking(event);
+                super.onInterceptTouchEvent(event);
+                return false;
+            }
+            if (action == MotionEvent.ACTION_MOVE) {
+                trackDragMovement(event);
+                if (!draggingDown && shouldStartDrag(event)) {
+                    startDragging(event);
+                    return true;
+                }
+                return draggingDown;
+            }
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                if (!draggingDown) {
+                    releaseDragTracker();
+                }
+                return false;
+            }
+            return false;
+        }
+
+        @Override
+        public boolean onTouchEvent(MotionEvent event) {
+            int action = event.getActionMasked();
+            if (action == MotionEvent.ACTION_DOWN) {
+                beginDragTracking(event);
+                return true;
+            }
+            trackDragMovement(event);
+            if (action == MotionEvent.ACTION_MOVE) {
+                if (!draggingDown && shouldStartDrag(event)) {
+                    startDragging(event);
+                }
+                if (draggingDown) {
+                    updateDragPosition(event);
                     return true;
                 }
             } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
-                if (draggingDown) {
-                    boolean shouldDismiss = action == MotionEvent.ACTION_UP && getTranslationY() >= dp(56);
-                    dragCanStart = false;
-                    draggingDown = false;
-                    if (shouldDismiss) {
-                        animateDismissTopPlayerSurface();
-                    } else {
-                        animate()
-                                .translationY(0f)
-                                .alpha(1f)
-                                .setDuration(150L)
-                                .withEndAction(() -> setDragRounded(false))
-                                .start();
-                    }
-                    return true;
-                }
-                if (getTranslationY() > 0f) {
-                    animate()
-                            .translationY(0f)
-                            .alpha(1f)
-                            .setDuration(150L)
-                            .withEndAction(() -> setDragRounded(false))
-                            .start();
-                }
+                finishDragging(event, action == MotionEvent.ACTION_CANCEL);
+                return true;
             }
-            return super.dispatchTouchEvent(event);
+            return draggingDown || super.onTouchEvent(event);
+        }
+
+        private void beginDragTracking(MotionEvent event) {
+            releaseDragTracker();
+            velocityTracker = VelocityTracker.obtain();
+            velocityTracker.addMovement(event);
+            startX = event.getRawX();
+            startY = event.getRawY();
+            dragCanStart = canStartDragFrom(event);
+            draggingDown = false;
+            playerDragDismissActive = false;
+            animate().cancel();
+            setAlpha(1f);
+            setTranslationY(0f);
+            setDragRounded(false);
+        }
+
+        private void trackDragMovement(MotionEvent event) {
+            if (velocityTracker != null) {
+                velocityTracker.addMovement(event);
+            }
+        }
+
+        private boolean shouldStartDrag(MotionEvent event) {
+            if (!dragCanStart || suppressPlayerDragDismiss) {
+                return false;
+            }
+            float dx = event.getRawX() - startX;
+            float dy = event.getRawY() - startY;
+            float threshold = Math.max(touchSlop, dp(8));
+            return dy > threshold && dy > Math.abs(dx) * 0.85f;
+        }
+
+        private void startDragging(MotionEvent event) {
+            draggingDown = true;
+            playerDragDismissActive = true;
+            suppressPlayerDragDismiss = true;
+            if (getParent() != null) {
+                getParent().requestDisallowInterceptTouchEvent(true);
+            }
+            setDragRounded(true);
+            updateDragPosition(event);
+        }
+
+        private void updateDragPosition(MotionEvent event) {
+            float dy = event.getRawY() - startY;
+            float translation = Math.max(0f, Math.min(getHeight(), dy));
+            setTranslationY(translation);
+            setAlpha(1f - Math.min(0.18f, translation / Math.max(1f, getHeight()) * 0.18f));
+            setDragRounded(translation > 0f);
+        }
+
+        private void finishDragging(MotionEvent event, boolean canceled) {
+            if (!draggingDown) {
+                releaseDragTracker();
+                return;
+            }
+            float velocityY = 0f;
+            if (velocityTracker != null) {
+                velocityTracker.addMovement(event);
+                velocityTracker.computeCurrentVelocity(1000);
+                velocityY = velocityTracker.getYVelocity();
+            }
+            float translation = Math.max(0f, getTranslationY());
+            boolean shouldDismiss = !canceled
+                    && (translation >= dp(72) || (velocityY >= 1100f && translation >= dp(24)));
+            dragCanStart = false;
+            draggingDown = false;
+            releaseDragTracker();
+            if (shouldDismiss) {
+                animateDismissTopPlayerSurface();
+            } else {
+                snapBackTopPlayerSurface();
+            }
+        }
+
+        private void snapBackTopPlayerSurface() {
+            animate()
+                    .translationY(0f)
+                    .alpha(1f)
+                    .setDuration(190L)
+                    .withEndAction(() -> {
+                        playerDragDismissActive = false;
+                        suppressPlayerDragDismiss = false;
+                        setDragRounded(false);
+                    })
+                    .start();
+        }
+
+        private void releaseDragTracker() {
+            if (velocityTracker != null) {
+                velocityTracker.recycle();
+                velocityTracker = null;
+            }
         }
 
         private void animateDismissTopPlayerSurface() {
             animate()
                     .translationY(Math.max(getHeight(), dp(320)))
                     .alpha(0.82f)
-                    .setDuration(190L)
+                    .setDuration(220L)
                     .withEndAction(() -> {
                         setTranslationY(0f);
                         setAlpha(1f);
                         setDragRounded(false);
+                        playerDragDismissActive = false;
+                        suppressPlayerDragDismiss = false;
                         dismissTopPlayerSurface();
                     })
                     .start();
