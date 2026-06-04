@@ -173,6 +173,7 @@ public final class MainActivity extends Activity {
     private TextView folderText;
     private TextView statusText;
     private TextView resultText;
+    private PullRefreshScrollView appContentScrollView;
     private ProgressBar progressBar;
 
     private Tab currentTab = Tab.HOME;
@@ -571,7 +572,8 @@ public final class MainActivity extends Activity {
         app.setBackgroundColor(color(R.color.ytet_background));
 
         FrameLayout contentFrame = new FrameLayout(this);
-        contentScrollView = new PullRefreshScrollView(this);
+        appContentScrollView = new PullRefreshScrollView(this);
+        contentScrollView = appContentScrollView;
         contentScrollView.setFillViewport(true);
         contentScrollView.setBackgroundColor(color(R.color.ytet_background));
         contentFrame.addView(contentScrollView, new FrameLayout.LayoutParams(
@@ -706,6 +708,7 @@ public final class MainActivity extends Activity {
         } else {
             resetLibraryPullIndicator();
         }
+        updateExtractorScrollMode();
     }
 
     private void ensureDefaultMediaFolders() {
@@ -5740,6 +5743,31 @@ public final class MainActivity extends Activity {
             resultText.setText(extractionResult);
         }
         setBusy(extractionBusy);
+        updateExtractorScrollMode();
+    }
+
+    private void updateExtractorScrollMode() {
+        if (appContentScrollView == null) {
+            return;
+        }
+        if (currentTab != Tab.EXTRACTOR) {
+            appContentScrollView.setTabScrollEnabled(true);
+            return;
+        }
+        appContentScrollView.post(() -> {
+            if (currentTab != Tab.EXTRACTOR || appContentScrollView == null) {
+                return;
+            }
+            View child = appContentScrollView.getChildCount() == 0
+                    ? null
+                    : appContentScrollView.getChildAt(0);
+            int childHeight = child == null ? 0 : Math.max(0, child.getHeight() - child.getPaddingBottom());
+            int viewportHeight = Math.max(0,
+                    appContentScrollView.getHeight()
+                            - appContentScrollView.getPaddingTop()
+                            - appContentScrollView.getPaddingBottom());
+            appContentScrollView.setTabScrollEnabled(childHeight > viewportHeight + dp(8));
+        });
     }
 
     private void updateFolderLabel() {
@@ -5887,6 +5915,7 @@ public final class MainActivity extends Activity {
             icon.setTint(textColor);
             ImageView iconView = new ImageView(this);
             iconView.setImageDrawable(icon);
+            iconView.setTranslationX(-dp(3));
             LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(dp(22), dp(22));
             iconParams.setMargins(0, 0, dp(8), 0);
             content.addView(iconView, iconParams);
@@ -6151,9 +6180,33 @@ public final class MainActivity extends Activity {
 
     private final class PullRefreshScrollView extends ScrollView {
         private boolean pullCanceledChildGesture;
+        private boolean tabScrollEnabled = true;
 
         PullRefreshScrollView(Context context) {
             super(context);
+        }
+
+        void setTabScrollEnabled(boolean enabled) {
+            tabScrollEnabled = enabled;
+            if (!enabled && getScrollY() != 0) {
+                scrollTo(0, 0);
+            }
+        }
+
+        @Override
+        public boolean onInterceptTouchEvent(MotionEvent event) {
+            if (!tabScrollEnabled) {
+                return false;
+            }
+            return super.onInterceptTouchEvent(event);
+        }
+
+        @Override
+        public boolean onTouchEvent(MotionEvent event) {
+            if (!tabScrollEnabled) {
+                return false;
+            }
+            return super.onTouchEvent(event);
         }
 
         @Override
@@ -6801,6 +6854,7 @@ public final class MainActivity extends Activity {
             }
             int action = event.getActionMasked();
             if (action == MotionEvent.ACTION_DOWN) {
+                disallowParentScroll(true);
                 downX = event.getX();
                 downY = event.getY();
                 downScrollX = getScrollX();
@@ -6830,15 +6884,18 @@ public final class MainActivity extends Activity {
             if (action == MotionEvent.ACTION_UP) {
                 if (horizontalDragging) {
                     horizontalDragging = false;
+                    disallowParentScroll(false);
                     return true;
                 }
                 boolean handled = super.onTouchEvent(event);
                 setCursorVisible(true);
                 showKeyboard(this);
+                disallowParentScroll(false);
                 return handled;
             }
             if (action == MotionEvent.ACTION_CANCEL) {
                 horizontalDragging = false;
+                disallowParentScroll(false);
             }
             return super.onTouchEvent(event);
         }
@@ -6863,6 +6920,12 @@ public final class MainActivity extends Activity {
                 textWidth = (int) Math.ceil(getPaint().measureText(getText().toString()));
             }
             return Math.max(0, textWidth - visibleWidth);
+        }
+
+        private void disallowParentScroll(boolean disallow) {
+            if (getParent() != null) {
+                getParent().requestDisallowInterceptTouchEvent(disallow);
+            }
         }
     }
 
