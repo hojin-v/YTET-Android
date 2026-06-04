@@ -1,5 +1,6 @@
 package com.ytet.android.ui;
 
+import android.animation.ObjectAnimator;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -7,6 +8,7 @@ import android.app.Dialog;
 import android.app.PendingIntent;
 import android.app.RecoverableSecurityException;
 import android.content.ActivityNotFoundException;
+import android.content.ContentValues;
 import android.content.BroadcastReceiver;
 import android.content.ClipData;
 import android.content.Context;
@@ -52,6 +54,7 @@ import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowManager;
+import android.view.animation.LinearInterpolator;
 import android.window.OnBackInvokedCallback;
 import android.window.OnBackInvokedDispatcher;
 import android.widget.ArrayAdapter;
@@ -83,6 +86,7 @@ import com.ytet.android.library.DeviceAudioTrack;
 import com.ytet.android.library.DeviceMusicLibrary;
 import com.ytet.android.library.MusicLibrary;
 import com.ytet.android.library.TrackMetadataOverrides;
+import com.ytet.android.library.UserPlaylists;
 import com.ytet.android.playback.PlaybackService;
 import com.ytet.android.playback.PlaybackStats;
 import com.ytet.android.stream.MusicStation;
@@ -113,6 +117,7 @@ public final class MainActivity extends Activity {
     private static final int REQUEST_DELETE_AUDIO = 1209;
     private static final int REQUEST_AUDIO_LIBRARY = 1210;
     private static final int REQUEST_WRITE_LIBRARY = 1211;
+    private static final int REQUEST_MOVE_AUDIO = 1212;
     private static final String UPDATE_APK_MIME = "application/vnd.android.package-archive";
     private static final String PREFS = "ytet_android";
     private static final String PREF_OUTPUT_TREE = "output_tree";
@@ -121,6 +126,7 @@ public final class MainActivity extends Activity {
     private static final String PREF_UPDATE_TAG = "update_tag";
     private static final String PREF_LIBRARY_SOURCE = "library_source";
     private static final String PREF_LIBRARY_SORT = "library_sort";
+    private static final String PLAYLIST_GROUP_PREFIX = "playlist:";
     private static final String LIBRARY_SOURCE_COLLECTION = "collection";
     private static final String LIBRARY_SOURCE_DEVICE = "device";
     private static final long LIBRARY_SEARCH_DEBOUNCE_MS = 120L;
@@ -137,6 +143,11 @@ public final class MainActivity extends Activity {
     private TextView nowPlayingTitle;
     private TextView nowPlayingMeta;
     private ImageButton playPauseButton;
+    private long renderedNowPlayingTrackId = Long.MIN_VALUE;
+    private boolean renderedNowPlayingIdle = true;
+    private String renderedNowPlayingTitle = "";
+    private String renderedNowPlayingMeta = "";
+    private boolean nowPlayingContentInitialized;
     private TabItem homeTabButton;
     private TabItem libraryTabButton;
     private TabItem extractorTabButton;
@@ -233,13 +244,18 @@ public final class MainActivity extends Activity {
     private LibraryGroup focusedParentArtistGroup;
     private float libraryPullStartY;
     private boolean libraryPullTracking;
+    private boolean libraryPullConsumed;
     private float libraryPullDistance;
     private boolean libraryPullReady;
     private FrameLayout libraryPullIndicator;
     private ImageView libraryPullIcon;
+    private ObjectAnimator libraryPullSpinAnimator;
     private String librarySource = LIBRARY_SOURCE_COLLECTION;
     private DeviceAudioTrack selectedTrack;
     private DeviceAudioTrack pendingDeleteTrack;
+    private List<DeviceAudioTrack> pendingDeleteTracks = new ArrayList<>();
+    private DeviceAudioTrack pendingAlbumMoveTrack;
+    private String pendingAlbumMoveFolder = "";
     private final Map<Long, View> libraryTrackItemViews = new HashMap<>();
     private final Map<Long, String> librarySearchIndex = new HashMap<>();
 
@@ -310,40 +326,49 @@ public final class MainActivity extends Activity {
             if (!PlaybackService.ACTION_STATE.equals(intent.getAction())) {
                 return;
             }
-            playbackHasQueue = intent.getBooleanExtra(PlaybackService.EXTRA_HAS_QUEUE, false);
+            boolean incomingHasQueue = intent.getBooleanExtra(PlaybackService.EXTRA_HAS_QUEUE, false);
+            boolean incomingPreparing = intent.getBooleanExtra(PlaybackService.EXTRA_PREPARING, false);
+            boolean keepPreviewDuringQueueLoad = !incomingHasQueue
+                    && incomingPreparing
+                    && activeStation != null
+                    && playbackTrackId >= 0L;
+            playbackHasQueue = incomingHasQueue || keepPreviewDuringQueueLoad;
             playbackPlaying = intent.getBooleanExtra(PlaybackService.EXTRA_PLAYING, false);
-            playbackPreparing = intent.getBooleanExtra(PlaybackService.EXTRA_PREPARING, false);
+            playbackPreparing = incomingPreparing;
             playbackWillPlay = intent.getBooleanExtra(PlaybackService.EXTRA_WILL_PLAY, false);
             playbackError = intent.getBooleanExtra(PlaybackService.EXTRA_ERROR, false);
-            playbackTitle = valueOrDefault(
-                    intent.getStringExtra(PlaybackService.EXTRA_TITLE),
-                    "로컬 재생 대기"
-            );
-            playbackMeta = valueOrDefault(
-                    intent.getStringExtra(PlaybackService.EXTRA_META),
-                    "기기 음악을 스캔하면 재생할 수 있습니다."
-            );
-            streamStatus = valueOrDefault(
-                    intent.getStringExtra(PlaybackService.EXTRA_STATUS),
-                    playbackMeta
-            );
-            playbackTrackId = intent.getLongExtra(PlaybackService.EXTRA_TRACK_ID, -1L);
-            playbackArtist = valueOrDefault(intent.getStringExtra(PlaybackService.EXTRA_ARTIST), "알 수 없는 아티스트");
-            playbackAlbum = valueOrDefault(intent.getStringExtra(PlaybackService.EXTRA_ALBUM), "앨범 정보 없음");
-            playbackFolder = valueOrDefault(intent.getStringExtra(PlaybackService.EXTRA_FOLDER), "알 수 없는 폴더");
-            playbackAlbumArtUri = valueOrDefault(intent.getStringExtra(PlaybackService.EXTRA_ALBUM_ART_URI), "");
-            playbackDurationMs = intent.getLongExtra(PlaybackService.EXTRA_DURATION_MS, 0L);
-            playbackPositionMs = intent.getLongExtra(PlaybackService.EXTRA_POSITION_MS, 0L);
-            playbackQueueIndex = intent.getIntExtra(PlaybackService.EXTRA_QUEUE_INDEX, -1);
-            playbackQueueSize = intent.getIntExtra(PlaybackService.EXTRA_QUEUE_SIZE, 0);
+            if (!keepPreviewDuringQueueLoad) {
+                playbackTitle = valueOrDefault(
+                        intent.getStringExtra(PlaybackService.EXTRA_TITLE),
+                        "로컬 재생 대기"
+                );
+                playbackMeta = valueOrDefault(
+                        intent.getStringExtra(PlaybackService.EXTRA_META),
+                        "기기 음악을 스캔하면 재생할 수 있습니다."
+                );
+                playbackTrackId = intent.getLongExtra(PlaybackService.EXTRA_TRACK_ID, -1L);
+                playbackArtist = valueOrDefault(intent.getStringExtra(PlaybackService.EXTRA_ARTIST), "알 수 없는 아티스트");
+                playbackAlbum = valueOrDefault(intent.getStringExtra(PlaybackService.EXTRA_ALBUM), "앨범 정보 없음");
+                playbackFolder = valueOrDefault(intent.getStringExtra(PlaybackService.EXTRA_FOLDER), "알 수 없는 폴더");
+                playbackAlbumArtUri = valueOrDefault(intent.getStringExtra(PlaybackService.EXTRA_ALBUM_ART_URI), "");
+                playbackDurationMs = intent.getLongExtra(PlaybackService.EXTRA_DURATION_MS, 0L);
+                playbackPositionMs = intent.getLongExtra(PlaybackService.EXTRA_POSITION_MS, 0L);
+                playbackQueueIndex = intent.getIntExtra(PlaybackService.EXTRA_QUEUE_INDEX, -1);
+                playbackQueueSize = intent.getIntExtra(PlaybackService.EXTRA_QUEUE_SIZE, 0);
+            }
+            streamStatus = keepPreviewDuringQueueLoad
+                    ? "준비 중: " + playbackTitle
+                    : valueOrDefault(intent.getStringExtra(PlaybackService.EXTRA_STATUS), playbackMeta);
             playbackMix = valueOrDefault(intent.getStringExtra(PlaybackService.EXTRA_MIX), "로컬 음악");
             playbackShuffleEnabled = intent.getBooleanExtra(PlaybackService.EXTRA_SHUFFLE_ENABLED, false);
             playbackRepeatMode = intent.getIntExtra(PlaybackService.EXTRA_REPEAT_MODE, PlaybackService.REPEAT_OFF);
             sleepTimerEndAtMs = intent.getLongExtra(PlaybackService.EXTRA_SLEEP_TIMER_END_AT_MS, 0L);
             sleepTimerRemainingMs = intent.getLongExtra(PlaybackService.EXTRA_SLEEP_TIMER_REMAINING_MS, 0L);
             sleepTimerPaused = intent.getBooleanExtra(PlaybackService.EXTRA_SLEEP_TIMER_PAUSED, false);
-            updateQueuePreviewFromIds(intent.getLongArrayExtra(PlaybackService.EXTRA_QUEUE_TRACK_IDS));
-            if (!playbackHasQueue) {
+            if (!keepPreviewDuringQueueLoad) {
+                updateQueuePreviewFromIds(intent.getLongArrayExtra(PlaybackService.EXTRA_QUEUE_TRACK_IDS));
+            }
+            if (!playbackHasQueue && !keepPreviewDuringQueueLoad) {
                 activeStation = null;
                 activeQueuePreview = new ArrayList<>();
                 playbackQueueTrackIds = new long[0];
@@ -494,10 +519,24 @@ public final class MainActivity extends Activity {
                 deleteTrackDirectly(pendingDeleteTrack);
                 return;
             }
-            toast("선택한 파일을 삭제했습니다.");
+            int count = pendingDeleteTracks.isEmpty() ? 1 : pendingDeleteTracks.size();
+            toast(count > 1 ? count + "개 파일을 삭제했습니다." : "선택한 파일을 삭제했습니다.");
             selectedTrack = null;
+            focusedLibraryGroup = null;
+            focusedLibraryGroupFilter = null;
+            focusedParentArtistGroup = null;
             pendingDeleteTrack = null;
+            pendingDeleteTracks = new ArrayList<>();
             startLibraryRefresh(true);
+            return;
+        }
+        if (requestCode == REQUEST_MOVE_AUDIO) {
+            if (resultCode == RESULT_OK) {
+                retryPendingAlbumMove();
+            } else {
+                clearPendingAlbumMove();
+                toast("파일 이동을 취소했습니다.");
+            }
         }
     }
 
@@ -672,7 +711,7 @@ public final class MainActivity extends Activity {
         updateTabStyles();
         updateNowPlayingBar();
         if (currentTab == Tab.LIBRARY) {
-            updateLibraryPullIndicator(libraryLoading ? dp(92) : libraryPullDistance, libraryLoading || libraryPullReady);
+            updateLibraryPullIndicator(libraryLoading ? libraryPullRefreshTriggerDistance() : libraryPullDistance, libraryLoading || libraryPullReady);
         } else {
             resetLibraryPullIndicator();
         }
@@ -694,6 +733,7 @@ public final class MainActivity extends Activity {
         }
         if (action == MotionEvent.ACTION_DOWN) {
             libraryPullTracking = contentScrollView.getScrollY() <= 0 && !libraryLoading;
+            libraryPullConsumed = false;
             libraryPullStartY = event.getRawY();
             libraryPullDistance = 0f;
             libraryPullReady = false;
@@ -706,21 +746,29 @@ public final class MainActivity extends Activity {
                 libraryPullDistance = 0f;
                 libraryPullReady = false;
                 updateLibraryPullIndicator(0f, false);
-                return false;
+                return libraryPullConsumed;
             }
             libraryPullDistance = dragDistance;
-            libraryPullReady = dragDistance >= dp(92);
+            if (dragDistance > dp(2)) {
+                libraryPullConsumed = true;
+            }
+            libraryPullReady = dragDistance >= libraryPullRefreshTriggerDistance();
             updateLibraryPullIndicator(dragDistance, libraryPullReady);
-            return dragDistance > dp(6);
+            return libraryPullConsumed;
         }
         if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
             boolean shouldRefresh = action == MotionEvent.ACTION_UP && libraryPullTracking && libraryPullReady && !libraryLoading;
+            boolean consumed = libraryPullConsumed || libraryPullReady;
             libraryPullTracking = false;
+            libraryPullConsumed = false;
             libraryPullDistance = 0f;
             libraryPullReady = false;
-            updateLibraryPullIndicator(shouldRefresh ? dp(92) : 0f, shouldRefresh);
+            updateLibraryPullIndicator(shouldRefresh ? libraryPullRefreshTriggerDistance() : 0f, shouldRefresh);
             if (shouldRefresh) {
-                startLibraryRefresh(true);
+                startLibraryRefresh(false);
+                return true;
+            }
+            if (consumed) {
                 return true;
             }
         }
@@ -729,6 +777,7 @@ public final class MainActivity extends Activity {
 
     private void resetLibraryPullIndicator() {
         libraryPullTracking = false;
+        libraryPullConsumed = false;
         libraryPullDistance = 0f;
         libraryPullReady = false;
         updateLibraryPullIndicator(0f, false);
@@ -738,11 +787,12 @@ public final class MainActivity extends Activity {
         if (libraryPullIndicator == null) {
             return;
         }
-        boolean visible = libraryLoading || dragDistance > dp(8);
-        float progress = Math.min(1f, Math.max(0f, dragDistance / dp(92)));
-        float offset = libraryLoading || ready
-                ? dp(28)
-                : -dp(54) + Math.min(dp(82), dragDistance * 0.72f);
+        boolean visible = libraryLoading || ready || dragDistance > dp(4);
+        float progress = Math.min(1f, Math.max(0f, dragDistance / libraryPullMaxDragDistance()));
+        float offset = libraryLoading
+                ? libraryPullRefreshOffset()
+                : libraryPullHiddenOffset()
+                + Math.min(libraryPullMaxOffset() - libraryPullHiddenOffset(), dragDistance * 0.78f);
         libraryPullIndicator.setVisibility(visible ? View.VISIBLE : View.INVISIBLE);
         libraryPullIndicator.setTranslationY(offset);
         libraryPullIndicator.setAlpha(libraryLoading || ready ? 1f : Math.max(0.35f, progress));
@@ -750,7 +800,53 @@ public final class MainActivity extends Activity {
         libraryPullIndicator.setScaleX(scale);
         libraryPullIndicator.setScaleY(scale);
         if (libraryPullIcon != null) {
-            libraryPullIcon.setRotation(libraryLoading || ready ? 0f : progress * 180f);
+            if (libraryLoading) {
+                startLibraryPullSpin();
+            } else {
+                stopLibraryPullSpin();
+                libraryPullIcon.setRotation(ready ? 180f : progress * 180f);
+            }
+        }
+    }
+
+    private float libraryPullHiddenOffset() {
+        return dp(92);
+    }
+
+    private float libraryPullRefreshOffset() {
+        return dp(154);
+    }
+
+    private float libraryPullMaxOffset() {
+        return dp(210);
+    }
+
+    private float libraryPullRefreshTriggerDistance() {
+        return dp(86);
+    }
+
+    private float libraryPullMaxDragDistance() {
+        return dp(150);
+    }
+
+    private void startLibraryPullSpin() {
+        if (libraryPullIcon == null) {
+            return;
+        }
+        if (libraryPullSpinAnimator != null && libraryPullSpinAnimator.isStarted()) {
+            return;
+        }
+        libraryPullSpinAnimator = ObjectAnimator.ofFloat(libraryPullIcon, "rotation", libraryPullIcon.getRotation(), libraryPullIcon.getRotation() + 360f);
+        libraryPullSpinAnimator.setDuration(720L);
+        libraryPullSpinAnimator.setRepeatCount(ObjectAnimator.INFINITE);
+        libraryPullSpinAnimator.setInterpolator(new LinearInterpolator());
+        libraryPullSpinAnimator.start();
+    }
+
+    private void stopLibraryPullSpin() {
+        if (libraryPullSpinAnimator != null) {
+            libraryPullSpinAnimator.cancel();
+            libraryPullSpinAnimator = null;
         }
     }
 
@@ -1277,7 +1373,7 @@ public final class MainActivity extends Activity {
 
         if (focusedLibraryGroup != null && isGroupDetailFilter(focusedLibraryGroupFilter)) {
             LibraryGroup group = currentFocusedLibraryGroup();
-            if (group != null && !group.tracks.isEmpty()) {
+            if (group != null && (!group.tracks.isEmpty() || focusedLibraryGroupFilter == LibraryFilter.PLAYLIST)) {
                 buildLibraryGroupDetail(root, group);
                 return root;
             }
@@ -1323,6 +1419,10 @@ public final class MainActivity extends Activity {
             return;
         }
 
+        if (libraryFilter == LibraryFilter.PLAYLIST) {
+            root.addView(createPlaylistPanel(), marginBottom(10));
+        }
+
         List<LibraryGroup> visibleGroups = visibleLibraryGroups();
         if (visibleGroups.isEmpty()) {
             root.addView(emptyLibraryView(), matchWrap());
@@ -1345,9 +1445,12 @@ public final class MainActivity extends Activity {
         LinearLayout empty = panel();
         boolean searching = !librarySearchQuery.trim().isEmpty();
         empty.addView(label(searching ? "검색 결과가 없습니다." : "표시할 음악이 없습니다."), marginBottom(8));
-        empty.addView(muted(searching
-                ? "다른 검색어를 입력하거나 전체/앨범/아티스트 필터를 바꿔보세요."
-                : emptyLibraryHint(), 13), matchWrap());
+        String hint = searching
+                ? "다른 검색어를 입력하거나 전체/앨범/아티스트/재생목록 필터를 바꿔보세요."
+                : libraryFilter == LibraryFilter.PLAYLIST
+                ? "새 재생목록을 만들거나 곡을 길게 눌러 재생목록에 저장하세요."
+                : emptyLibraryHint();
+        empty.addView(muted(hint, 13), matchWrap());
         return empty;
     }
 
@@ -1366,7 +1469,8 @@ public final class MainActivity extends Activity {
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.addView(libraryFilterChip("전체", LibraryFilter.ALL), marginRight(8, LinearLayout.LayoutParams.WRAP_CONTENT, dp(38)));
         row.addView(libraryFilterChip("앨범", LibraryFilter.ALBUM), marginRight(8, LinearLayout.LayoutParams.WRAP_CONTENT, dp(38)));
-        row.addView(libraryFilterChip("아티스트", LibraryFilter.ARTIST), marginRight(0, LinearLayout.LayoutParams.WRAP_CONTENT, dp(38)));
+        row.addView(libraryFilterChip("아티스트", LibraryFilter.ARTIST), marginRight(8, LinearLayout.LayoutParams.WRAP_CONTENT, dp(38)));
+        row.addView(libraryFilterChip("재생목록", LibraryFilter.PLAYLIST), marginRight(0, LinearLayout.LayoutParams.WRAP_CONTENT, dp(38)));
         shelf.addView(row, matchWrap());
         bar.addView(shelf, new LinearLayout.LayoutParams(0, dp(38), 1f));
 
@@ -1772,7 +1876,98 @@ public final class MainActivity extends Activity {
     }
 
     private List<LibraryGroup> visibleLibraryGroups() {
+        if (libraryFilter == LibraryFilter.PLAYLIST) {
+            return visiblePlaylistGroups();
+        }
         return libraryGroupsForTracks(visibleLibraryTracks(), libraryFilter);
+    }
+
+    private List<LibraryGroup> visiblePlaylistGroups() {
+        String query = librarySearchQuery == null ? "" : librarySearchQuery.trim().toLowerCase(Locale.ROOT);
+        List<LibraryGroup> groups = new ArrayList<>();
+        for (UserPlaylists.Playlist playlist : UserPlaylists.list(this)) {
+            LibraryGroup group = playlistGroup(playlist);
+            if (!query.isEmpty() && !playlistMatchesQuery(group, query)) {
+                continue;
+            }
+            groups.add(group);
+        }
+        groups.sort(this::comparePlaylistGroups);
+        return groups;
+    }
+
+    private boolean playlistMatchesQuery(LibraryGroup group, String query) {
+        if (group == null) {
+            return false;
+        }
+        String cleanQuery = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
+        if (cleanQuery.isEmpty()) {
+            return true;
+        }
+        if (group.title.toLowerCase(Locale.ROOT).contains(cleanQuery)
+                || group.subtitle.toLowerCase(Locale.ROOT).contains(cleanQuery)) {
+            return true;
+        }
+        for (DeviceAudioTrack track : group.tracks) {
+            if (trackMatchesQuery(track, cleanQuery)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private LibraryGroup playlistGroup(UserPlaylists.Playlist playlist) {
+        List<DeviceAudioTrack> tracks = tracksForIds(playlist == null ? new ArrayList<>() : playlist.trackIds());
+        String title = playlist == null ? "재생목록" : playlist.title();
+        String subtitle = tracks.size() + "곡 · " + totalDurationLabel(tracks);
+        return new LibraryGroup(
+                PLAYLIST_GROUP_PREFIX + (playlist == null ? "" : playlist.id()),
+                title,
+                subtitle,
+                bestCoverTrack(tracks),
+                tracks
+        );
+    }
+
+    private List<DeviceAudioTrack> tracksForIds(List<Long> ids) {
+        Map<Long, DeviceAudioTrack> byId = tracksById(libraryTracks);
+        List<DeviceAudioTrack> tracks = new ArrayList<>();
+        if (ids == null) {
+            return tracks;
+        }
+        for (Long id : ids) {
+            DeviceAudioTrack track = id == null ? null : byId.get(id);
+            if (track != null) {
+                tracks.add(track);
+            }
+        }
+        return tracks;
+    }
+
+    private Map<Long, DeviceAudioTrack> tracksById(List<DeviceAudioTrack> tracks) {
+        Map<Long, DeviceAudioTrack> byId = new LinkedHashMap<>();
+        if (tracks == null) {
+            return byId;
+        }
+        for (DeviceAudioTrack track : tracks) {
+            if (track != null) {
+                byId.put(track.id(), track);
+            }
+        }
+        return byId;
+    }
+
+    private List<Long> trackIdsForTracks(List<DeviceAudioTrack> tracks) {
+        List<Long> ids = new ArrayList<>();
+        if (tracks == null) {
+            return ids;
+        }
+        for (DeviceAudioTrack track : tracks) {
+            if (track != null) {
+                ids.add(track.id());
+            }
+        }
+        return ids;
     }
 
     private List<LibraryGroup> libraryGroupsForTracks(List<DeviceAudioTrack> tracks, LibraryFilter filter) {
@@ -1888,7 +2083,9 @@ public final class MainActivity extends Activity {
     private LibraryGroup libraryGroup(String key, String title, List<DeviceAudioTrack> tracks, LibraryFilter filter) {
         List<DeviceAudioTrack> orderedTracks = orderedGroupTracks(tracks, filter);
         String subtitle;
-        if (filter == LibraryFilter.ALBUM) {
+        if (filter == LibraryFilter.PLAYLIST) {
+            subtitle = orderedTracks.size() + "곡 · " + totalDurationLabel(orderedTracks);
+        } else if (filter == LibraryFilter.ALBUM) {
             subtitle = albumArtistSummary(orderedTracks) + " · " + orderedTracks.size() + "곡 · " + totalDurationLabel(orderedTracks);
         } else {
             subtitle = distinctAlbumCount(orderedTracks) + "개 앨범 · " + orderedTracks.size() + "곡 · " + totalDurationLabel(orderedTracks);
@@ -1946,6 +2143,31 @@ public final class MainActivity extends Activity {
                 int newest = Long.compare(groupNewestTimestamp(second), groupNewestTimestamp(first));
                 return newest != 0 ? newest : compareGroupName(first, second);
         }
+    }
+
+    private int comparePlaylistGroups(LibraryGroup first, LibraryGroup second) {
+        switch (librarySort) {
+            case OLDEST:
+                int oldest = Long.compare(playlistUpdatedAt(first), playlistUpdatedAt(second));
+                return oldest != 0 ? oldest : compareGroupName(first, second);
+            case NAME:
+                return compareGroupName(first, second);
+            case MOST_PLAYED:
+                int mostPlayed = Long.compare(groupPlayCount(second), groupPlayCount(first));
+                return mostPlayed != 0 ? mostPlayed : compareGroupName(first, second);
+            case LEAST_PLAYED:
+                int leastPlayed = Long.compare(groupPlayCount(first), groupPlayCount(second));
+                return leastPlayed != 0 ? leastPlayed : compareGroupName(first, second);
+            case NEWEST:
+            default:
+                int newest = Long.compare(playlistUpdatedAt(second), playlistUpdatedAt(first));
+                return newest != 0 ? newest : compareGroupName(first, second);
+        }
+    }
+
+    private long playlistUpdatedAt(LibraryGroup group) {
+        UserPlaylists.Playlist playlist = UserPlaylists.find(this, playlistIdFromGroupKey(group == null ? "" : group.key));
+        return playlist == null ? 0L : playlist.updatedAtMs();
     }
 
     private int compareByDate(DeviceAudioTrack first, DeviceAudioTrack second, boolean oldestFirst) {
@@ -2087,6 +2309,10 @@ public final class MainActivity extends Activity {
         if (focusedLibraryGroup == null || focusedLibraryGroupFilter == null) {
             return null;
         }
+        if (focusedLibraryGroupFilter == LibraryFilter.PLAYLIST) {
+            UserPlaylists.Playlist playlist = UserPlaylists.find(this, playlistIdFromGroupKey(focusedLibraryGroup.key));
+            return playlist == null ? null : playlistGroup(playlist);
+        }
         List<DeviceAudioTrack> tracks = new ArrayList<>();
         for (DeviceAudioTrack track : libraryTracks) {
             if (focusedLibraryGroup.key.equals(libraryGroupKey(track, focusedLibraryGroupFilter))) {
@@ -2161,6 +2387,10 @@ public final class MainActivity extends Activity {
         LinearLayout card = panel();
         card.setPadding(dp(10), dp(10), dp(10), dp(12));
         card.setOnClickListener(view -> action.run());
+        card.setOnLongClickListener(view -> {
+            showLibraryGroupQuickActions(group);
+            return true;
+        });
 
         SquareFrameLayout coverFrame = new SquareFrameLayout(this);
         coverFrame.addView(groupCoverView(group), new FrameLayout.LayoutParams(
@@ -2188,6 +2418,10 @@ public final class MainActivity extends Activity {
         row.setPadding(dp(10), dp(10), dp(10), dp(10));
         row.setBackground(rounded(color(R.color.ytet_panel), 8));
         row.setOnClickListener(view -> handleLibraryGroupClick(group));
+        row.setOnLongClickListener(view -> {
+            showLibraryGroupQuickActions(group);
+            return true;
+        });
 
         LinearLayout.LayoutParams coverParams = new LinearLayout.LayoutParams(dp(58), dp(58));
         coverParams.setMargins(0, 0, dp(12), 0);
@@ -2213,7 +2447,9 @@ public final class MainActivity extends Activity {
             focusedLibraryGroupFilter = libraryFilter;
             focusedParentArtistGroup = null;
             if (libraryFilter == LibraryFilter.ARTIST) {
-                artistDetailMode = ArtistDetailMode.ALL;
+                artistDetailMode = distinctAlbumCount(group.tracks) > 1
+                        ? ArtistDetailMode.ALBUMS
+                        : ArtistDetailMode.ALL;
             }
             selectedTrack = null;
             renderCurrentTab();
@@ -2254,7 +2490,10 @@ public final class MainActivity extends Activity {
         LinearLayout top = new LinearLayout(this);
         top.setOrientation(LinearLayout.HORIZONTAL);
         top.setGravity(Gravity.CENTER_VERTICAL);
-        ImageButton back = toolbarIconButton(R.drawable.ic_arrow_back, artistDetail ? "아티스트 목록" : "앨범 목록", false);
+        String backDescription = detailFilter == LibraryFilter.PLAYLIST
+                ? "재생목록 목록"
+                : artistDetail ? "아티스트 목록" : "앨범 목록";
+        ImageButton back = toolbarIconButton(R.drawable.ic_arrow_back, backDescription, false);
         back.setOnClickListener(view -> handleLibraryBackNavigation());
         top.addView(back, new LinearLayout.LayoutParams(dp(44), dp(44)));
         View spacer = new View(this);
@@ -2314,13 +2553,20 @@ public final class MainActivity extends Activity {
             return;
         }
 
+        if (group.tracks.isEmpty()) {
+            root.addView(muted(detailFilter == LibraryFilter.PLAYLIST
+                    ? "수록곡이 없습니다. 곡을 길게 눌러 이 재생목록에 저장할 수 있습니다."
+                    : "수록곡이 없습니다.", 13), matchWrap());
+            return;
+        }
+
         for (int index = 0; index < group.tracks.size(); index++) {
             root.addView(libraryGroupTrackRow(group, group.tracks.get(index), index), marginBottom(6));
         }
     }
 
     private boolean isGroupDetailFilter(LibraryFilter filter) {
-        return filter == LibraryFilter.ALBUM || filter == LibraryFilter.ARTIST;
+        return filter == LibraryFilter.ALBUM || filter == LibraryFilter.ARTIST || filter == LibraryFilter.PLAYLIST;
     }
 
     private String artistDetailModeLabel() {
@@ -2400,6 +2646,11 @@ public final class MainActivity extends Activity {
             selectLibraryTrack(track);
             playLibraryGroup(group, index, false);
         });
+        row.setOnLongClickListener(view -> {
+            selectLibraryTrack(track);
+            showTrackQuickActions(track);
+            return true;
+        });
 
         TextView number = muted(Integer.toString(index + 1), 13);
         number.setGravity(Gravity.CENTER);
@@ -2424,7 +2675,9 @@ public final class MainActivity extends Activity {
 
     private void showLibraryGroupDetails(LibraryGroup group, LibraryFilter filter) {
         LinearLayout body = dialogBody("상세정보");
-        if (filter == LibraryFilter.ARTIST) {
+        if (filter == LibraryFilter.PLAYLIST) {
+            body.addView(trackDetailItem("재생목록", group.title), marginBottom(10));
+        } else if (filter == LibraryFilter.ARTIST) {
             body.addView(trackDetailItem("아티스트", group.title), marginBottom(10));
             body.addView(trackDetailItem("앨범", distinctAlbumCount(group.tracks) + "개"), marginBottom(10));
         } else {
@@ -2438,13 +2691,316 @@ public final class MainActivity extends Activity {
                 .setView(body)
                 .create();
         LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
         actions.setGravity(Gravity.END);
+        if (filter == LibraryFilter.ALBUM || filter == LibraryFilter.PLAYLIST) {
+            Button edit = detailActionButton("수정");
+            edit.setOnClickListener(view -> {
+                dialog.dismiss();
+                if (filter == LibraryFilter.PLAYLIST) {
+                    showEditPlaylistDialog(group);
+                } else {
+                    showEditLibraryGroupDialog(group);
+                }
+            });
+            actions.addView(edit, fixedButtonParams(76, 38, 8));
+        }
+        Button delete = detailActionButton("삭제");
+        delete.setOnClickListener(view -> {
+            dialog.dismiss();
+            confirmDeleteLibraryGroup(group, filter);
+        });
         Button close = detailActionButton("닫기");
         close.setOnClickListener(view -> dialog.dismiss());
+        actions.addView(delete, fixedButtonParams(76, 38, 8));
         actions.addView(close, fixedButtonParams(76, 38, 0));
         body.addView(actions, matchWrap());
         dialog.show();
         styleDetailDialog(dialog);
+    }
+
+    private void showEditLibraryGroupDialog(LibraryGroup group) {
+        if (group == null || group.tracks.isEmpty()) {
+            return;
+        }
+        LinearLayout body = dialogBody("앨범명 수정");
+        String label = "앨범명";
+        EditText input = metadataEditField(label, group.title);
+        body.addView(metadataEditLabel(label), marginBottom(4));
+        body.addView(input, marginBottom(10));
+        body.addView(muted("이 앨범 그룹 안의 곡 표시 앨범명을 함께 변경합니다. 폴더명은 변경하지 않습니다.", 11), marginBottom(14));
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setView(body)
+                .create();
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setGravity(Gravity.END);
+        Button cancel = detailActionButton("취소");
+        cancel.setOnClickListener(view -> dialog.dismiss());
+        Button save = detailActionButton("저장");
+        save.setOnClickListener(view -> {
+            String value = input.getText().toString().trim();
+            if (value.isEmpty()) {
+                toast(label + "을 입력해 주세요.");
+                return;
+            }
+            applyAlbumGroupName(group, value);
+            dialog.dismiss();
+        });
+        actions.addView(cancel, fixedButtonParams(76, 38, 8));
+        actions.addView(save, fixedButtonParams(76, 38, 0));
+        body.addView(actions, matchWrap());
+        dialog.show();
+        styleDetailDialog(dialog);
+    }
+
+    private void applyAlbumGroupName(LibraryGroup group, String album) {
+        List<DeviceAudioTrack> edited = new ArrayList<>();
+        for (DeviceAudioTrack track : group.tracks) {
+            edited.add(TrackMetadataOverrides.saveAlbum(this, track, album));
+        }
+        applyEditedTracks(edited);
+        toast(group.tracks.size() + "곡의 앨범명을 수정했습니다.");
+    }
+
+    private void confirmDeleteLibraryGroup(LibraryGroup group, LibraryFilter filter) {
+        if (group == null) {
+            return;
+        }
+        if (filter == LibraryFilter.PLAYLIST) {
+            confirmDeletePlaylist(group);
+            return;
+        }
+        if (group.tracks.isEmpty()) {
+            return;
+        }
+        String target = filter == LibraryFilter.ARTIST ? "아티스트" : "앨범";
+        LinearLayout body = dialogBody(target + " 삭제");
+        body.addView(muted(
+                group.title + "의 " + group.tracks.size() + "개 파일을 기기에서 삭제합니다. 이 작업은 되돌릴 수 없습니다.",
+                13
+        ), marginBottom(14));
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setView(body)
+                .create();
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setGravity(Gravity.END);
+        Button cancel = detailActionButton("취소");
+        cancel.setOnClickListener(view -> dialog.dismiss());
+        Button delete = detailActionButton("삭제");
+        delete.setOnClickListener(view -> {
+            dialog.dismiss();
+            deleteTracks(new ArrayList<>(group.tracks));
+        });
+        actions.addView(cancel, fixedButtonParams(76, 38, 8));
+        actions.addView(delete, fixedButtonParams(76, 38, 0));
+        body.addView(actions, matchWrap());
+        dialog.show();
+        styleDetailDialog(dialog);
+    }
+
+    private View createPlaylistPanel() {
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.HORIZONTAL);
+        panel.setGravity(Gravity.CENTER_VERTICAL);
+        panel.setPadding(dp(12), dp(10), dp(12), dp(10));
+        panel.setBackground(rounded(color(R.color.ytet_panel), 10));
+
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        copy.addView(text("새 재생목록", 15, R.color.ytet_text, true), marginBottom(2));
+        copy.addView(muted("곡이나 앨범을 직접 묶어 관리", 12), matchWrap());
+        panel.addView(copy, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        Button create = detailActionButton("생성");
+        create.setOnClickListener(view -> showCreatePlaylistDialog(new ArrayList<>()));
+        panel.addView(create, new LinearLayout.LayoutParams(dp(76), dp(38)));
+        return panel;
+    }
+
+    private void showCreatePlaylistDialog(List<DeviceAudioTrack> tracksToAdd) {
+        LinearLayout body = dialogBody("새 재생목록");
+        EditText input = metadataEditField("재생목록 이름", defaultPlaylistTitle(tracksToAdd));
+        body.addView(metadataEditLabel("재생목록 이름"), marginBottom(4));
+        body.addView(input, marginBottom(14));
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setView(body)
+                .create();
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setGravity(Gravity.END);
+        Button cancel = detailActionButton("취소");
+        cancel.setOnClickListener(view -> dialog.dismiss());
+        Button save = detailActionButton("생성");
+        save.setOnClickListener(view -> {
+            String title = input.getText().toString().trim();
+            if (title.isEmpty()) {
+                toast("재생목록 이름을 입력해 주세요.");
+                return;
+            }
+            UserPlaylists.Playlist playlist = UserPlaylists.create(this, title, trackIdsForTracks(tracksToAdd));
+            dialog.dismiss();
+            toast(playlist.title() + " 재생목록을 만들었습니다.");
+            renderLibraryDependentTabs();
+        });
+        actions.addView(cancel, fixedButtonParams(76, 38, 8));
+        actions.addView(save, fixedButtonParams(76, 38, 0));
+        body.addView(actions, matchWrap());
+        dialog.show();
+        styleDetailDialog(dialog);
+        input.requestFocus();
+        input.setSelection(input.getText().length());
+        input.post(() -> showKeyboard(input));
+    }
+
+    private String defaultPlaylistTitle(List<DeviceAudioTrack> tracks) {
+        if (tracks == null || tracks.isEmpty()) {
+            return "새 재생목록";
+        }
+        if (tracks.size() == 1) {
+            return tracks.get(0).title();
+        }
+        return "새 재생목록";
+    }
+
+    private void showEditPlaylistDialog(LibraryGroup group) {
+        String playlistId = playlistIdFromGroupKey(group == null ? "" : group.key);
+        UserPlaylists.Playlist playlist = UserPlaylists.find(this, playlistId);
+        if (playlist == null) {
+            toast("재생목록을 찾을 수 없습니다.");
+            return;
+        }
+        List<DeviceAudioTrack> editableTracks = new ArrayList<>(tracksForIds(playlist.trackIds()));
+        LinearLayout body = dialogBody("재생목록 수정");
+        EditText nameInput = metadataEditField("재생목록 이름", playlist.title());
+        body.addView(metadataEditLabel("재생목록 이름"), marginBottom(4));
+        body.addView(nameInput, marginBottom(12));
+
+        TextView trackLabel = metadataEditLabel("수록곡");
+        body.addView(trackLabel, marginBottom(6));
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout trackList = new LinearLayout(this);
+        trackList.setOrientation(LinearLayout.VERTICAL);
+        scroll.addView(trackList, matchWrap());
+        body.addView(scroll, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(280)
+        ));
+
+        Runnable[] renderTracks = new Runnable[1];
+        renderTracks[0] = () -> renderPlaylistEditTracks(trackList, editableTracks, renderTracks[0]);
+        renderTracks[0].run();
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setView(body)
+                .create();
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setGravity(Gravity.END);
+        Button cancel = detailActionButton("취소");
+        cancel.setOnClickListener(view -> dialog.dismiss());
+        Button save = detailActionButton("저장");
+        save.setOnClickListener(view -> {
+            String title = nameInput.getText().toString().trim();
+            if (title.isEmpty()) {
+                toast("재생목록 이름을 입력해 주세요.");
+                return;
+            }
+            UserPlaylists.rename(this, playlist.id(), title);
+            UserPlaylists.updateTracks(this, playlist.id(), trackIdsForTracks(editableTracks));
+            UserPlaylists.Playlist updated = UserPlaylists.find(this, playlist.id());
+            if (updated != null) {
+                focusedLibraryGroup = playlistGroup(updated);
+                focusedLibraryGroupFilter = LibraryFilter.PLAYLIST;
+            }
+            dialog.dismiss();
+            toast("재생목록을 수정했습니다.");
+            renderLibraryDependentTabs();
+        });
+        actions.addView(cancel, fixedButtonParams(76, 38, 8));
+        actions.addView(save, fixedButtonParams(76, 38, 0));
+        body.addView(actions, matchWrap());
+        dialog.show();
+        styleDetailDialog(dialog);
+    }
+
+    private void renderPlaylistEditTracks(LinearLayout root, List<DeviceAudioTrack> tracks, Runnable rerender) {
+        root.removeAllViews();
+        if (tracks.isEmpty()) {
+            root.addView(muted("수록곡이 없습니다.", 13), matchWrap());
+            return;
+        }
+        for (DeviceAudioTrack track : new ArrayList<>(tracks)) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(dp(8), dp(8), dp(8), dp(8));
+            row.setBackground(rounded(color(R.color.ytet_panel), 8));
+            row.addView(trackCoverView(track), marginRight(10, dp(42), dp(42)));
+
+            LinearLayout copy = new LinearLayout(this);
+            copy.setOrientation(LinearLayout.VERTICAL);
+            TextView title = text(track.title(), 14, R.color.ytet_text, true);
+            title.setSingleLine(true);
+            title.setEllipsize(TextUtils.TruncateAt.END);
+            copy.addView(title, marginBottom(3));
+            TextView meta = muted(track.artist() + " · " + MusicLibrary.formatDuration(track.durationMs()), 12);
+            meta.setSingleLine(true);
+            meta.setEllipsize(TextUtils.TruncateAt.END);
+            copy.addView(meta, matchWrap());
+            row.addView(copy, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+            Button remove = detailActionButton("제거");
+            remove.setOnClickListener(view -> {
+                tracks.remove(track);
+                rerender.run();
+            });
+            row.addView(remove, new LinearLayout.LayoutParams(dp(68), dp(36)));
+            root.addView(row, marginBottom(8));
+        }
+    }
+
+    private void confirmDeletePlaylist(LibraryGroup group) {
+        String playlistId = playlistIdFromGroupKey(group == null ? "" : group.key);
+        if (playlistId.isEmpty()) {
+            return;
+        }
+        LinearLayout body = dialogBody("재생목록 삭제");
+        body.addView(muted(group.title + " 재생목록만 삭제합니다. 기기에 저장된 음악 파일은 삭제하지 않습니다.", 13), marginBottom(14));
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setView(body)
+                .create();
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setGravity(Gravity.END);
+        Button cancel = detailActionButton("취소");
+        cancel.setOnClickListener(view -> dialog.dismiss());
+        Button delete = detailActionButton("삭제");
+        delete.setOnClickListener(view -> {
+            UserPlaylists.delete(this, playlistId);
+            focusedLibraryGroup = null;
+            focusedLibraryGroupFilter = null;
+            focusedParentArtistGroup = null;
+            dialog.dismiss();
+            toast("재생목록을 삭제했습니다.");
+            renderLibraryDependentTabs();
+        });
+        actions.addView(cancel, fixedButtonParams(76, 38, 8));
+        actions.addView(delete, fixedButtonParams(76, 38, 0));
+        body.addView(actions, matchWrap());
+        dialog.show();
+        styleDetailDialog(dialog);
+    }
+
+    private String playlistIdFromGroupKey(String key) {
+        String value = key == null ? "" : key.trim();
+        return value.startsWith(PLAYLIST_GROUP_PREFIX)
+                ? value.substring(PLAYLIST_GROUP_PREFIX.length())
+                : "";
     }
 
     private View groupCoverView(LibraryGroup group) {
@@ -2468,7 +3024,14 @@ public final class MainActivity extends Activity {
         }
         int safeIndex = Math.max(0, Math.min(startIndex, group.tracks.size() - 1));
         LibraryFilter groupFilter = focusedLibraryGroupFilter == null ? libraryFilter : focusedLibraryGroupFilter;
-        String category = groupFilter == LibraryFilter.ALBUM ? "앨범" : "아티스트";
+        String category;
+        if (groupFilter == LibraryFilter.PLAYLIST) {
+            category = "재생목록";
+        } else if (groupFilter == LibraryFilter.ALBUM) {
+            category = "앨범";
+        } else {
+            category = "아티스트";
+        }
         MusicStation station = new MusicStation(
                 category + "-" + Integer.toHexString(group.key.hashCode()) + (shuffle ? "-shuffle" : "-ordered"),
                 group.title,
@@ -2550,6 +3113,11 @@ public final class MainActivity extends Activity {
             selectLibraryTrack(track);
             playVisibleLibraryTrack(track);
         });
+        card.setOnLongClickListener(view -> {
+            selectLibraryTrack(track);
+            showTrackQuickActions(track);
+            return true;
+        });
         registerLibraryTrackView(track, card);
 
         SquareFrameLayout coverFrame = new SquareFrameLayout(this);
@@ -2585,6 +3153,11 @@ public final class MainActivity extends Activity {
         row.setOnClickListener(view -> {
             selectLibraryTrack(track);
             playVisibleLibraryTrack(track);
+        });
+        row.setOnLongClickListener(view -> {
+            selectLibraryTrack(track);
+            showTrackQuickActions(track);
+            return true;
         });
         registerLibraryTrackView(track, row);
 
@@ -2654,7 +3227,7 @@ public final class MainActivity extends Activity {
     }
 
     private View trackCoverView(DeviceAudioTrack track) {
-        if (track.albumArtUri() != null && !track.albumArtUri().trim().isEmpty()) {
+        if (track != null && track.albumArtUri() != null && !track.albumArtUri().trim().isEmpty()) {
             ImageView image = new ImageView(this);
             image.setBackground(rounded(color(R.color.ytet_panel_alt), 8));
             image.setScaleType(ImageView.ScaleType.CENTER_CROP);
@@ -2673,6 +3246,533 @@ public final class MainActivity extends Activity {
             return "YT";
         }
         return title.substring(0, Math.min(2, title.length())).toUpperCase(Locale.ROOT);
+    }
+
+    private void showTrackQuickActions(DeviceAudioTrack track) {
+        if (track == null) {
+            return;
+        }
+        List<DeviceAudioTrack> tracks = new ArrayList<>();
+        tracks.add(track);
+        showQuickActions(track.title(), track.artist() + " · " + MusicLibrary.formatDuration(track.durationMs()), track, tracks, true);
+    }
+
+    private void showLibraryGroupQuickActions(LibraryGroup group) {
+        if (group == null || group.tracks.isEmpty()) {
+            return;
+        }
+        showQuickActions(group.title, group.subtitle, group.coverTrack, group.tracks, false);
+    }
+
+    private void showQuickActions(String titleText, String metaText, DeviceAudioTrack coverTrack, List<DeviceAudioTrack> tracks, boolean includeAlbumAction) {
+        if (tracks == null || tracks.isEmpty()) {
+            return;
+        }
+        Dialog dialog = new Dialog(this);
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+
+        LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+        body.setPadding(dp(20), dp(18), dp(20), dp(22));
+        body.setBackground(roundedStroke(0xF0181818, 0x22FFFFFF, 22, 1));
+
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams coverParams = new LinearLayout.LayoutParams(dp(46), dp(46));
+        coverParams.setMargins(0, 0, dp(14), 0);
+        header.addView(trackCoverView(coverTrack), coverParams);
+
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        TextView title = text(titleText, 16, R.color.ytet_text, true);
+        title.setSingleLine(true);
+        title.setEllipsize(TextUtils.TruncateAt.END);
+        copy.addView(title, marginBottom(3));
+        TextView meta = muted(metaText, 13);
+        meta.setSingleLine(true);
+        meta.setEllipsize(TextUtils.TruncateAt.END);
+        copy.addView(meta, matchWrap());
+        header.addView(copy, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        body.addView(header, marginBottom(16));
+
+        View divider = new View(this);
+        divider.setBackgroundColor(0x22FFFFFF);
+        body.addView(divider, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1));
+
+        body.addView(trackQuickActionRow(R.drawable.ic_skip_next, "다음 곡으로 재생", () -> {
+            dialog.dismiss();
+            playTracksNext(tracks);
+        }), matchWrap());
+        body.addView(trackQuickActionRow(R.drawable.ic_queue_music, "현재 재생목록에 추가", () -> {
+            dialog.dismiss();
+            addTracksToCurrentQueue(tracks);
+        }), matchWrap());
+        body.addView(trackQuickActionRow(R.drawable.ic_queue_music, "재생목록에 저장", () -> {
+            dialog.dismiss();
+            showPlaylistPickerDialog(tracks);
+        }), matchWrap());
+        if (includeAlbumAction) {
+            body.addView(trackQuickActionRow(R.drawable.ic_queue_music, "앨범에 추가", () -> {
+                dialog.dismiss();
+                showAlbumPickerDialog(tracks.get(0));
+            }), matchWrap());
+        }
+
+        dialog.setContentView(body);
+        dialog.show();
+        Window window = dialog.getWindow();
+        if (window != null) {
+            window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            window.setGravity(Gravity.BOTTOM);
+            window.setDimAmount(0.56f);
+            window.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.WRAP_CONTENT);
+        }
+    }
+
+    private View trackQuickActionRow(int iconRes, String label, Runnable action) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(8), dp(16), dp(8), dp(8));
+        row.setClickable(true);
+        row.setFocusable(true);
+        row.setOnClickListener(view -> action.run());
+
+        ImageView icon = new ImageView(this);
+        Drawable drawable = getDrawable(iconRes);
+        if (drawable != null) {
+            drawable = drawable.mutate();
+            drawable.setTint(color(R.color.ytet_text));
+            icon.setImageDrawable(drawable);
+        }
+        row.addView(icon, marginRight(18, dp(34), dp(34)));
+        row.addView(text(label, 17, R.color.ytet_text, true), matchWrap());
+        return row;
+    }
+
+    private void playTracksNext(List<DeviceAudioTrack> tracks) {
+        List<DeviceAudioTrack> queueTracks = cleanTrackList(tracks);
+        if (queueTracks.isEmpty()) {
+            toast("추가할 음악이 없습니다.");
+            return;
+        }
+        updateLocalQueuePreview(queueTracks, true);
+        startPlayback(PlaybackService.queueEditIntent(this, PlaybackService.ACTION_PLAY_NEXT, queueTracks));
+        toast(queueTracks.size() == 1 ? "다음 곡으로 추가했습니다." : queueTracks.size() + "곡을 다음 곡으로 추가했습니다.");
+    }
+
+    private void addTracksToCurrentQueue(List<DeviceAudioTrack> tracks) {
+        List<DeviceAudioTrack> queueTracks = cleanTrackList(tracks);
+        if (queueTracks.isEmpty()) {
+            toast("추가할 음악이 없습니다.");
+            return;
+        }
+        updateLocalQueuePreview(queueTracks, false);
+        startPlayback(PlaybackService.queueEditIntent(this, PlaybackService.ACTION_ADD_TO_QUEUE, queueTracks));
+        toast(queueTracks.size() == 1 ? "현재 재생목록에 추가했습니다." : queueTracks.size() + "곡을 현재 재생목록에 추가했습니다.");
+    }
+
+    private List<DeviceAudioTrack> cleanTrackList(List<DeviceAudioTrack> tracks) {
+        List<DeviceAudioTrack> clean = new ArrayList<>();
+        if (tracks == null) {
+            return clean;
+        }
+        for (DeviceAudioTrack track : tracks) {
+            if (track != null) {
+                clean.add(track);
+            }
+        }
+        return clean;
+    }
+
+    private void updateLocalQueuePreview(List<DeviceAudioTrack> tracks, boolean playNext) {
+        if (tracks == null || tracks.isEmpty()) {
+            return;
+        }
+        List<DeviceAudioTrack> preview = new ArrayList<>(activeQueuePreview);
+        if (preview.isEmpty()) {
+            preview.addAll(tracks);
+            activeQueuePreview = preview;
+            playbackQueueIndex = 0;
+            playbackQueueSize = preview.size();
+            playbackHasQueue = true;
+            activeStation = new MusicStation(
+                    "manual-queue",
+                    "현재 재생목록",
+                    "재생목록",
+                    preview.size() + "곡",
+                    "사용자가 추가한 음악",
+                    MusicStation.MixType.TRACK,
+                    "",
+                    color(R.color.ytet_accent)
+            );
+            applyPreviewTrackTheme(preview.get(0));
+            playbackTitle = preview.get(0).title();
+            playbackMeta = preview.get(0).artist() + " · " + preview.get(0).album();
+            playbackArtist = preview.get(0).artist();
+            playbackAlbum = preview.get(0).album();
+            playbackAlbumArtUri = preview.get(0).albumArtUri();
+            playbackPreparing = true;
+            playbackWillPlay = true;
+            updateNowPlayingBar();
+            updateExpandedPlayer();
+            return;
+        }
+        int insertIndex = playNext
+                ? Math.max(0, Math.min(preview.size(), playbackQueueIndex + 1))
+                : preview.size();
+        preview.addAll(insertIndex, tracks);
+        activeQueuePreview = preview;
+        playbackQueueSize = preview.size();
+        updateExpandedPlayer();
+        updateQueueDialog();
+    }
+
+    private void showPlaylistPickerDialog(List<DeviceAudioTrack> tracksToAdd) {
+        List<DeviceAudioTrack> tracks = cleanTrackList(tracksToAdd);
+        if (tracks.isEmpty()) {
+            toast("저장할 음악이 없습니다.");
+            return;
+        }
+        List<UserPlaylists.Playlist> playlists = UserPlaylists.list(this);
+        AlertDialog dialog = new AlertDialog.Builder(this).create();
+        LinearLayout body = dialogBody("재생목록에 저장");
+        body.addView(muted(tracks.size() == 1
+                ? tracks.get(0).title()
+                : tracks.size() + "곡을 저장합니다.", 13), marginBottom(12));
+        body.addView(playlistPickerRow(
+                "새 재생목록에 추가",
+                "새로 만들고 선택한 음악을 바로 저장",
+                () -> {
+                    dialog.dismiss();
+                    showCreatePlaylistDialog(tracks);
+                }
+        ), marginBottom(8));
+
+        if (playlists.isEmpty()) {
+            body.addView(muted("아직 저장된 재생목록이 없습니다.", 13), marginBottom(12));
+        } else {
+            ScrollView scroll = new ScrollView(this);
+            LinearLayout list = new LinearLayout(this);
+            list.setOrientation(LinearLayout.VERTICAL);
+            for (UserPlaylists.Playlist playlist : playlists) {
+                LibraryGroup group = playlistGroup(playlist);
+                list.addView(playlistPickerRow(
+                        playlist.title(),
+                        group.subtitle,
+                        () -> {
+                            dialog.dismiss();
+                            saveTracksToPlaylist(playlist, tracks);
+                        }
+                ), marginBottom(8));
+            }
+            scroll.addView(list, matchWrap());
+            body.addView(scroll, new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp(300)
+            ));
+        }
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setGravity(Gravity.END);
+        Button close = detailActionButton("닫기");
+        close.setOnClickListener(view -> dialog.dismiss());
+        actions.addView(close, fixedButtonParams(76, 38, 0));
+        body.addView(actions, matchWrap());
+        dialog.setView(body);
+        dialog.show();
+        styleDetailDialog(dialog);
+    }
+
+    private View playlistPickerRow(String title, String subtitle, Runnable action) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(12), dp(12), dp(12), dp(12));
+        row.setBackground(rounded(color(R.color.ytet_panel), 10));
+        row.setClickable(true);
+        row.setFocusable(true);
+        row.setOnClickListener(view -> action.run());
+
+        ImageView icon = new ImageView(this);
+        Drawable drawable = getDrawable(R.drawable.ic_queue_music);
+        if (drawable != null) {
+            drawable = drawable.mutate();
+            drawable.setTint(color(R.color.ytet_text));
+            icon.setImageDrawable(drawable);
+        }
+        row.addView(icon, marginRight(12, dp(34), dp(34)));
+
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        TextView titleView = text(title, 15, R.color.ytet_text, true);
+        titleView.setSingleLine(true);
+        titleView.setEllipsize(TextUtils.TruncateAt.END);
+        copy.addView(titleView, marginBottom(3));
+        TextView subtitleView = muted(subtitle, 12);
+        subtitleView.setSingleLine(true);
+        subtitleView.setEllipsize(TextUtils.TruncateAt.END);
+        copy.addView(subtitleView, matchWrap());
+        row.addView(copy, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        return row;
+    }
+
+    private void saveTracksToPlaylist(UserPlaylists.Playlist playlist, List<DeviceAudioTrack> tracks) {
+        if (playlist == null) {
+            return;
+        }
+        UserPlaylists.Playlist updated = UserPlaylists.addTracks(this, playlist.id(), trackIdsForTracks(tracks));
+        if (updated == null) {
+            toast("재생목록을 찾을 수 없습니다.");
+            return;
+        }
+        toast(updated.title() + "에 저장했습니다.");
+        renderLibraryDependentTabs();
+    }
+
+    private void showAlbumPickerDialog(DeviceAudioTrack track) {
+        List<LibraryGroup> albums = libraryGroupsForTracks(libraryTracks, LibraryFilter.ALBUM);
+        if (albums.isEmpty()) {
+            toast("추가할 앨범이 없습니다.");
+            return;
+        }
+        AlertDialog[] dialogRef = new AlertDialog[1];
+        String[] query = new String[]{""};
+
+        LinearLayout body = dialogBody("앨범 선택");
+        LinearLayout toolbar = new LinearLayout(this);
+        toolbar.setOrientation(LinearLayout.HORIZONTAL);
+        toolbar.setGravity(Gravity.CENTER_VERTICAL);
+        TextView hint = muted("선택한 앨범명으로 표시하고 가능한 경우 파일도 해당 앨범 폴더로 이동합니다.", 11);
+        toolbar.addView(hint, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        ImageButton search = toolbarIconButton(R.drawable.ic_search, "앨범 검색", false);
+        toolbar.addView(search, new LinearLayout.LayoutParams(dp(42), dp(42)));
+        body.addView(toolbar, marginBottom(8));
+
+        EditText searchInput = metadataEditField("앨범 검색", "");
+        searchInput.setVisibility(View.GONE);
+        body.addView(searchInput, marginBottom(10));
+
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        scroll.addView(list, matchWrap());
+        body.addView(scroll, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(330)
+        ));
+
+        Runnable[] render = new Runnable[1];
+        render[0] = () -> renderAlbumPickerList(list, albums, query[0], dialogRef[0], track);
+        search.setOnClickListener(view -> {
+            boolean show = searchInput.getVisibility() != View.VISIBLE;
+            searchInput.setVisibility(show ? View.VISIBLE : View.GONE);
+            if (show) {
+                searchInput.requestFocus();
+                searchInput.setCursorVisible(true);
+                showKeyboard(searchInput);
+            } else {
+                searchInput.setText("");
+                query[0] = "";
+                hideKeyboard(searchInput);
+                render[0].run();
+            }
+        });
+        searchInput.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence text, int start, int count, int after) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence text, int start, int before, int count) {
+                query[0] = text == null ? "" : text.toString();
+                render[0].run();
+            }
+
+            @Override
+            public void afterTextChanged(Editable text) {
+            }
+        });
+
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setView(body)
+                .create();
+        dialogRef[0] = dialog;
+        render[0].run();
+        dialog.show();
+        styleDetailDialog(dialog);
+    }
+
+    private void renderAlbumPickerList(LinearLayout list, List<LibraryGroup> albums, String query, AlertDialog dialog, DeviceAudioTrack track) {
+        list.removeAllViews();
+        String cleanQuery = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
+        int shown = 0;
+        for (LibraryGroup album : albums) {
+            if (!cleanQuery.isEmpty()
+                    && !album.title.toLowerCase(Locale.ROOT).contains(cleanQuery)
+                    && !album.subtitle.toLowerCase(Locale.ROOT).contains(cleanQuery)) {
+                continue;
+            }
+            list.addView(albumPickerRow(album, () -> {
+                if (dialog != null) {
+                    dialog.dismiss();
+                }
+                addTrackToAlbum(track, album);
+            }), marginBottom(8));
+            shown++;
+            if (shown >= 60) {
+                break;
+            }
+        }
+        if (shown == 0) {
+            list.addView(muted("검색된 앨범이 없습니다.", 13), matchWrap());
+        }
+    }
+
+    private View albumPickerRow(LibraryGroup album, Runnable action) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(10), dp(10), dp(10), dp(10));
+        row.setBackground(rounded(color(R.color.ytet_panel), 8));
+        row.setClickable(true);
+        row.setFocusable(true);
+        row.setOnClickListener(view -> action.run());
+
+        LinearLayout.LayoutParams coverParams = new LinearLayout.LayoutParams(dp(48), dp(48));
+        coverParams.setMargins(0, 0, dp(12), 0);
+        row.addView(groupCoverView(album), coverParams);
+
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        TextView title = text(album.title, 14, R.color.ytet_text, true);
+        title.setSingleLine(true);
+        title.setEllipsize(TextUtils.TruncateAt.END);
+        copy.addView(title, marginBottom(3));
+        TextView subtitle = muted(album.subtitle, 12);
+        subtitle.setSingleLine(true);
+        subtitle.setEllipsize(TextUtils.TruncateAt.END);
+        copy.addView(subtitle, matchWrap());
+        row.addView(copy, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        return row;
+    }
+
+    private void addTrackToAlbum(DeviceAudioTrack track, LibraryGroup album) {
+        if (track == null || album == null) {
+            return;
+        }
+        String albumTitle = valueOrDefault(album.title, "앨범 정보 없음");
+        DeviceAudioTrack edited = TrackMetadataOverrides.saveAlbum(this, track, albumTitle);
+        applyEditedTrack(edited);
+        boolean moved = moveTrackToAlbumFolder(track, albumFolderLabel(album), false);
+        if (moved) {
+            toast("앨범에 추가하고 파일을 이동했습니다.");
+            startLibraryRefresh(true);
+            startHomeRefresh(false);
+        } else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            toast("앨범명은 변경했습니다. 이 Android 버전에서는 앱에서 파일 위치를 직접 이동할 수 없습니다.");
+        } else {
+            toast("앨범명을 변경했습니다. 파일 이동은 권한이 허용되는 경우 적용됩니다.");
+        }
+    }
+
+    private String albumFolderLabel(LibraryGroup album) {
+        String folder = sharedFolderLabel(album.tracks);
+        if (!folder.trim().isEmpty()
+                && !DefaultMediaPaths.MUSIC_FOLDER.equalsIgnoreCase(folder.trim())) {
+            return folder.trim();
+        }
+        return valueOrDefault(album.title, "Album");
+    }
+
+    private boolean moveTrackToAlbumFolder(DeviceAudioTrack track, String targetFolderLabel, boolean fromPermissionResult) {
+        if (track == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            clearPendingAlbumMove();
+            return false;
+        }
+        String safeFolder = safeMediaFolderName(targetFolderLabel);
+        if (safeFolder.isEmpty()) {
+            return false;
+        }
+        if (safeFolder.equalsIgnoreCase(track.folder())) {
+            clearPendingAlbumMove();
+            return false;
+        }
+        String targetRelativePath = DefaultMediaPaths.normalizeRelativePath(
+                DefaultMediaPaths.musicRelativePath() + "/" + safeFolder
+        );
+        Uri uri = Uri.parse(track.contentUri());
+        ContentValues values = new ContentValues();
+        values.put(MediaStore.MediaColumns.RELATIVE_PATH, targetRelativePath);
+        try {
+            int updated = getContentResolver().update(uri, values, null, null);
+            clearPendingAlbumMove();
+            return updated > 0;
+        } catch (SecurityException exception) {
+            if (!fromPermissionResult) {
+                pendingAlbumMoveTrack = track;
+                pendingAlbumMoveFolder = safeFolder;
+                requestMovePermission(exception, uri);
+            } else {
+                clearPendingAlbumMove();
+                toast("파일 이동 권한을 얻지 못했습니다.");
+            }
+            return false;
+        }
+    }
+
+    private void requestMovePermission(SecurityException exception, Uri uri) {
+        try {
+            IntentSender intentSender = null;
+            if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q && exception instanceof RecoverableSecurityException) {
+                intentSender = ((RecoverableSecurityException) exception)
+                        .getUserAction()
+                        .getActionIntent()
+                        .getIntentSender();
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                List<Uri> uris = new ArrayList<>();
+                uris.add(uri);
+                intentSender = MediaStore.createWriteRequest(getContentResolver(), uris).getIntentSender();
+            }
+            if (intentSender == null) {
+                toast("파일 이동 권한을 요청할 수 없습니다.");
+                return;
+            }
+            startIntentSenderForResult(intentSender, REQUEST_MOVE_AUDIO, null, 0, 0, 0);
+        } catch (IntentSender.SendIntentException intentException) {
+            toast("파일 이동 확인 화면을 열 수 없습니다.");
+        }
+    }
+
+    private void retryPendingAlbumMove() {
+        if (pendingAlbumMoveTrack == null || pendingAlbumMoveFolder.trim().isEmpty()) {
+            clearPendingAlbumMove();
+            return;
+        }
+        DeviceAudioTrack track = pendingAlbumMoveTrack;
+        String folder = pendingAlbumMoveFolder;
+        boolean moved = moveTrackToAlbumFolder(track, folder, true);
+        if (moved) {
+            toast("파일을 앨범 폴더로 이동했습니다.");
+            startLibraryRefresh(true);
+            startHomeRefresh(false);
+        }
+    }
+
+    private void clearPendingAlbumMove() {
+        pendingAlbumMoveTrack = null;
+        pendingAlbumMoveFolder = "";
+    }
+
+    private String safeMediaFolderName(String value) {
+        String clean = value == null ? "" : value.trim();
+        clean = clean.replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]+", " ");
+        clean = clean.replaceAll("\\s+", " ").trim();
+        while (clean.startsWith(".")) {
+            clean = clean.substring(1).trim();
+        }
+        return clean;
     }
 
     private void showTrackDetails(DeviceAudioTrack track) {
@@ -2807,6 +3907,41 @@ public final class MainActivity extends Activity {
         updateQueueDialog();
     }
 
+    private void applyEditedTracks(List<DeviceAudioTrack> editedTracks) {
+        if (editedTracks == null || editedTracks.isEmpty()) {
+            return;
+        }
+        Map<Long, DeviceAudioTrack> edits = new HashMap<>();
+        for (DeviceAudioTrack track : editedTracks) {
+            if (track != null) {
+                edits.put(track.id(), track);
+                librarySearchIndex.remove(track.id());
+            }
+        }
+        if (edits.isEmpty()) {
+            return;
+        }
+        libraryTracks = replaceEditedTracks(libraryTracks, edits);
+        homeTracks = replaceEditedTracks(homeTracks, edits);
+        activeQueuePreview = replaceEditedTracks(activeQueuePreview, edits);
+        DeviceAudioTrack current = edits.get(playbackTrackId);
+        if (current != null) {
+            playbackTitle = current.title();
+            playbackArtist = current.artist();
+            playbackAlbum = current.album();
+            playbackMeta = current.artist() + " · " + current.album();
+            playbackAlbumArtUri = current.albumArtUri();
+        }
+        selectedTrack = null;
+        focusedLibraryGroup = null;
+        focusedLibraryGroupFilter = null;
+        focusedParentArtistGroup = null;
+        renderLibraryDependentTabs();
+        updateNowPlayingBar();
+        updateExpandedPlayer();
+        updateQueueDialog();
+    }
+
     private List<DeviceAudioTrack> replaceEditedTrack(List<DeviceAudioTrack> tracks, DeviceAudioTrack edited) {
         List<DeviceAudioTrack> replaced = new ArrayList<>();
         if (tracks == null) {
@@ -2814,6 +3949,18 @@ public final class MainActivity extends Activity {
         }
         for (DeviceAudioTrack track : tracks) {
             replaced.add(track != null && track.id() == edited.id() ? edited : track);
+        }
+        return replaced;
+    }
+
+    private List<DeviceAudioTrack> replaceEditedTracks(List<DeviceAudioTrack> tracks, Map<Long, DeviceAudioTrack> edits) {
+        List<DeviceAudioTrack> replaced = new ArrayList<>();
+        if (tracks == null) {
+            return replaced;
+        }
+        for (DeviceAudioTrack track : tracks) {
+            DeviceAudioTrack edited = track == null ? null : edits.get(track.id());
+            replaced.add(edited == null ? track : edited);
         }
         return replaced;
     }
@@ -2850,7 +3997,7 @@ public final class MainActivity extends Activity {
 
         addTopVisualAlignmentSpacer(root);
         root.addView(label("YouTube URL"), marginBottom(8));
-        urlInput = new EditText(this);
+        urlInput = new UrlEditText(this);
         urlInput.setSingleLine(true);
         urlInput.setText(extractorUrl);
         urlInput.setHint("https://youtu.be/...");
@@ -3178,24 +4325,80 @@ public final class MainActivity extends Activity {
         if (nowPlayingBar == null || nowPlayingTitle == null || nowPlayingMeta == null || playPauseButton == null) {
             return;
         }
-        if (!playbackHasQueue && activeStation == null) {
-            updatePlaybackThemeColor(true);
-            nowPlayingBar.setBackground(nowPlayingBarBackground(true));
-            setNowPlayingCover(true);
-            setMarqueeText(nowPlayingTitle, "로컬 재생 대기");
-            setMarqueeText(nowPlayingMeta, "기기 음악을 스캔하면 재생할 수 있습니다.");
-            playPauseButton.setImageResource(R.drawable.ic_play_arrow);
-            playPauseButton.setContentDescription("재생");
-            return;
-        }
-        updatePlaybackThemeColor(false);
-        nowPlayingBar.setBackground(nowPlayingBarBackground(false));
-        setNowPlayingCover(false);
-        setMarqueeText(nowPlayingTitle, playbackTitle);
-        setMarqueeText(nowPlayingMeta, playbackPreparing || playbackError ? streamStatus : miniPlaybackMeta());
+        boolean idle = !playbackHasQueue && activeStation == null;
+        String title = idle ? "로컬 재생 대기" : playbackTitle;
+        String meta = idle
+                ? "기기 음악을 스캔하면 재생할 수 있습니다."
+                : playbackPreparing || playbackError ? streamStatus : miniPlaybackMeta();
+        long renderTrackId = idle ? -1L : playbackTrackId;
+        boolean contentChanged = !nowPlayingContentInitialized
+                || renderedNowPlayingIdle != idle
+                || renderedNowPlayingTrackId != renderTrackId
+                || !TextUtils.equals(renderedNowPlayingTitle, title)
+                || !TextUtils.equals(renderedNowPlayingMeta, meta);
+
+        updatePlaybackThemeColor(idle);
+        nowPlayingBar.setBackground(nowPlayingBarBackground(idle));
+        applyNowPlayingContent(idle, title, meta, contentChanged && nowPlayingContentInitialized);
+        renderedNowPlayingIdle = idle;
+        renderedNowPlayingTrackId = renderTrackId;
+        renderedNowPlayingTitle = title;
+        renderedNowPlayingMeta = meta;
+        nowPlayingContentInitialized = true;
+
         boolean waitingToPlay = playbackPlaying || playbackWillPlay;
         playPauseButton.setImageResource(waitingToPlay ? R.drawable.ic_pause : R.drawable.ic_play_arrow);
         playPauseButton.setContentDescription(waitingToPlay ? "일시정지" : "재생");
+    }
+
+    private void applyNowPlayingContent(boolean idle, String title, String meta, boolean animate) {
+        if (!animate) {
+            setNowPlayingCover(idle);
+            setMarqueeText(nowPlayingTitle, title);
+            setMarqueeText(nowPlayingMeta, meta);
+            setNowPlayingContentAlpha(1f);
+            return;
+        }
+        cancelNowPlayingContentAnimations();
+        nowPlayingCover.animate().alpha(0f).setDuration(90L).start();
+        nowPlayingMeta.animate().alpha(0f).setDuration(90L).start();
+        nowPlayingTitle.animate()
+                .alpha(0f)
+                .setDuration(90L)
+                .withEndAction(() -> {
+                    setNowPlayingCover(idle);
+                    setMarqueeText(nowPlayingTitle, title);
+                    setMarqueeText(nowPlayingMeta, meta);
+                    setNowPlayingContentAlpha(0f);
+                    nowPlayingCover.animate().alpha(1f).setDuration(160L).start();
+                    nowPlayingTitle.animate().alpha(1f).setDuration(160L).start();
+                    nowPlayingMeta.animate().alpha(1f).setDuration(160L).start();
+                })
+                .start();
+    }
+
+    private void cancelNowPlayingContentAnimations() {
+        if (nowPlayingCover != null) {
+            nowPlayingCover.animate().cancel();
+        }
+        if (nowPlayingTitle != null) {
+            nowPlayingTitle.animate().cancel();
+        }
+        if (nowPlayingMeta != null) {
+            nowPlayingMeta.animate().cancel();
+        }
+    }
+
+    private void setNowPlayingContentAlpha(float alpha) {
+        if (nowPlayingCover != null) {
+            nowPlayingCover.setAlpha(alpha);
+        }
+        if (nowPlayingTitle != null) {
+            nowPlayingTitle.setAlpha(alpha);
+        }
+        if (nowPlayingMeta != null) {
+            nowPlayingMeta.setAlpha(alpha);
+        }
     }
 
     private void setMarqueeText(TextView view, String value) {
@@ -4190,7 +5393,7 @@ public final class MainActivity extends Activity {
             return;
         }
         homeLoading = true;
-        homeStatus = "보관함 " + DefaultMediaPaths.displayPath(MediaType.AUDIO) + " 경로를 스캔하는 중입니다.";
+        homeStatus = "";
         if (renderImmediately && currentTab == Tab.HOME) {
             renderCurrentTab();
         }
@@ -4229,9 +5432,7 @@ public final class MainActivity extends Activity {
             return;
         }
         libraryLoading = true;
-        libraryStatus = isDeviceFileSource()
-                ? "기기 파일의 음악을 스캔하는 중입니다."
-                : "보관함 " + DefaultMediaPaths.displayPath(MediaType.AUDIO) + " 경로를 스캔하는 중입니다.";
+        libraryStatus = "";
         if (renderImmediately && (currentTab == Tab.HOME || currentTab == Tab.LIBRARY)) {
             renderCurrentTab();
         }
@@ -4338,12 +5539,32 @@ public final class MainActivity extends Activity {
         if (selectedTrack == null) {
             return;
         }
-        pendingDeleteTrack = selectedTrack;
-        Uri uri = Uri.parse(selectedTrack.contentUri());
+        List<DeviceAudioTrack> tracks = new ArrayList<>();
+        tracks.add(selectedTrack);
+        deleteTracks(tracks);
+    }
+
+    private void deleteTracks(List<DeviceAudioTrack> tracks) {
+        if (tracks == null || tracks.isEmpty()) {
+            return;
+        }
+        List<DeviceAudioTrack> targets = new ArrayList<>();
+        List<Uri> uris = new ArrayList<>();
+        for (DeviceAudioTrack track : tracks) {
+            if (track == null || track.contentUri().trim().isEmpty()) {
+                continue;
+            }
+            targets.add(track);
+            uris.add(Uri.parse(track.contentUri()));
+        }
+        if (targets.isEmpty()) {
+            toast("삭제할 파일이 없습니다.");
+            return;
+        }
+        pendingDeleteTracks = targets;
+        pendingDeleteTrack = targets.get(0);
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                List<Uri> uris = new ArrayList<>();
-                uris.add(uri);
                 PendingIntent pendingIntent = MediaStore.createDeleteRequest(getContentResolver(), uris);
                 startIntentSenderForResult(
                         pendingIntent.getIntentSender(),
@@ -4360,7 +5581,7 @@ public final class MainActivity extends Activity {
                 requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, REQUEST_WRITE_LIBRARY);
                 return;
             }
-            deleteTrackDirectly(selectedTrack);
+            deleteTracksDirectly(targets);
         } catch (IntentSender.SendIntentException exception) {
             toast("삭제 확인 화면을 열 수 없습니다.");
         } catch (SecurityException exception) {
@@ -4369,20 +5590,45 @@ public final class MainActivity extends Activity {
     }
 
     private void handleWritePermissionResult(int[] grantResults) {
-        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED && pendingDeleteTrack != null) {
-            deleteTrackDirectly(pendingDeleteTrack);
+        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED && !pendingDeleteTracks.isEmpty()) {
+            deleteTracksDirectly(pendingDeleteTracks);
         } else {
             toast("파일 삭제에는 저장소 쓰기 권한이 필요합니다.");
         }
     }
 
     private void deleteTrackDirectly(DeviceAudioTrack track) {
-        Uri uri = Uri.parse(track.contentUri());
+        List<DeviceAudioTrack> tracks = new ArrayList<>();
+        tracks.add(track);
+        deleteTracksDirectly(tracks);
+    }
+
+    private void deleteTracksDirectly(List<DeviceAudioTrack> tracks) {
+        if (tracks == null || tracks.isEmpty()) {
+            return;
+        }
+        int deletedCount = 0;
         try {
-            int deleted = getContentResolver().delete(uri, null, null);
-            toast(deleted > 0 ? "선택한 파일을 삭제했습니다." : "삭제할 수 없는 파일입니다.");
+            for (DeviceAudioTrack track : tracks) {
+                if (track == null || track.contentUri().trim().isEmpty()) {
+                    continue;
+                }
+                pendingDeleteTrack = track;
+                Uri uri = Uri.parse(track.contentUri());
+                int deleted = getContentResolver().delete(uri, null, null);
+                if (deleted > 0) {
+                    deletedCount += deleted;
+                }
+            }
+            toast(deletedCount > 0
+                    ? deletedCount + "개 파일을 삭제했습니다."
+                    : "삭제할 수 없는 파일입니다.");
             selectedTrack = null;
+            focusedLibraryGroup = null;
+            focusedLibraryGroupFilter = null;
+            focusedParentArtistGroup = null;
             pendingDeleteTrack = null;
+            pendingDeleteTracks = new ArrayList<>();
             startLibraryRefresh(true);
         } catch (SecurityException exception) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && exception instanceof RecoverableSecurityException) {
@@ -4934,20 +6180,23 @@ public final class MainActivity extends Activity {
 
     private void styleUrlInput(EditText input) {
         styleInput(input);
-        input.setTextSize(12);
+        input.setTextSize(14);
         input.setSelectAllOnFocus(false);
         input.setHorizontallyScrolling(true);
         input.setHorizontalFadingEdgeEnabled(true);
         input.setFadingEdgeLength(dp(24));
         input.setImeOptions(EditorInfo.IME_ACTION_DONE);
         input.setPadding(dp(10), 0, dp(10), 0);
+        input.setCursorVisible(false);
         input.setOnClickListener(view -> {
             input.requestFocus();
             input.setCursorVisible(true);
             showKeyboard(input);
         });
         input.setOnFocusChangeListener((view, hasFocus) -> {
-            input.setCursorVisible(hasFocus);
+            if (!hasFocus) {
+                input.setCursorVisible(false);
+            }
         });
     }
 
@@ -5693,6 +6942,90 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private final class UrlEditText extends EditText {
+        private final int touchSlop;
+        private float downX;
+        private float downY;
+        private int downScrollX;
+        private boolean horizontalDragging;
+
+        private UrlEditText(Context context) {
+            super(context);
+            touchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
+        }
+
+        @Override
+        public boolean onTouchEvent(MotionEvent event) {
+            if (!isEnabled()) {
+                return super.onTouchEvent(event);
+            }
+            int action = event.getActionMasked();
+            if (action == MotionEvent.ACTION_DOWN) {
+                downX = event.getX();
+                downY = event.getY();
+                downScrollX = getScrollX();
+                horizontalDragging = false;
+                requestFocus();
+                setCursorVisible(true);
+                showKeyboard(this);
+                super.onTouchEvent(event);
+                return true;
+            }
+            if (action == MotionEvent.ACTION_MOVE) {
+                float deltaX = downX - event.getX();
+                float deltaY = downY - event.getY();
+                if (!horizontalDragging && Math.abs(deltaX) > touchSlop && Math.abs(deltaX) > Math.abs(deltaY)) {
+                    horizontalDragging = true;
+                    MotionEvent cancel = MotionEvent.obtain(event);
+                    cancel.setAction(MotionEvent.ACTION_CANCEL);
+                    super.onTouchEvent(cancel);
+                    cancel.recycle();
+                }
+                if (horizontalDragging) {
+                    scrollTo(clampUrlScroll(downScrollX + Math.round(deltaX)), getScrollY());
+                    return true;
+                }
+                return super.onTouchEvent(event);
+            }
+            if (action == MotionEvent.ACTION_UP) {
+                if (horizontalDragging) {
+                    horizontalDragging = false;
+                    return true;
+                }
+                boolean handled = super.onTouchEvent(event);
+                setCursorVisible(true);
+                showKeyboard(this);
+                return handled;
+            }
+            if (action == MotionEvent.ACTION_CANCEL) {
+                horizontalDragging = false;
+            }
+            return super.onTouchEvent(event);
+        }
+
+        @Override
+        public boolean performClick() {
+            setCursorVisible(true);
+            showKeyboard(this);
+            return super.performClick();
+        }
+
+        private int clampUrlScroll(int value) {
+            return Math.max(0, Math.min(value, maxUrlScroll()));
+        }
+
+        private int maxUrlScroll() {
+            int visibleWidth = Math.max(0, getWidth() - getCompoundPaddingLeft() - getCompoundPaddingRight());
+            int textWidth = 0;
+            if (getLayout() != null && getLayout().getLineCount() > 0) {
+                textWidth = (int) Math.ceil(getLayout().getLineWidth(0));
+            } else if (getText() != null) {
+                textWidth = (int) Math.ceil(getPaint().measureText(getText().toString()));
+            }
+            return Math.max(0, textWidth - visibleWidth);
+        }
+    }
+
     private static final class TabItem {
         private final LinearLayout root;
         private final ImageView icon;
@@ -5734,7 +7067,8 @@ public final class MainActivity extends Activity {
     private enum LibraryFilter {
         ALL,
         ALBUM,
-        ARTIST
+        ARTIST,
+        PLAYLIST
     }
 
     private enum LibrarySort {

@@ -59,6 +59,16 @@ public final class TrackMetadataOverrides {
         return apply(context, track);
     }
 
+    public static DeviceAudioTrack saveAlbum(Context context, DeviceAudioTrack track, String album) {
+        if (context == null || track == null) {
+            return track;
+        }
+        prefs(context).edit()
+                .putString(ALBUM_PREFIX + key(track), clean(album, track.album()))
+                .apply();
+        return apply(context, track);
+    }
+
     private static SharedPreferences prefs(Context context) {
         return context.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
     }

@@ -48,6 +48,8 @@ public final class PlaybackService extends Service {
     public static final String ACTION_SEEK_TO = "com.ytet.android.action.PLAYBACK_SEEK_TO";
     public static final String ACTION_TOGGLE_SHUFFLE = "com.ytet.android.action.PLAYBACK_TOGGLE_SHUFFLE";
     public static final String ACTION_TOGGLE_REPEAT = "com.ytet.android.action.PLAYBACK_TOGGLE_REPEAT";
+    public static final String ACTION_PLAY_NEXT = "com.ytet.android.action.PLAYBACK_PLAY_NEXT";
+    public static final String ACTION_ADD_TO_QUEUE = "com.ytet.android.action.PLAYBACK_ADD_TO_QUEUE";
     public static final String ACTION_SET_SLEEP_TIMER = "com.ytet.android.action.PLAYBACK_SET_SLEEP_TIMER";
     public static final String ACTION_CANCEL_SLEEP_TIMER = "com.ytet.android.action.PLAYBACK_CANCEL_SLEEP_TIMER";
     public static final String ACTION_TOGGLE_SLEEP_TIMER_PAUSE = "com.ytet.android.action.PLAYBACK_TOGGLE_SLEEP_TIMER_PAUSE";
@@ -181,6 +183,18 @@ public final class PlaybackService extends Service {
         return intent;
     }
 
+    public static Intent queueEditIntent(Context context, String action, List<DeviceAudioTrack> tracks) {
+        Intent intent = new Intent(context, PlaybackService.class);
+        intent.setAction(action);
+        int count = tracks == null ? 0 : tracks.size();
+        long[] ids = new long[count];
+        for (int index = 0; index < count; index++) {
+            ids[index] = tracks.get(index).id();
+        }
+        intent.putExtra(EXTRA_TRACK_IDS, ids);
+        return intent;
+    }
+
     public static Intent sleepTimerIntent(Context context, int minutes) {
         Intent intent = new Intent(context, PlaybackService.class);
         intent.setAction(minutes <= 0 ? ACTION_CANCEL_SLEEP_TIMER : ACTION_SET_SLEEP_TIMER);
@@ -270,6 +284,10 @@ public final class PlaybackService extends Service {
             toggleShuffle();
         } else if (ACTION_TOGGLE_REPEAT.equals(action)) {
             toggleRepeat();
+        } else if (ACTION_PLAY_NEXT.equals(action)) {
+            editQueueAsync(intent, true);
+        } else if (ACTION_ADD_TO_QUEUE.equals(action)) {
+            editQueueAsync(intent, false);
         } else if (ACTION_SET_SLEEP_TIMER.equals(action)) {
             setSleepTimer(intent.getIntExtra(EXTRA_SLEEP_TIMER_MINUTES, 0));
         } else if (ACTION_CANCEL_SLEEP_TIMER.equals(action)) {
@@ -312,8 +330,6 @@ public final class PlaybackService extends Service {
         long[] ids = intent.getLongArrayExtra(EXTRA_TRACK_IDS);
         int startIndex = Math.max(0, intent.getIntExtra(EXTRA_START_INDEX, 0));
 
-        queue.clear();
-        queueIndex = 0;
         failedTrackSkips = 0;
         errorStatus = null;
         mixTitle = safeExtra(intent, EXTRA_MIX_TITLE, "로컬 음악");
@@ -367,6 +383,52 @@ public final class PlaybackService extends Service {
         playing = false;
         startWhenPrepared = false;
         errorStatus = "재생 큐를 불러오지 못했습니다: " + safeMessage(exception);
+        updateTransportState();
+        showNotification();
+        broadcastState();
+    }
+
+    private void editQueueAsync(Intent intent, boolean playNext) {
+        long[] ids = intent.getLongArrayExtra(EXTRA_TRACK_IDS);
+        if (ids == null || ids.length == 0) {
+            return;
+        }
+        int version = queueLoadVersion;
+        queueExecutor.execute(() -> {
+            List<DeviceAudioTrack> loadedTracks;
+            try {
+                loadedTracks = musicLibrary.loadTracksByIds(this, ids);
+            } catch (Exception exception) {
+                mainHandler.post(() -> {
+                    errorStatus = "재생목록에 추가하지 못했습니다: " + safeMessage(exception);
+                    broadcastState();
+                });
+                return;
+            }
+            mainHandler.post(() -> finishQueueEdit(version, loadedTracks, playNext));
+        });
+    }
+
+    private void finishQueueEdit(int version, List<DeviceAudioTrack> loadedTracks, boolean playNext) {
+        if (version != queueLoadVersion || loadedTracks == null || loadedTracks.isEmpty()) {
+            return;
+        }
+        errorStatus = null;
+        if (queue.isEmpty()) {
+            mixTitle = playNext ? "다음 곡" : "사용자 재생목록";
+            mixSubtitle = loadedTracks.size() + "곡";
+            shuffleEnabled = false;
+            repeatMode = REPEAT_OFF;
+            queue.clear();
+            queue.addAll(loadedTracks);
+            queueIndex = 0;
+            failedTrackSkips = 0;
+            prepareCurrentTrack(true);
+            return;
+        }
+        int insertIndex = playNext ? Math.min(queueIndex + 1, queue.size()) : queue.size();
+        queue.addAll(insertIndex, loadedTracks);
+        shuffleEnabled = shuffleEnabled && queue.size() > 1;
         updateTransportState();
         showNotification();
         broadcastState();
