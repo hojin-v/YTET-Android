@@ -128,9 +128,10 @@ public final class MainActivity extends Activity {
     private static final String LIBRARY_SOURCE_COLLECTION = "collection";
     private static final String LIBRARY_SOURCE_DEVICE = "device";
     private static final long LIBRARY_SEARCH_DEBOUNCE_MS = 120L;
-    private static final int LIBRARY_RENDER_LIMIT = 80;
     private static final int LIBRARY_INITIAL_RENDER_ITEMS = 14;
     private static final int LIBRARY_RENDER_BATCH_ITEMS = 12;
+    private static final int QUEUE_INITIAL_RENDER_ITEMS = 18;
+    private static final int QUEUE_RENDER_BATCH_ITEMS = 16;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService libraryExecutor = Executors.newSingleThreadExecutor();
@@ -156,6 +157,7 @@ public final class MainActivity extends Activity {
     private Button updateActionButton;
     private Dialog playerDialog;
     private Dialog queueDialog;
+    private int queueRenderGeneration;
     private AlertDialog updateDialog;
     private OnBackInvokedCallback backInvokedCallback;
     private PlaybackSeekBarView expandedPlaybackSeekBar;
@@ -1426,12 +1428,7 @@ public final class MainActivity extends Activity {
                 root.addView(emptyLibraryView(), matchWrap());
                 return;
             }
-            int limit = Math.min(visibleTracks.size(), LIBRARY_RENDER_LIMIT);
-            appendTrackItems(root, visibleTracks, limit, generation, () -> {
-                if (visibleTracks.size() > limit && isCurrentLibraryRender(root, generation)) {
-                    root.addView(muted("상위 " + limit + "곡만 표시 중입니다. 검색하면 목록을 좁힐 수 있습니다.", 12), matchWrap());
-                }
-            });
+            appendTrackItems(root, visibleTracks, visibleTracks.size(), generation, null);
             return;
         }
 
@@ -1444,12 +1441,7 @@ public final class MainActivity extends Activity {
             root.addView(emptyLibraryView(), matchWrap());
             return;
         }
-        int limit = Math.min(visibleGroups.size(), LIBRARY_RENDER_LIMIT);
-        appendLibraryGroupItems(root, visibleGroups, limit, generation, () -> {
-            if (visibleGroups.size() > limit && isCurrentLibraryRender(root, generation)) {
-                root.addView(muted("상위 " + limit + "개만 표시 중입니다. 검색하면 목록을 좁힐 수 있습니다.", 12), matchWrap());
-            }
-        });
+        appendLibraryGroupItems(root, visibleGroups, visibleGroups.size(), generation, null);
     }
 
     private View emptyLibraryView() {
@@ -5143,6 +5135,7 @@ public final class MainActivity extends Activity {
         if (queueDialog == null) {
             queueDialog = new Dialog(this);
             queueDialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+            queueDialog.setOnDismissListener(dialog -> queueRenderGeneration++);
         }
         queueDialog.setContentView(buildQueueDialogContent());
         queueDialog.show();
@@ -5157,6 +5150,9 @@ public final class MainActivity extends Activity {
     }
 
     private View buildQueueDialogContent() {
+        int generation = ++queueRenderGeneration;
+        List<DeviceAudioTrack> queueSnapshot = new ArrayList<>(activeQueuePreview);
+        int currentIndex = playbackQueueIndex;
         DragDismissLayout root = new DragDismissLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(20), dp(30), dp(20), dp(28));
@@ -5182,12 +5178,12 @@ public final class MainActivity extends Activity {
         ScrollView scroll = new ScrollView(this);
         LinearLayout list = new LinearLayout(this);
         list.setOrientation(LinearLayout.VERTICAL);
-        if (activeQueuePreview.isEmpty()) {
+        if (queueSnapshot.isEmpty()) {
             list.addView(muted("재생목록을 불러오는 중입니다.", 14), matchWrap());
         } else {
-            addQueueSection(list, "이전 곡", 0, Math.max(0, playbackQueueIndex), true);
-            addQueueSection(list, "현재 곡", Math.max(0, playbackQueueIndex), Math.min(activeQueuePreview.size(), playbackQueueIndex + 1), false);
-            addQueueSection(list, "다음 곡", Math.max(0, playbackQueueIndex + 1), activeQueuePreview.size(), false);
+            addQueueSectionNow(list, queueSnapshot, "이전 곡", 0, Math.max(0, currentIndex), true);
+            addQueueSectionNow(list, queueSnapshot, "현재 곡", Math.max(0, currentIndex), Math.min(queueSnapshot.size(), currentIndex + 1), false);
+            appendQueueSection(list, queueSnapshot, "다음 곡", Math.max(0, currentIndex + 1), queueSnapshot.size(), generation);
         }
         scroll.addView(list, matchWrap());
         root.addView(scroll, new LinearLayout.LayoutParams(
@@ -5198,19 +5194,67 @@ public final class MainActivity extends Activity {
         return root;
     }
 
-    private void addQueueSection(LinearLayout list, String title, int from, int to, boolean compactPrevious) {
-        if (from >= to || from >= activeQueuePreview.size()) {
+    private void addQueueSectionNow(
+            LinearLayout list,
+            List<DeviceAudioTrack> queue,
+            String title,
+            int from,
+            int to,
+            boolean compactPrevious
+    ) {
+        if (queue == null || from >= to || from >= queue.size()) {
             return;
         }
         list.addView(sectionTitle(title), marginBottom(10));
         int start = compactPrevious ? Math.max(from, to - 5) : from;
-        int end = Math.min(to, activeQueuePreview.size());
+        int end = Math.min(to, queue.size());
         for (int index = start; index < end; index++) {
-            list.addView(queueRow(activeQueuePreview.get(index), index), marginBottom(8));
+            list.addView(queueRow(queue.get(index), index), marginBottom(8));
         }
         if (compactPrevious && start > from) {
             list.addView(muted("이전 " + (start - from) + "곡은 접혀 있습니다.", 12), marginBottom(12));
         }
+    }
+
+    private void appendQueueSection(
+            LinearLayout list,
+            List<DeviceAudioTrack> queue,
+            String title,
+            int from,
+            int to,
+            int generation
+    ) {
+        if (queue == null || from >= to || from >= queue.size()) {
+            return;
+        }
+        list.addView(sectionTitle(title), marginBottom(10));
+        appendQueueRows(list, queue, Math.max(0, from), Math.min(to, queue.size()), generation, from);
+    }
+
+    private void appendQueueRows(
+            LinearLayout list,
+            List<DeviceAudioTrack> queue,
+            int start,
+            int end,
+            int generation,
+            int sectionStart
+    ) {
+        if (!isCurrentQueueRender(generation)) {
+            return;
+        }
+        int batchSize = start == sectionStart ? QUEUE_INITIAL_RENDER_ITEMS : QUEUE_RENDER_BATCH_ITEMS;
+        int batchEnd = Math.min(end, start + batchSize);
+        for (int index = start; index < batchEnd; index++) {
+            list.addView(queueRow(queue.get(index), index), marginBottom(8));
+        }
+        if (batchEnd >= end) {
+            return;
+        }
+        mainHandler.post(() -> appendQueueRows(list, queue, batchEnd, end, generation, sectionStart));
+    }
+
+    private boolean isCurrentQueueRender(int generation) {
+        return queueDialog != null && queueRenderGeneration == generation;
     }
 
     private void updateQueuePreviewFromIds(long[] ids) {
@@ -5996,7 +6040,7 @@ public final class MainActivity extends Activity {
             icon.setTint(textColor);
             ImageView iconView = new ImageView(this);
             iconView.setImageDrawable(icon);
-            iconView.setTranslationX(-dp(3));
+            iconView.setTranslationX(-dp(6));
             LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(dp(22), dp(22));
             iconParams.setMargins(0, 0, dp(8), 0);
             content.addView(iconView, iconParams);
