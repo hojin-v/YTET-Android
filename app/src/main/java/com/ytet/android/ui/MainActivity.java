@@ -3200,15 +3200,23 @@ public final class MainActivity extends Activity {
         window.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS
                 | WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION);
         window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
-        window.setBackgroundDrawable(new ColorDrawable(statusColor));
-        window.setStatusBarColor(statusColor);
+        window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        window.setStatusBarColor(Color.TRANSPARENT);
         window.setNavigationBarColor(navigationColor);
         View decor = window.getDecorView();
-        decor.setBackgroundColor(statusColor);
-        decor.setSystemUiVisibility(decor.getSystemUiVisibility()
-                & ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
-                & ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+        decor.setBackgroundColor(Color.TRANSPARENT);
+        int flags = decor.getSystemUiVisibility()
+                | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION;
+        flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+        flags &= ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+        decor.setSystemUiVisibility(flags);
         window.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT);
+    }
+
+    private int playerStatusScrimColor() {
+        return Color.argb(144, 0, 0, 0);
     }
 
     private int playerStatusBarColor() {
@@ -3239,8 +3247,10 @@ public final class MainActivity extends Activity {
         root.setOnApplyWindowInsetsListener((view, insets) -> {
             Insets topInsets = insets.getInsets(WindowInsets.Type.statusBars() | WindowInsets.Type.displayCutout());
             Insets bottomInsets = insets.getInsets(WindowInsets.Type.navigationBars());
-            setViewHeight(statusScrim, topInsets.top);
-            content.setPadding(dp(20), dp(22), dp(20), dp(24) + bottomInsets.bottom);
+            int topInset = Math.max(topInsets.top, expandedPlayerStatusInset());
+            int bottomInset = Math.max(bottomInsets.bottom, expandedPlayerNavigationInset());
+            setViewHeight(statusScrim, topInset);
+            content.setPadding(dp(20), dp(22) + topInset, dp(20), dp(24) + bottomInset);
             return insets;
         });
         root.requestApplyInsets();
@@ -3256,7 +3266,7 @@ public final class MainActivity extends Activity {
     }
 
     private boolean expandedPlayerDrawsBehindSystemBars() {
-        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.R;
+        return true;
     }
 
     private int systemBarDimension(String name) {
@@ -3401,32 +3411,40 @@ public final class MainActivity extends Activity {
     }
 
     private View buildExpandedPlayerContent() {
+        FrameLayout frame = new FrameLayout(this);
+        frame.setLayoutParams(new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+        ));
+
         DragDismissLayout root = new DragDismissLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setLayoutParams(new ViewGroup.LayoutParams(
+        root.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
         ));
         updatePlaybackThemeColor(false);
         root.setBackground(expandedPlayerBackground(false));
         root.setPlayerSurfaceStyle(true);
+        frame.addView(root);
 
         int statusInset = expandedPlayerStatusInset();
         int navigationInset = expandedPlayerNavigationInset();
         View statusScrim = new View(this);
-        statusScrim.setBackgroundColor(playerStatusBarColor());
-        root.addView(statusScrim, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
+        statusScrim.setBackgroundColor(playerStatusScrimColor());
+        statusScrim.setClickable(false);
+        statusScrim.setElevation(dp(2));
+        frame.addView(statusScrim, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
                 statusInset
         ));
 
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
-        content.setPadding(dp(20), dp(22), dp(20), dp(24) + navigationInset);
+        content.setPadding(dp(20), dp(22) + statusInset, dp(20), dp(24) + navigationInset);
         root.addView(content, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                0,
-                1f
+                LinearLayout.LayoutParams.MATCH_PARENT
         ));
         applyExpandedPlayerInsets(root, statusScrim, content);
 
@@ -3566,7 +3584,7 @@ public final class MainActivity extends Activity {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 dp(98)
         ));
-        return root;
+        return frame;
     }
 
     private View coverArtView() {
@@ -5198,8 +5216,7 @@ public final class MainActivity extends Activity {
                     || view instanceof RadioGroup
                     || view instanceof ProgressBar
                     || view instanceof PlaybackSeekBarView
-                    || view instanceof SleepTimerDialView
-                    || (view.isClickable() && view.isEnabled());
+                    || view instanceof SleepTimerDialView;
         }
 
         private boolean isRawPointInsideView(View view, float rawX, float rawY) {
