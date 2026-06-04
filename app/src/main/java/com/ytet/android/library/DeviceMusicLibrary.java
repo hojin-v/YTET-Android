@@ -17,7 +17,7 @@ import java.util.Map;
 
 public final class DeviceMusicLibrary {
     private static final int QUERY_CHUNK_SIZE = 200;
-    private static final Uri ALBUM_ART_URI = Uri.parse("content://media/external/audio/albumart");
+    private static final String ALBUM_ART_URI = "content://media/external/audio/albumart";
 
     public List<DeviceAudioTrack> loadTracks(Context context) {
         return loadTracks(context, null);
@@ -97,7 +97,9 @@ public final class DeviceMusicLibrary {
         projection.add(MediaStore.Audio.Media._ID);
         projection.add(MediaStore.Audio.Media.TITLE);
         projection.add(MediaStore.Audio.Media.ARTIST);
-        projection.add(MediaStore.Audio.Media.ALBUM_ARTIST);
+        if (supportsAlbumArtistColumn()) {
+            projection.add(MediaStore.Audio.Media.ALBUM_ARTIST);
+        }
         projection.add(MediaStore.Audio.Media.ALBUM);
         projection.add(MediaStore.Audio.Media.ALBUM_ID);
         projection.add(MediaStore.Audio.Media.TRACK);
@@ -168,8 +170,16 @@ public final class DeviceMusicLibrary {
                 secondsToMillis(getLong(cursor, MediaStore.Audio.Media.DATE_ADDED)),
                 getLong(cursor, MediaStore.Audio.Media.DURATION),
                 getLong(cursor, MediaStore.Audio.Media.SIZE),
-                getString(cursor, MediaStore.Audio.Media.ALBUM_ARTIST)
+                supportsAlbumArtistColumn() ? getString(cursor, MediaStore.Audio.Media.ALBUM_ARTIST) : null
         ));
+    }
+
+    private boolean supportsAlbumArtistColumn() {
+        return supportsAlbumArtistColumn(Build.VERSION.SDK_INT);
+    }
+
+    static boolean supportsAlbumArtistColumn(int sdkInt) {
+        return sdkInt >= Build.VERSION_CODES.R;
     }
 
     private long secondsToMillis(long value) {
@@ -188,7 +198,7 @@ public final class DeviceMusicLibrary {
         if (albumId <= 0) {
             return "";
         }
-        return ContentUris.withAppendedId(ALBUM_ART_URI, albumId).toString();
+        return ContentUris.withAppendedId(Uri.parse(ALBUM_ART_URI), albumId).toString();
     }
 
     private String folderFromCursor(Cursor cursor) {

@@ -1593,6 +1593,9 @@ public final class MainActivity extends Activity {
         librarySearchQuery = nextQuery;
         librarySearchVisible = true;
         selectedTrack = null;
+        if (currentTab != Tab.LIBRARY) {
+            return;
+        }
         refreshLibraryResultsOnly();
     }
 

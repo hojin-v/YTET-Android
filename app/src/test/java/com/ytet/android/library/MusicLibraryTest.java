@@ -5,6 +5,7 @@ import com.ytet.android.stream.MusicStation;
 import org.junit.Test;
 
 import java.util.List;
+import java.util.Locale;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
@@ -127,6 +128,32 @@ public final class MusicLibraryTest {
         assertEquals("Post Malone feat. Doja Cat", compilationFallback.artist());
         assertEquals("Post Malone", compilationFallback.representativeArtist());
         assertEquals(2, MusicLibrary.tracksForStation(List.of(collaborator, compilationFallback), artist).size());
+    }
+
+    @Test
+    public void detectsAlbumArtistColumnOnlyOnAndroidRAndLater() {
+        assertEquals(false, DeviceMusicLibrary.supportsAlbumArtistColumn(29));
+        assertEquals(true, DeviceMusicLibrary.supportsAlbumArtistColumn(30));
+    }
+
+    @Test
+    public void compilationArtistFallbackIsLocaleStable() {
+        Locale original = Locale.getDefault();
+        try {
+            Locale.setDefault(new Locale("tr", "TR"));
+            DeviceAudioTrack track = track(
+                    10,
+                    "Kappa",
+                    "Post Malone feat. Doja Cat",
+                    "Downloads",
+                    "VARIOUS ARTISTS"
+            );
+
+            assertEquals("Post Malone feat. Doja Cat", track.artist());
+            assertEquals("Post Malone", track.representativeArtist());
+        } finally {
+            Locale.setDefault(original);
+        }
     }
 
     private DeviceAudioTrack track(long id, String title, String folder) {

@@ -1,5 +1,7 @@
 package com.ytet.android.library;
 
+import java.util.Locale;
+
 public final class DeviceAudioTrack {
     private final long id;
     private final String title;
@@ -179,7 +181,7 @@ public final class DeviceAudioTrack {
     }
 
     private static boolean isCompilationArtist(String value) {
-        String clean = value == null ? "" : value.trim().toLowerCase();
+        String clean = value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
         return "various artists".equals(clean)
                 || "various".equals(clean)
                 || "여러 아티스트".equals(clean);

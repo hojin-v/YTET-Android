@@ -1044,12 +1044,10 @@ def rename_metadata_matched_audio_file(workspace, info, logger, ydl=None):
     parent = os.path.dirname(audio_path)
     _stem, extension = os.path.splitext(audio_path)
     safe_name = sanitize_filename(f"{artist} - {title}")
-    if not safe_name:
-        return
     target = os.path.join(parent, safe_name + extension)
     if os.path.abspath(audio_path) == os.path.abspath(target):
         return
-    target = unique_workspace_path(target)
+    target = unique_workspace_file_path(target)
     try:
         os.replace(audio_path, target)
         update_audio_info_path(info, audio_path, target)
@@ -1160,6 +1158,18 @@ def unique_workspace_path(path):
         if not os.path.exists(candidate):
             return candidate
     return os.path.join(parent, f"{stem} ({int(time.time())})")
+
+
+def unique_workspace_file_path(path):
+    if not os.path.exists(path):
+        return path
+    parent = os.path.dirname(path)
+    stem, extension = os.path.splitext(os.path.basename(path))
+    for index in range(2, 1000):
+        candidate = os.path.join(parent, f"{stem} ({index}){extension}")
+        if not os.path.exists(candidate):
+            return candidate
+    return os.path.join(parent, f"{stem} ({int(time.time())}){extension}")
 
 
 def write_mp4_metadata(audio, info, album_fallback=None):
