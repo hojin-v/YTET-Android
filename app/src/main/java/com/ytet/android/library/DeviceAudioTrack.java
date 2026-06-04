@@ -61,7 +61,7 @@ public final class DeviceAudioTrack {
     ) {
         this.id = id;
         this.title = clean(title, "제목 없음");
-        this.artist = clean(artist, "알 수 없는 아티스트");
+        this.artist = MusicLibrary.normalizeArtistDisplay(clean(artist, "알 수 없는 아티스트"));
         this.album = clean(album, "앨범 정보 없음");
         this.displayName = clean(displayName, this.title);
         this.folder = clean(folder, "알 수 없는 폴더");

@@ -839,7 +839,16 @@ def artist_credit_name(artist_credit):
             parts.append(first_text(item.get("name"), (item.get("artist") or {}).get("name")))
             if item.get("joinphrase"):
                 parts.append(item.get("joinphrase"))
-    return "".join(part for part in parts if part).strip() or None
+    return normalize_artist_text("".join(part for part in parts if part))
+
+
+def normalize_artist_text(value):
+    text = normalize_text(value)
+    if not text:
+        return None
+    text = re.sub(r"(?i)\s+w\.?\s+", " with ", text)
+    text = re.sub(r"(?i)\s+w\s*/\s*", " with ", text)
+    return normalize_text(text) or None
 
 
 def title_candidates(title):
@@ -1179,13 +1188,13 @@ def metadata_title(info):
 def metadata_artist(info):
     if not isinstance(info, dict):
         return None
-    return first_text(metadata_override(info, "artist"), info.get("artist"), info.get("creator"), info.get("uploader"), info.get("channel"))
+    return normalize_artist_text(first_text(metadata_override(info, "artist"), info.get("artist"), info.get("creator"), info.get("uploader"), info.get("channel")))
 
 
 def metadata_album_artist(info):
     if not isinstance(info, dict):
         return None
-    return first_text(
+    return normalize_artist_text(first_text(
         metadata_override(info, "album_artist"),
         info.get("album_artist"),
         metadata_override(info, "artist"),
@@ -1193,7 +1202,7 @@ def metadata_album_artist(info):
         info.get("creator"),
         info.get("uploader"),
         info.get("channel"),
-    )
+    ))
 
 
 def metadata_album(info, fallback=None):
