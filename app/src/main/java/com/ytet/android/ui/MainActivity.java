@@ -8,7 +8,6 @@ import android.app.Dialog;
 import android.app.PendingIntent;
 import android.app.RecoverableSecurityException;
 import android.content.ActivityNotFoundException;
-import android.content.ContentValues;
 import android.content.BroadcastReceiver;
 import android.content.ClipData;
 import android.content.Context;
@@ -117,7 +116,6 @@ public final class MainActivity extends Activity {
     private static final int REQUEST_DELETE_AUDIO = 1209;
     private static final int REQUEST_AUDIO_LIBRARY = 1210;
     private static final int REQUEST_WRITE_LIBRARY = 1211;
-    private static final int REQUEST_MOVE_AUDIO = 1212;
     private static final String UPDATE_APK_MIME = "application/vnd.android.package-archive";
     private static final String PREFS = "ytet_android";
     private static final String PREF_OUTPUT_TREE = "output_tree";
@@ -243,6 +241,7 @@ public final class MainActivity extends Activity {
     private LibraryFilter focusedLibraryGroupFilter;
     private LibraryGroup focusedParentArtistGroup;
     private View libraryFilterGestureArea;
+    private int libraryFilterScrollX;
     private float libraryPullStartX;
     private float libraryPullStartY;
     private boolean libraryPullTracking;
@@ -256,9 +255,6 @@ public final class MainActivity extends Activity {
     private DeviceAudioTrack selectedTrack;
     private DeviceAudioTrack pendingDeleteTrack;
     private List<DeviceAudioTrack> pendingDeleteTracks = new ArrayList<>();
-    private DeviceAudioTrack pendingAlbumMoveTrack;
-    private String pendingAlbumMoveFolder = "";
-    private String albumMoveFailureReason = "";
     private final Map<Long, View> libraryTrackItemViews = new HashMap<>();
     private final Map<Long, String> librarySearchIndex = new HashMap<>();
 
@@ -532,14 +528,6 @@ public final class MainActivity extends Activity {
             pendingDeleteTracks = new ArrayList<>();
             startLibraryRefresh(true);
             return;
-        }
-        if (requestCode == REQUEST_MOVE_AUDIO) {
-            if (resultCode == RESULT_OK) {
-                retryPendingAlbumMove();
-            } else {
-                clearPendingAlbumMove();
-                toast("파일 이동을 취소했습니다.");
-            }
         }
     }
 
@@ -1489,6 +1477,7 @@ public final class MainActivity extends Activity {
         shelf.setHorizontalFadingEdgeEnabled(true);
         shelf.setFadingEdgeLength(dp(28));
         shelf.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        shelf.setOnScrollChangeListener((view, scrollX, scrollY, oldScrollX, oldScrollY) -> libraryFilterScrollX = scrollX);
         libraryFilterGestureArea = shelf;
 
         LinearLayout row = new LinearLayout(this);
@@ -1510,7 +1499,10 @@ public final class MainActivity extends Activity {
                 : libraryFilter == LibraryFilter.PLAYLIST
                 ? playlist
                 : all;
-        shelf.post(() -> centerLibraryFilterChip(shelf, selectedChip));
+        shelf.post(() -> {
+            restoreLibraryFilterScroll(shelf);
+            centerLibraryFilterChip(shelf, selectedChip);
+        });
 
         LinearLayout sort = librarySortButton();
         LinearLayout.LayoutParams sortParams = new LinearLayout.LayoutParams(dp(librarySort.buttonWidthDp()), dp(44));
@@ -1532,7 +1524,23 @@ public final class MainActivity extends Activity {
         int target = chipCenter - visibleWidth / 2;
         int maxScroll = Math.max(0, content.getWidth() - visibleWidth);
         int scrollX = Math.max(0, Math.min(target, maxScroll));
+        if (Math.abs(shelf.getScrollX() - scrollX) <= dp(2)) {
+            return;
+        }
         shelf.smoothScrollTo(scrollX, 0);
+    }
+
+    private void restoreLibraryFilterScroll(HorizontalScrollView shelf) {
+        if (shelf == null || shelf.getChildCount() == 0) {
+            return;
+        }
+        View content = shelf.getChildAt(0);
+        int visibleWidth = Math.max(0, shelf.getWidth() - shelf.getPaddingLeft() - shelf.getPaddingRight());
+        int maxScroll = Math.max(0, content.getWidth() - visibleWidth);
+        int restored = Math.max(0, Math.min(libraryFilterScrollX, maxScroll));
+        if (restored > 0) {
+            shelf.scrollTo(restored, 0);
+        }
     }
 
     private LinearLayout librarySortButton() {
@@ -1570,6 +1578,9 @@ public final class MainActivity extends Activity {
         chip.setOnClickListener(view -> {
             if (libraryFilter == filter) {
                 return;
+            }
+            if (libraryFilterGestureArea instanceof HorizontalScrollView) {
+                libraryFilterScrollX = ((HorizontalScrollView) libraryFilterGestureArea).getScrollX();
             }
             libraryFilter = filter;
             selectedTrack = null;
@@ -3308,17 +3319,17 @@ public final class MainActivity extends Activity {
         }
         List<DeviceAudioTrack> tracks = new ArrayList<>();
         tracks.add(track);
-        showQuickActions(track.title(), track.artist() + " · " + MusicLibrary.formatDuration(track.durationMs()), track, tracks, true);
+        showQuickActions(track.title(), track.artist() + " · " + MusicLibrary.formatDuration(track.durationMs()), track, tracks);
     }
 
     private void showLibraryGroupQuickActions(LibraryGroup group) {
         if (group == null || group.tracks.isEmpty()) {
             return;
         }
-        showQuickActions(group.title, group.subtitle, group.coverTrack, group.tracks, false);
+        showQuickActions(group.title, group.subtitle, group.coverTrack, group.tracks);
     }
 
-    private void showQuickActions(String titleText, String metaText, DeviceAudioTrack coverTrack, List<DeviceAudioTrack> tracks, boolean includeAlbumAction) {
+    private void showQuickActions(String titleText, String metaText, DeviceAudioTrack coverTrack, List<DeviceAudioTrack> tracks) {
         if (tracks == null || tracks.isEmpty()) {
             return;
         }
@@ -3366,12 +3377,6 @@ public final class MainActivity extends Activity {
             dialog.dismiss();
             showPlaylistPickerDialog(tracks);
         }), matchWrap());
-        if (includeAlbumAction) {
-            body.addView(trackQuickActionRow(R.drawable.ic_album_add, "앨범에 추가", () -> {
-                dialog.dismiss();
-                showAlbumPickerDialog(tracks.get(0));
-            }), matchWrap());
-        }
 
         dialog.setContentView(body);
         dialog.show();
@@ -3401,7 +3406,7 @@ public final class MainActivity extends Activity {
             icon.setImageDrawable(drawable);
         }
         row.addView(icon, marginRight(18, dp(32), dp(32)));
-        row.addView(text(label, 16, R.color.ytet_text, true), matchWrap());
+        row.addView(text(label, 16, R.color.ytet_text, false), matchWrap());
         return row;
     }
 
@@ -3583,264 +3588,6 @@ public final class MainActivity extends Activity {
         }
         toast(updated.title() + "에 저장했습니다.");
         renderLibraryDependentTabs();
-    }
-
-    private void showAlbumPickerDialog(DeviceAudioTrack track) {
-        List<LibraryGroup> albums = libraryGroupsForTracks(libraryTracks, LibraryFilter.ALBUM);
-        if (albums.isEmpty()) {
-            toast("추가할 앨범이 없습니다.");
-            return;
-        }
-        AlertDialog[] dialogRef = new AlertDialog[1];
-        String[] query = new String[]{""};
-
-        LinearLayout body = dialogBody("앨범 선택");
-        LinearLayout toolbar = new LinearLayout(this);
-        toolbar.setOrientation(LinearLayout.HORIZONTAL);
-        toolbar.setGravity(Gravity.CENTER_VERTICAL);
-        TextView hint = muted("선택한 앨범명으로 표시하고 가능한 경우 파일도 해당 앨범 폴더로 이동합니다.", 11);
-        toolbar.addView(hint, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        ImageButton search = toolbarIconButton(R.drawable.ic_search, "앨범 검색", false);
-        toolbar.addView(search, new LinearLayout.LayoutParams(dp(42), dp(42)));
-        body.addView(toolbar, marginBottom(8));
-
-        EditText searchInput = metadataEditField("앨범 검색", "");
-        searchInput.setVisibility(View.GONE);
-        body.addView(searchInput, marginBottom(10));
-
-        ScrollView scroll = new ScrollView(this);
-        LinearLayout list = new LinearLayout(this);
-        list.setOrientation(LinearLayout.VERTICAL);
-        scroll.addView(list, matchWrap());
-        body.addView(scroll, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(330)
-        ));
-
-        Runnable[] render = new Runnable[1];
-        render[0] = () -> renderAlbumPickerList(list, albums, query[0], dialogRef[0], track);
-        search.setOnClickListener(view -> {
-            boolean show = searchInput.getVisibility() != View.VISIBLE;
-            searchInput.setVisibility(show ? View.VISIBLE : View.GONE);
-            if (show) {
-                searchInput.requestFocus();
-                searchInput.setCursorVisible(true);
-                showKeyboard(searchInput);
-            } else {
-                searchInput.setText("");
-                query[0] = "";
-                hideKeyboard(searchInput);
-                render[0].run();
-            }
-        });
-        searchInput.addTextChangedListener(new TextWatcher() {
-            @Override
-            public void beforeTextChanged(CharSequence text, int start, int count, int after) {
-            }
-
-            @Override
-            public void onTextChanged(CharSequence text, int start, int before, int count) {
-                query[0] = text == null ? "" : text.toString();
-                render[0].run();
-            }
-
-            @Override
-            public void afterTextChanged(Editable text) {
-            }
-        });
-
-        AlertDialog dialog = new AlertDialog.Builder(this)
-                .setView(body)
-                .create();
-        dialogRef[0] = dialog;
-        render[0].run();
-        dialog.show();
-        styleDetailDialog(dialog);
-    }
-
-    private void renderAlbumPickerList(LinearLayout list, List<LibraryGroup> albums, String query, AlertDialog dialog, DeviceAudioTrack track) {
-        list.removeAllViews();
-        String cleanQuery = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
-        int shown = 0;
-        for (LibraryGroup album : albums) {
-            if (!cleanQuery.isEmpty()
-                    && !album.title.toLowerCase(Locale.ROOT).contains(cleanQuery)
-                    && !album.subtitle.toLowerCase(Locale.ROOT).contains(cleanQuery)) {
-                continue;
-            }
-            list.addView(albumPickerRow(album, () -> {
-                if (dialog != null) {
-                    dialog.dismiss();
-                }
-                addTrackToAlbum(track, album);
-            }), marginBottom(8));
-            shown++;
-            if (shown >= 60) {
-                break;
-            }
-        }
-        if (shown == 0) {
-            list.addView(muted("검색된 앨범이 없습니다.", 13), matchWrap());
-        }
-    }
-
-    private View albumPickerRow(LibraryGroup album, Runnable action) {
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(10), dp(10), dp(10), dp(10));
-        row.setBackground(rounded(color(R.color.ytet_panel), 8));
-        row.setClickable(true);
-        row.setFocusable(true);
-        row.setOnClickListener(view -> action.run());
-
-        LinearLayout.LayoutParams coverParams = new LinearLayout.LayoutParams(dp(48), dp(48));
-        coverParams.setMargins(0, 0, dp(12), 0);
-        row.addView(groupCoverView(album), coverParams);
-
-        LinearLayout copy = new LinearLayout(this);
-        copy.setOrientation(LinearLayout.VERTICAL);
-        TextView title = text(album.title, 14, R.color.ytet_text, true);
-        title.setSingleLine(true);
-        title.setEllipsize(TextUtils.TruncateAt.END);
-        copy.addView(title, marginBottom(3));
-        TextView subtitle = muted(album.subtitle, 12);
-        subtitle.setSingleLine(true);
-        subtitle.setEllipsize(TextUtils.TruncateAt.END);
-        copy.addView(subtitle, matchWrap());
-        row.addView(copy, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        return row;
-    }
-
-    private void addTrackToAlbum(DeviceAudioTrack track, LibraryGroup album) {
-        if (track == null || album == null) {
-            return;
-        }
-        String albumTitle = valueOrDefault(album.title, "앨범 정보 없음");
-        DeviceAudioTrack edited = TrackMetadataOverrides.saveAlbum(this, track, albumTitle);
-        applyEditedTrack(edited);
-        albumMoveFailureReason = "";
-        boolean moved = moveTrackToAlbumFolder(track, albumFolderLabel(album), false);
-        if (moved) {
-            toast("앨범에 추가하고 파일을 이동했습니다.");
-            startLibraryRefresh(true);
-            startHomeRefresh(false);
-        } else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            toast("앨범명은 변경했습니다. 이 Android 버전에서는 앱에서 파일 위치를 직접 이동할 수 없습니다.");
-        } else if (!albumMoveFailureReason.trim().isEmpty()) {
-            toast("앨범명은 변경했지만 파일을 이동할 수 없습니다: " + albumMoveFailureReason);
-        } else {
-            toast("앨범명을 변경했습니다. 파일 이동은 권한이 허용되는 경우 적용됩니다.");
-        }
-    }
-
-    private String albumFolderLabel(LibraryGroup album) {
-        String folder = sharedFolderLabel(album.tracks);
-        if (!folder.trim().isEmpty()
-                && !DefaultMediaPaths.MUSIC_FOLDER.equalsIgnoreCase(folder.trim())) {
-            return folder.trim();
-        }
-        return valueOrDefault(album.title, "Album");
-    }
-
-    private boolean moveTrackToAlbumFolder(DeviceAudioTrack track, String targetFolderLabel, boolean fromPermissionResult) {
-        if (track == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            clearPendingAlbumMove();
-            return false;
-        }
-        String safeFolder = safeMediaFolderName(targetFolderLabel);
-        if (safeFolder.isEmpty()) {
-            return false;
-        }
-        if (safeFolder.equalsIgnoreCase(track.folder())) {
-            clearPendingAlbumMove();
-            return false;
-        }
-        String targetRelativePath = DefaultMediaPaths.normalizeRelativePath(
-                DefaultMediaPaths.musicRelativePath() + "/" + safeFolder
-        );
-        Uri uri = Uri.parse(track.contentUri());
-        ContentValues values = new ContentValues();
-        values.put(MediaStore.MediaColumns.RELATIVE_PATH, targetRelativePath);
-        try {
-            int updated = getContentResolver().update(uri, values, null, null);
-            clearPendingAlbumMove();
-            return updated > 0;
-        } catch (SecurityException exception) {
-            if (!fromPermissionResult) {
-                pendingAlbumMoveTrack = track;
-                pendingAlbumMoveFolder = safeFolder;
-                requestMovePermission(exception, uri);
-            } else {
-                clearPendingAlbumMove();
-                toast("파일 이동 권한을 얻지 못했습니다.");
-            }
-            return false;
-        } catch (RuntimeException exception) {
-            clearPendingAlbumMove();
-            albumMoveFailureReason = safeMessage(exception);
-            return false;
-        }
-    }
-
-    private void requestMovePermission(SecurityException exception, Uri uri) {
-        try {
-            IntentSender intentSender = null;
-            if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q && exception instanceof RecoverableSecurityException) {
-                intentSender = ((RecoverableSecurityException) exception)
-                        .getUserAction()
-                        .getActionIntent()
-                        .getIntentSender();
-            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                List<Uri> uris = new ArrayList<>();
-                uris.add(uri);
-                intentSender = MediaStore.createWriteRequest(getContentResolver(), uris).getIntentSender();
-            }
-            if (intentSender == null) {
-                toast("파일 이동 권한을 요청할 수 없습니다.");
-                return;
-            }
-            startIntentSenderForResult(intentSender, REQUEST_MOVE_AUDIO, null, 0, 0, 0);
-        } catch (IntentSender.SendIntentException intentException) {
-            clearPendingAlbumMove();
-            albumMoveFailureReason = "파일 이동 확인 화면을 열 수 없습니다.";
-        } catch (RuntimeException runtimeException) {
-            clearPendingAlbumMove();
-            albumMoveFailureReason = safeMessage(runtimeException);
-        }
-    }
-
-    private void retryPendingAlbumMove() {
-        if (pendingAlbumMoveTrack == null || pendingAlbumMoveFolder.trim().isEmpty()) {
-            clearPendingAlbumMove();
-            return;
-        }
-        DeviceAudioTrack track = pendingAlbumMoveTrack;
-        String folder = pendingAlbumMoveFolder;
-        albumMoveFailureReason = "";
-        boolean moved = moveTrackToAlbumFolder(track, folder, true);
-        if (moved) {
-            toast("파일을 앨범 폴더로 이동했습니다.");
-            startLibraryRefresh(true);
-            startHomeRefresh(false);
-        } else if (!albumMoveFailureReason.trim().isEmpty()) {
-            toast("파일 이동 실패: " + albumMoveFailureReason);
-        }
-    }
-
-    private void clearPendingAlbumMove() {
-        pendingAlbumMoveTrack = null;
-        pendingAlbumMoveFolder = "";
-    }
-
-    private String safeMediaFolderName(String value) {
-        String clean = value == null ? "" : value.trim();
-        clean = clean.replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]+", " ");
-        clean = clean.replaceAll("\\s+", " ").trim();
-        while (clean.startsWith(".")) {
-            clean = clean.substring(1).trim();
-        }
-        return clean;
     }
 
     private void showTrackDetails(DeviceAudioTrack track) {
@@ -6123,31 +5870,38 @@ public final class MainActivity extends Activity {
     private View actionButtonWithIcon(String text, int iconRes, boolean primary) {
         LinearLayout button = new LinearLayout(this);
         button.setOrientation(LinearLayout.HORIZONTAL);
-        button.setGravity(Gravity.CENTER_VERTICAL);
+        button.setGravity(Gravity.CENTER);
         button.setClickable(true);
         button.setFocusable(true);
         button.setPadding(dp(12), 0, dp(12), 0);
         button.setBackground(rounded(primary ? color(R.color.ytet_accent) : color(R.color.ytet_panel_alt), 8));
         int textColor = primary ? 0xFFFFFFFF : color(R.color.ytet_text);
 
-        FrameLayout iconSlot = new FrameLayout(this);
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.HORIZONTAL);
+        content.setGravity(Gravity.CENTER);
+
         Drawable icon = getDrawable(iconRes);
         if (icon != null) {
             icon = icon.mutate();
             icon.setTint(textColor);
             ImageView iconView = new ImageView(this);
             iconView.setImageDrawable(icon);
-            FrameLayout.LayoutParams iconParams = new FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER);
-            iconSlot.addView(iconView, iconParams);
+            LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(dp(22), dp(22));
+            iconParams.setMargins(0, 0, dp(8), 0);
+            content.addView(iconView, iconParams);
         }
-        button.addView(iconSlot, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f));
 
         TextView label = text(text, 15, primary ? android.R.color.white : R.color.ytet_text, true);
         label.setGravity(Gravity.CENTER);
-        button.addView(label, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
-
-        View rightSpace = new View(this);
-        button.addView(rightSpace, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f));
+        content.addView(label, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        ));
+        button.addView(content, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        ));
         return button;
     }
 
