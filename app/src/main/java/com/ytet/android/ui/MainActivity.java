@@ -32,7 +32,6 @@ import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Parcelable;
@@ -93,6 +92,7 @@ import com.ytet.android.stream.MusicStation;
 import com.ytet.android.stream.StationCatalog;
 import com.ytet.android.update.UpdateChecker;
 import com.ytet.android.update.UpdateApkProvider;
+import com.ytet.android.update.UpdateDownloadService;
 import com.ytet.android.update.UpdateInfo;
 
 import java.util.ArrayList;
@@ -103,11 +103,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
 import java.io.InputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutorService;
 
@@ -296,6 +292,7 @@ public final class MainActivity extends Activity {
     private boolean extractionCancelRequested;
     private boolean receiverRegistered;
     private boolean playbackReceiverRegistered;
+    private boolean updateReceiverRegistered;
     private boolean updateChecking;
     private boolean updateChecked;
     private boolean updateDownloading;
@@ -303,6 +300,7 @@ public final class MainActivity extends Activity {
     private UpdateInfo availableUpdate;
     private String updateApkPath = "";
     private boolean extractionPendingNotificationPermission;
+    private boolean updatePendingNotificationPermission;
 
     private final BroadcastReceiver progressReceiver = new BroadcastReceiver() {
         @Override
@@ -342,6 +340,16 @@ public final class MainActivity extends Activity {
                 extractionBusy = true;
             }
             applyExtractionStateToViews();
+        }
+    };
+
+    private final BroadcastReceiver updateReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (!UpdateDownloadService.ACTION_PROGRESS.equals(intent.getAction())) {
+                return;
+            }
+            handleUpdateDownloadProgress(intent);
         }
     };
 
@@ -422,6 +430,7 @@ public final class MainActivity extends Activity {
         setContentView(buildContent());
         registerBackNavigationCallback();
         startUpdateCheck(false);
+        handleUpdateInstallIntent(getIntent());
     }
 
     @Override
@@ -429,6 +438,7 @@ public final class MainActivity extends Activity {
         super.onNewIntent(intent);
         setIntent(intent);
         applySharedUrlIntent(intent, true);
+        handleUpdateInstallIntent(intent);
     }
 
     @Override
@@ -454,11 +464,24 @@ public final class MainActivity extends Activity {
             playbackReceiverRegistered = true;
             startService(PlaybackService.commandIntent(this, PlaybackService.ACTION_REQUEST_STATE));
         }
+        if (!updateReceiverRegistered) {
+            IntentFilter filter = new IntentFilter(UpdateDownloadService.ACTION_PROGRESS);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(updateReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+            } else {
+                registerReceiver(updateReceiver, filter);
+            }
+            updateReceiverRegistered = true;
+        }
         refreshPendingUpdateDownloadState();
     }
 
     @Override
     protected void onStop() {
+        if (updateReceiverRegistered) {
+            unregisterReceiver(updateReceiver);
+            updateReceiverRegistered = false;
+        }
         if (playbackReceiverRegistered) {
             unregisterReceiver(playbackReceiver);
             playbackReceiverRegistered = false;
@@ -483,6 +506,10 @@ public final class MainActivity extends Activity {
         if (updateDialog != null) {
             updateDialog.dismiss();
             updateDialog = null;
+        }
+        if (updateReceiverRegistered) {
+            unregisterReceiver(updateReceiver);
+            updateReceiverRegistered = false;
         }
         unregisterBackNavigationCallback();
         mainHandler.removeCallbacks(librarySearchCommit);
@@ -584,6 +611,17 @@ public final class MainActivity extends Activity {
                     extractionResult = "앱을 나가도 진행률과 성공/실패를 알림바에서 확인하려면 알림 권한을 허용해야 합니다.";
                     applyExtractionStateToViews();
                     toast("알림 권한이 없어 추출을 시작하지 않았습니다.");
+                }
+            }
+            if (updatePendingNotificationPermission) {
+                updatePendingNotificationPermission = false;
+                if (granted) {
+                    downloadUpdate(availableUpdate);
+                } else {
+                    updateDownloading = false;
+                    updateStatus = "업데이트 다운로드 진행률과 완료 알림을 표시하려면 알림 권한이 필요합니다.";
+                    renderUpdateState();
+                    toast("알림 권한이 없어 업데이트 다운로드를 시작하지 않았습니다.");
                 }
             }
             return;
@@ -1290,62 +1328,30 @@ public final class MainActivity extends Activity {
             toast("다운로드할 업데이트 파일이 없습니다.");
             return;
         }
+        if (!hasNotificationPermission()) {
+            updatePendingNotificationPermission = true;
+            showUpdateNotificationPermissionRationale();
+            return;
+        }
         dismissUpdateDialog();
         updateDownloading = true;
         updateStatus = update.tagName() + " 업데이트 APK를 다운로드하는 중입니다.";
         renderUpdateState();
         showUpdateDownloadDialog(update);
-        File targetFile;
+
+        Intent intent = UpdateDownloadService.downloadIntent(this, update);
         try {
-            targetFile = new File(updateDownloadDir(), updateApkFileName(update));
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent);
+            } else {
+                startService(intent);
+            }
         } catch (Exception exception) {
             updateDownloading = false;
-            updateStatus = "업데이트 다운로드를 시작할 수 없습니다: " + safeMessage(exception);
+            updateStatus = "업데이트 다운로드 서비스를 시작할 수 없습니다: " + safeMessage(exception);
             renderUpdateState();
             showUpdateMessageDialog("업데이트 다운로드 실패", updateStatus);
-            return;
         }
-
-        updateExecutor.execute(() -> {
-            File temporaryFile = new File(targetFile.getParentFile(), targetFile.getName() + ".part");
-            try {
-                downloadUpdateApk(update.apkUrl(), temporaryFile);
-                if (targetFile.exists() && !targetFile.delete()) {
-                    throw new IOException("이전 업데이트 파일을 교체할 수 없습니다.");
-                }
-                if (!temporaryFile.renameTo(targetFile)) {
-                    throw new IOException("업데이트 파일을 완료할 수 없습니다.");
-                }
-                deleteOtherUpdateApks(targetFile);
-                runOnUiThread(() -> {
-                    updateDownloading = false;
-                    updateApkPath = targetFile.getAbsolutePath();
-                    updateStatus = update.tagName() + " APK 다운로드가 완료되었습니다. 설치할 수 있습니다.";
-                    updateDownloadProgress(1L, 1L, "다운로드 완료. 설치 화면을 여는 중입니다.");
-                    getPreferences().edit()
-                            .putString(PREF_UPDATE_APK_PATH, updateApkPath)
-                            .putString(PREF_UPDATE_TAG, update.tagName())
-                            .remove(PREF_UPDATE_DOWNLOAD_ID)
-                            .apply();
-                    renderUpdateState();
-                    installDownloadedUpdate();
-                });
-            } catch (Exception exception) {
-                if (temporaryFile.exists()) {
-                    temporaryFile.delete();
-                }
-                if (targetFile.exists()) {
-                    targetFile.delete();
-                }
-                runOnUiThread(() -> {
-                    updateDownloading = false;
-                    clearPendingUpdateDownload();
-                    updateStatus = "업데이트 다운로드에 실패했습니다: " + safeMessage(exception);
-                    renderUpdateState();
-                    showUpdateMessageDialog("업데이트 다운로드 실패", updateStatus);
-                });
-            }
-        });
     }
 
     private void installDownloadedUpdate() {
@@ -1464,126 +1470,73 @@ public final class MainActivity extends Activity {
         return new File(updateApkPath);
     }
 
-    private File updateDownloadDir() throws IOException {
-        File root = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
-        if (root == null) {
-            root = getFilesDir();
-        }
-        File directory = new File(root, "updates");
-        if (!directory.isDirectory() && !directory.mkdirs()) {
-            throw new IOException("업데이트 폴더를 만들 수 없습니다.");
-        }
-        return directory;
-    }
-
-    private String updateApkFileName(UpdateInfo update) {
-        String tag = sanitizeFileSegment(update.tagName().isEmpty() ? "update" : update.tagName());
-        String assetName = sanitizeFileSegment(update.apkName().isEmpty() ? "YTET.apk" : update.apkName());
-        if (!assetName.toLowerCase(Locale.US).endsWith(".apk")) {
-            assetName = assetName + ".apk";
-        }
-        return tag + "-" + assetName;
-    }
-
-    private String sanitizeFileSegment(String value) {
-        String clean = value == null ? "" : value.trim().replaceAll("[^A-Za-z0-9._-]+", "_");
-        clean = clean.replaceAll("_+", "_");
-        return clean.isEmpty() ? "YTET.apk" : clean;
-    }
-
-    private void downloadUpdateApk(String apkUrl, File targetFile) throws IOException {
-        HttpURLConnection connection = (HttpURLConnection) new URL(apkUrl).openConnection();
-        connection.setConnectTimeout(12000);
-        connection.setReadTimeout(30000);
-        connection.setRequestProperty("User-Agent", "YTET-Android-Updater");
-        try {
-            int status = connection.getResponseCode();
-            if (status < 200 || status >= 300) {
-                throw new IOException("서버 응답 " + status);
-            }
-            File parent = targetFile.getParentFile();
-            if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
-                throw new IOException("업데이트 폴더를 만들 수 없습니다.");
-            }
-            long totalBytes = Math.max(0L, connection.getContentLengthLong());
-            updateDownloadProgress(0L, totalBytes, "다운로드를 시작하는 중입니다.");
-            try (InputStream input = connection.getInputStream();
-                 FileOutputStream output = new FileOutputStream(targetFile, false)) {
-                byte[] buffer = new byte[64 * 1024];
-                long downloadedBytes = 0L;
-                long lastPublishedBytes = 0L;
-                int lastPublishedPercent = -1;
-                int read;
-                while ((read = input.read(buffer)) != -1) {
-                    output.write(buffer, 0, read);
-                    downloadedBytes += read;
-                    int percent = downloadPercent(downloadedBytes, totalBytes);
-                    if (downloadedBytes - lastPublishedBytes >= 256L * 1024L
-                            || (percent >= 0 && percent != lastPublishedPercent)) {
-                        lastPublishedBytes = downloadedBytes;
-                        lastPublishedPercent = percent;
-                        updateDownloadProgress(downloadedBytes, totalBytes, null);
-                    }
-                }
-                updateDownloadProgress(downloadedBytes, totalBytes, null);
-            }
-            if (targetFile.length() <= 0L) {
-                throw new IOException("빈 업데이트 파일입니다.");
-            }
-        } finally {
-            connection.disconnect();
-        }
-    }
-
-    private int downloadPercent(long downloadedBytes, long totalBytes) {
-        if (totalBytes <= 0L) {
-            return -1;
-        }
-        return Math.max(0, Math.min(100, Math.round(downloadedBytes * 100f / totalBytes)));
-    }
-
-    private void updateDownloadProgress(long downloadedBytes, long totalBytes, String explicitStatus) {
-        Runnable update = () -> {
-            if (updateDownloadProgressBar == null || updateDownloadStatusText == null) {
-                return;
-            }
-            int percent = downloadPercent(downloadedBytes, totalBytes);
-            if (percent >= 0) {
-                updateDownloadProgressBar.setIndeterminate(false);
-                updateDownloadProgressBar.setProgress(percent);
-                updateDownloadStatusText.setText(explicitStatus == null || explicitStatus.trim().isEmpty()
-                        ? percent + "% · " + MusicLibrary.formatBytes(downloadedBytes)
-                        + " / " + MusicLibrary.formatBytes(totalBytes)
-                        : explicitStatus);
-            } else {
-                updateDownloadProgressBar.setIndeterminate(true);
-                updateDownloadStatusText.setText(explicitStatus == null || explicitStatus.trim().isEmpty()
-                        ? "다운로드 중 · " + MusicLibrary.formatBytes(downloadedBytes)
-                        : explicitStatus);
-            }
-        };
-        if (Looper.myLooper() == Looper.getMainLooper()) {
-            update.run();
-        } else {
-            runOnUiThread(update);
-        }
-    }
-
-    private void deleteOtherUpdateApks(File keepFile) {
-        File directory = keepFile == null ? null : keepFile.getParentFile();
-        File[] files = directory == null ? null : directory.listFiles();
-        if (files == null) {
+    private void handleUpdateInstallIntent(Intent intent) {
+        if (intent == null || !UpdateDownloadService.ACTION_INSTALL_UPDATE.equals(intent.getAction())) {
             return;
         }
-        for (File file : files) {
-            if (keepFile != null && keepFile.equals(file)) {
-                continue;
-            }
-            String name = file.getName().toLowerCase(Locale.US);
-            if (name.endsWith(".apk") || name.endsWith(".part")) {
-                file.delete();
-            }
+        updateApkPath = getPreferences().getString(PREF_UPDATE_APK_PATH, updateApkPath);
+        installDownloadedUpdate();
+    }
+
+    private void handleUpdateDownloadProgress(Intent intent) {
+        boolean done = intent.getBooleanExtra(UpdateDownloadService.EXTRA_DONE, false);
+        boolean canceled = intent.getBooleanExtra(UpdateDownloadService.EXTRA_CANCELED, false);
+        String error = intent.getStringExtra(UpdateDownloadService.EXTRA_ERROR);
+        String message = valueOrDefault(intent.getStringExtra(UpdateDownloadService.EXTRA_MESSAGE), "다운로드 중입니다.");
+        String tag = valueOrDefault(intent.getStringExtra(UpdateDownloadService.EXTRA_TAG), "다운로드한 업데이트");
+        int percent = intent.getIntExtra(UpdateDownloadService.EXTRA_PERCENT, -1);
+
+        if (error != null) {
+            updateDownloading = false;
+            clearPendingUpdateDownload();
+            updateStatus = error;
+            renderUpdateState();
+            showUpdateMessageDialog("업데이트 다운로드 실패", error);
+            return;
         }
+        if (canceled) {
+            updateDownloading = false;
+            updateStatus = message;
+            renderUpdateState();
+            dismissUpdateDialog();
+            toast(message);
+            return;
+        }
+        if (done) {
+            updateDownloading = false;
+            updateApkPath = valueOrDefault(
+                    intent.getStringExtra(UpdateDownloadService.EXTRA_APK_PATH),
+                    getPreferences().getString(PREF_UPDATE_APK_PATH, "")
+            );
+            updateStatus = tag + " APK 다운로드가 완료되었습니다. 설치할 수 있습니다.";
+            updateDownloadProgress(100, "다운로드 완료. 설치할 수 있습니다.");
+            renderUpdateState();
+            showDownloadedUpdateDialog(tag);
+            return;
+        }
+
+        updateDownloading = true;
+        updateStatus = tag + " 업데이트 APK를 다운로드하는 중입니다.";
+        if (updateDownloadProgressBar == null && updateDialog == null && canShowUpdateDialog()) {
+            showUpdateDownloadDialog(availableUpdate);
+        }
+        updateDownloadProgress(percent, message);
+        renderUpdateState();
+    }
+
+    private void updateDownloadProgress(int percent, String status) {
+        if (updateDownloadProgressBar == null || updateDownloadStatusText == null) {
+            return;
+        }
+        if (percent >= 0) {
+            updateDownloadProgressBar.setIndeterminate(false);
+            updateDownloadProgressBar.setProgress(Math.max(0, Math.min(100, percent)));
+        } else {
+            updateDownloadProgressBar.setIndeterminate(true);
+        }
+        updateDownloadStatusText.setText(status == null || status.trim().isEmpty()
+                ? "다운로드 중입니다."
+                : status);
     }
 
     private String currentAppVersionName() {
@@ -4681,11 +4634,19 @@ public final class MainActivity extends Activity {
                 GradientDrawable.Orientation.TOP_BOTTOM,
                 new int[]{
                         Color.TRANSPARENT,
-                        Color.TRANSPARENT,
-                        Color.TRANSPARENT,
-                        Color.argb(24, red, green, blue),
-                        Color.argb(96, red, green, blue),
-                        Color.argb(218, red, green, blue)
+                        Color.argb(4, red, green, blue),
+                        Color.argb(10, red, green, blue),
+                        Color.argb(18, red, green, blue),
+                        Color.argb(30, red, green, blue),
+                        Color.argb(46, red, green, blue),
+                        Color.argb(66, red, green, blue),
+                        Color.argb(92, red, green, blue),
+                        Color.argb(122, red, green, blue),
+                        Color.argb(154, red, green, blue),
+                        Color.argb(186, red, green, blue),
+                        Color.argb(214, red, green, blue),
+                        Color.argb(236, red, green, blue),
+                        Color.argb(248, red, green, blue)
                 }
         );
     }
@@ -4695,7 +4656,7 @@ public final class MainActivity extends Activity {
         int green = Color.green(BOTTOM_CHROME_BASE);
         int blue = Color.blue(BOTTOM_CHROME_BASE);
         GradientDrawable drawable = new GradientDrawable();
-        drawable.setColor(Color.argb(108, red, green, blue));
+        drawable.setColor(Color.argb(122, red, green, blue));
         return drawable;
     }
 
@@ -4808,7 +4769,7 @@ public final class MainActivity extends Activity {
     }
 
     private int bottomVignetteHeight(int navigationInset) {
-        return Math.max(dp(28), navigationInset);
+        return Math.max(dp(60), navigationInset + bottomTabsHeight());
     }
 
     private void applyQueueWindow(Window window) {
@@ -6390,6 +6351,23 @@ public final class MainActivity extends Activity {
                     extractionStatus = "대기 중";
                     extractionResult = "추출을 시작하려면 알림 권한을 허용하세요.";
                     applyExtractionStateToViews();
+                })
+                .show();
+    }
+
+    private void showUpdateNotificationPermissionRationale() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("업데이트 알림 허용")
+                .setMessage("업데이트 APK 다운로드는 앱을 나가도 계속 진행됩니다. 진행률과 다운로드 완료 후 설치 요청을 알림바에서 확인하려면 알림 권한이 필요합니다.")
+                .setPositiveButton("권한 허용", (dialog, which) ->
+                        requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQUEST_NOTIFICATIONS))
+                .setNegativeButton("취소", (dialog, which) -> {
+                    updatePendingNotificationPermission = false;
+                    updateStatus = "업데이트를 다운로드하려면 알림 권한을 허용하세요.";
+                    renderUpdateState();
                 })
                 .show();
     }
