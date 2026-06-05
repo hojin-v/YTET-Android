@@ -130,6 +130,9 @@ public final class MainActivity extends Activity {
     private static final String LIBRARY_SOURCE_DEVICE = "device";
     private static final long LIBRARY_SEARCH_DEBOUNCE_MS = 120L;
     private static final int BOTTOM_CHROME_BASE = 0xFF0B0B0D;
+    private static final int NOW_PLAYING_TRANSITION_NONE = 0;
+    private static final int NOW_PLAYING_TRANSITION_NEXT = 1;
+    private static final int NOW_PLAYING_TRANSITION_PREVIOUS = -1;
     private static final String[] SUPPORTED_VIDEO_URL_MARKERS = {
             "youtube.com/",
             "youtu.be/",
@@ -150,10 +153,12 @@ public final class MainActivity extends Activity {
     private Parcelable libraryRecyclerState;
     private boolean libraryRecyclerGridMode;
     private int mainNavigationInset;
-    private LinearLayout nowPlayingBar;
+    private FrameLayout nowPlayingBar;
+    private FrameLayout nowPlayingInfoFrame;
     private FrameLayout nowPlayingCover;
     private TextView nowPlayingTitle;
     private TextView nowPlayingMeta;
+    private MiniPlaybackProgressView nowPlayingProgress;
     private ImageButton playPauseButton;
     private View bottomVignette;
     private LinearLayout bottomChrome;
@@ -163,6 +168,11 @@ public final class MainActivity extends Activity {
     private String renderedNowPlayingTitle = "";
     private String renderedNowPlayingMeta = "";
     private boolean nowPlayingContentInitialized;
+    private int pendingNowPlayingTransitionDirection = NOW_PLAYING_TRANSITION_NONE;
+    private float nowPlayingSwipeStartX;
+    private float nowPlayingSwipeStartY;
+    private boolean nowPlayingSwipeTracking;
+    private boolean nowPlayingSwipeConsumed;
     private TabItem homeTabButton;
     private TabItem libraryTabButton;
     private TabItem extractorTabButton;
@@ -176,6 +186,8 @@ public final class MainActivity extends Activity {
     private OnBackInvokedCallback backInvokedCallback;
     private PlaybackSeekBarView expandedPlaybackSeekBar;
     private TextView expandedPlaybackProgressText;
+    private TextView expandedSleepTimerRemainingText;
+    private String renderedExpandedPlayerSignature = "";
 
     private EditText urlInput;
     private RadioGroup mediaGroup;
@@ -228,6 +240,7 @@ public final class MainActivity extends Activity {
     private long sleepTimerEndAtMs;
     private long sleepTimerRemainingMs;
     private int sleepTimerMinutes;
+    private int sleepTimerDraftInitialMinutes;
     private boolean sleepTimerPaused;
     private boolean sleepTimerControlsVisible;
     private boolean suppressPlayerDragDismiss;
@@ -695,6 +708,7 @@ public final class MainActivity extends Activity {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 dp(64)
         );
+        nowPlayingParams.setMargins(dp(10), 0, dp(10), 0);
         bottomChrome.addView(nowPlayingBar, nowPlayingParams);
         bottomChrome.addView(buildBottomTabs(), matchWrap());
         bottomNavigationGuard = new View(this);
@@ -716,17 +730,35 @@ public final class MainActivity extends Activity {
         return app;
     }
 
-    private LinearLayout buildNowPlayingBar() {
-        LinearLayout bar = new LinearLayout(this);
-        bar.setOrientation(LinearLayout.HORIZONTAL);
-        bar.setGravity(Gravity.CENTER_VERTICAL);
-        bar.setPadding(dp(16), dp(10), dp(16), dp(10));
+    private FrameLayout buildNowPlayingBar() {
+        FrameLayout bar = new FrameLayout(this);
         bar.setBackground(nowPlayingBarBackground(true));
         bar.setOnClickListener(view -> showExpandedPlayer());
 
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(16), dp(10), dp(16), dp(10));
+        bar.addView(row, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+        ));
+
+        nowPlayingInfoFrame = new FrameLayout(this);
+        nowPlayingInfoFrame.setClickable(true);
+        nowPlayingInfoFrame.setOnTouchListener(this::handleNowPlayingInfoTouch);
+
+        LinearLayout infoRow = new LinearLayout(this);
+        infoRow.setOrientation(LinearLayout.HORIZONTAL);
+        infoRow.setGravity(Gravity.CENTER_VERTICAL);
+        nowPlayingInfoFrame.addView(infoRow, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+        ));
+
         nowPlayingCover = new FrameLayout(this);
         setNowPlayingCover(true);
-        bar.addView(nowPlayingCover, marginRight(10, dp(44), dp(44)));
+        infoRow.addView(nowPlayingCover, marginRight(10, dp(44), dp(44)));
 
         LinearLayout copy = new LinearLayout(this);
         copy.setOrientation(LinearLayout.VERTICAL);
@@ -741,11 +773,19 @@ public final class MainActivity extends Activity {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 dp(20)
         ));
-        bar.addView(copy, new LinearLayout.LayoutParams(0, dp(44), 1f));
+        infoRow.addView(copy, new LinearLayout.LayoutParams(0, dp(44), 1f));
+        row.addView(nowPlayingInfoFrame, new LinearLayout.LayoutParams(0, dp(44), 1f));
 
         playPauseButton = iconButton(R.drawable.ic_play_arrow, "재생", true);
         playPauseButton.setOnClickListener(view -> toggleStreamPlayback());
-        bar.addView(playPauseButton, new LinearLayout.LayoutParams(dp(48), dp(44)));
+        row.addView(playPauseButton, new LinearLayout.LayoutParams(dp(48), dp(44)));
+
+        nowPlayingProgress = new MiniPlaybackProgressView(this);
+        bar.addView(nowPlayingProgress, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                dp(3),
+                Gravity.BOTTOM
+        ));
         return bar;
     }
 
@@ -4434,6 +4474,101 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private boolean handleNowPlayingInfoTouch(View view, MotionEvent event) {
+        int action = event.getActionMasked();
+        if (action == MotionEvent.ACTION_DOWN) {
+            nowPlayingSwipeStartX = event.getRawX();
+            nowPlayingSwipeStartY = event.getRawY();
+            nowPlayingSwipeTracking = true;
+            nowPlayingSwipeConsumed = false;
+            view.animate().cancel();
+            return true;
+        }
+        if (!nowPlayingSwipeTracking) {
+            return false;
+        }
+        float dx = event.getRawX() - nowPlayingSwipeStartX;
+        float dy = event.getRawY() - nowPlayingSwipeStartY;
+        if (action == MotionEvent.ACTION_MOVE) {
+            int slop = ViewConfiguration.get(this).getScaledTouchSlop();
+            if (!nowPlayingSwipeConsumed
+                    && Math.abs(dx) > slop
+                    && Math.abs(dx) > Math.abs(dy) * 1.2f) {
+                nowPlayingSwipeConsumed = true;
+                view.getParent().requestDisallowInterceptTouchEvent(true);
+            }
+            if (nowPlayingSwipeConsumed) {
+                boolean canMove = dx > 0f ? hasPreviousTrack() : hasNextTrack();
+                float resistance = canMove ? 0.42f : 0.16f;
+                float maxOffset = dp(72);
+                float offset = Math.max(-maxOffset, Math.min(maxOffset, dx * resistance));
+                view.setTranslationX(offset);
+                view.setAlpha(1f - Math.min(0.28f, Math.abs(offset) / Math.max(1f, maxOffset) * 0.28f));
+                return true;
+            }
+            return true;
+        }
+        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+            nowPlayingSwipeTracking = false;
+            view.getParent().requestDisallowInterceptTouchEvent(false);
+            if (nowPlayingSwipeConsumed && action == MotionEvent.ACTION_UP) {
+                if (dx > dp(56) && hasPreviousTrack()) {
+                    triggerNowPlayingSwipe(NOW_PLAYING_TRANSITION_PREVIOUS);
+                    return true;
+                }
+                if (dx < -dp(56) && hasNextTrack()) {
+                    triggerNowPlayingSwipe(NOW_PLAYING_TRANSITION_NEXT);
+                    return true;
+                }
+            }
+            if (!nowPlayingSwipeConsumed && action == MotionEvent.ACTION_UP) {
+                showExpandedPlayer();
+            } else {
+                snapNowPlayingInfoFrame();
+            }
+            nowPlayingSwipeConsumed = false;
+            return true;
+        }
+        return true;
+    }
+
+    private void triggerNowPlayingSwipe(int direction) {
+        if (nowPlayingInfoFrame == null) {
+            return;
+        }
+        pendingNowPlayingTransitionDirection = direction;
+        long requestedTrackId = playbackTrackId;
+        float exitX = direction == NOW_PLAYING_TRANSITION_NEXT ? -dp(64) : dp(64);
+        nowPlayingInfoFrame.animate()
+                .translationX(exitX)
+                .alpha(0.35f)
+                .setDuration(110L)
+                .start();
+        if (direction == NOW_PLAYING_TRANSITION_NEXT) {
+            nextTrack();
+        } else if (direction == NOW_PLAYING_TRANSITION_PREVIOUS) {
+            previousTrack();
+        }
+        mainHandler.postDelayed(() -> {
+            if (pendingNowPlayingTransitionDirection != NOW_PLAYING_TRANSITION_NONE
+                    && playbackTrackId == requestedTrackId) {
+                pendingNowPlayingTransitionDirection = NOW_PLAYING_TRANSITION_NONE;
+                snapNowPlayingInfoFrame();
+            }
+        }, 800L);
+    }
+
+    private void snapNowPlayingInfoFrame() {
+        if (nowPlayingInfoFrame == null) {
+            return;
+        }
+        nowPlayingInfoFrame.animate()
+                .translationX(0f)
+                .alpha(1f)
+                .setDuration(160L)
+                .start();
+    }
+
     private boolean hasPreviousTrack() {
         return playbackHasQueue
                 && playbackQueueSize > 1
@@ -4493,6 +4628,9 @@ public final class MainActivity extends Activity {
 
         updatePlaybackThemeColor(idle);
         nowPlayingBar.setBackground(nowPlayingBarBackground(idle));
+        if (nowPlayingProgress != null) {
+            nowPlayingProgress.setProgress(playbackDurationMs, playbackPositionMs, !idle && playbackDurationMs > 0L);
+        }
         applyNowPlayingContent(idle, title, meta, contentChanged && nowPlayingContentInitialized);
         renderedNowPlayingIdle = idle;
         renderedNowPlayingTrackId = renderTrackId;
@@ -4511,9 +4649,35 @@ public final class MainActivity extends Activity {
             setMarqueeText(nowPlayingTitle, title);
             setMarqueeText(nowPlayingMeta, meta);
             setNowPlayingContentAlpha(1f);
+            resetNowPlayingInfoFrame();
             return;
         }
         cancelNowPlayingContentAnimations();
+        int direction = pendingNowPlayingTransitionDirection;
+        pendingNowPlayingTransitionDirection = NOW_PLAYING_TRANSITION_NONE;
+        if (nowPlayingInfoFrame != null) {
+            float exitX = direction == NOW_PLAYING_TRANSITION_PREVIOUS ? dp(58) : -dp(58);
+            float enterX = -exitX;
+            nowPlayingInfoFrame.animate()
+                    .translationX(exitX)
+                    .alpha(0f)
+                    .setDuration(120L)
+                    .withEndAction(() -> {
+                        setNowPlayingCover(idle);
+                        setMarqueeText(nowPlayingTitle, title);
+                        setMarqueeText(nowPlayingMeta, meta);
+                        setNowPlayingContentAlpha(1f);
+                        nowPlayingInfoFrame.setTranslationX(enterX);
+                        nowPlayingInfoFrame.setAlpha(0f);
+                        nowPlayingInfoFrame.animate()
+                                .translationX(0f)
+                                .alpha(1f)
+                                .setDuration(180L)
+                                .start();
+                    })
+                    .start();
+            return;
+        }
         nowPlayingCover.animate().alpha(0f).setDuration(90L).start();
         nowPlayingMeta.animate().alpha(0f).setDuration(90L).start();
         nowPlayingTitle.animate()
@@ -4532,6 +4696,9 @@ public final class MainActivity extends Activity {
     }
 
     private void cancelNowPlayingContentAnimations() {
+        if (nowPlayingInfoFrame != null) {
+            nowPlayingInfoFrame.animate().cancel();
+        }
         if (nowPlayingCover != null) {
             nowPlayingCover.animate().cancel();
         }
@@ -4540,6 +4707,13 @@ public final class MainActivity extends Activity {
         }
         if (nowPlayingMeta != null) {
             nowPlayingMeta.animate().cancel();
+        }
+    }
+
+    private void resetNowPlayingInfoFrame() {
+        if (nowPlayingInfoFrame != null) {
+            nowPlayingInfoFrame.setAlpha(1f);
+            nowPlayingInfoFrame.setTranslationX(0f);
         }
     }
 
@@ -4633,20 +4807,20 @@ public final class MainActivity extends Activity {
         return new GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
                 new int[]{
-                        Color.TRANSPARENT,
-                        Color.argb(4, red, green, blue),
-                        Color.argb(10, red, green, blue),
-                        Color.argb(18, red, green, blue),
-                        Color.argb(30, red, green, blue),
-                        Color.argb(46, red, green, blue),
-                        Color.argb(66, red, green, blue),
-                        Color.argb(92, red, green, blue),
+                        Color.argb(8, red, green, blue),
+                        Color.argb(14, red, green, blue),
+                        Color.argb(22, red, green, blue),
+                        Color.argb(34, red, green, blue),
+                        Color.argb(50, red, green, blue),
+                        Color.argb(70, red, green, blue),
+                        Color.argb(94, red, green, blue),
                         Color.argb(122, red, green, blue),
                         Color.argb(154, red, green, blue),
                         Color.argb(186, red, green, blue),
-                        Color.argb(214, red, green, blue),
-                        Color.argb(236, red, green, blue),
-                        Color.argb(248, red, green, blue)
+                        Color.argb(216, red, green, blue),
+                        Color.argb(238, red, green, blue),
+                        Color.argb(250, red, green, blue),
+                        Color.argb(255, red, green, blue)
                 }
         );
     }
@@ -4656,7 +4830,7 @@ public final class MainActivity extends Activity {
         int green = Color.green(BOTTOM_CHROME_BASE);
         int blue = Color.blue(BOTTOM_CHROME_BASE);
         GradientDrawable drawable = new GradientDrawable();
-        drawable.setColor(Color.argb(122, red, green, blue));
+        drawable.setColor(Color.argb(156, red, green, blue));
         return drawable;
     }
 
@@ -5020,10 +5194,13 @@ public final class MainActivity extends Activity {
             playerDialog.setOnDismissListener(dialog -> {
                 expandedPlaybackSeekBar = null;
                 expandedPlaybackProgressText = null;
+                expandedSleepTimerRemainingText = null;
+                renderedExpandedPlayerSignature = "";
             });
         }
         applyExpandedPlayerWindow(playerDialog.getWindow());
         playerDialog.setContentView(buildExpandedPlayerContent());
+        renderedExpandedPlayerSignature = expandedPlayerRenderSignature();
         playerDialog.show();
         applyExpandedPlayerWindow(playerDialog.getWindow());
     }
@@ -5037,8 +5214,14 @@ public final class MainActivity extends Activity {
                 || playbackSeeking) {
             return;
         }
+        String signature = expandedPlayerRenderSignature();
+        if (TextUtils.equals(renderedExpandedPlayerSignature, signature)) {
+            updateExpandedDynamicText();
+            return;
+        }
         applyExpandedPlayerWindow(playerDialog.getWindow());
         playerDialog.setContentView(buildExpandedPlayerContent());
+        renderedExpandedPlayerSignature = signature;
         applyExpandedPlayerWindow(playerDialog.getWindow());
     }
 
@@ -5052,9 +5235,39 @@ public final class MainActivity extends Activity {
         if (expandedPlaybackProgressText != null) {
             expandedPlaybackProgressText.setText(playbackProgressText());
         }
+        updateExpandedDynamicText();
+    }
+
+    private void updateExpandedDynamicText() {
+        if (expandedSleepTimerRemainingText != null) {
+            expandedSleepTimerRemainingText.setText(sleepTimerInlineText());
+        }
+    }
+
+    private String expandedPlayerRenderSignature() {
+        return playbackTrackId
+                + "|" + playbackTitle
+                + "|" + playbackArtist
+                + "|" + playbackAlbum
+                + "|" + playbackAlbumArtUri
+                + "|" + playbackQueueIndex
+                + "|" + playbackQueueSize
+                + "|" + playbackPlaying
+                + "|" + playbackWillPlay
+                + "|" + playbackPreparing
+                + "|" + playbackError
+                + "|" + playbackShuffleEnabled
+                + "|" + playbackRepeatMode
+                + "|" + playbackHasQueue
+                + "|" + sleepTimerEndAtMs
+                + "|" + sleepTimerPaused
+                + "|" + sleepTimerControlsVisible
+                + "|" + (sleepTimerControlsVisible ? "editing" : sleepTimerMinutes)
+                + "|" + activeQueuePreview.size();
     }
 
     private View buildExpandedPlayerContent() {
+        expandedSleepTimerRemainingText = null;
         FrameLayout frame = new FrameLayout(this);
         frame.setLayoutParams(new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -5110,9 +5323,7 @@ public final class MainActivity extends Activity {
         content.addView(top, marginBottom(26));
 
         content.addView(coverArtView(), coverParams());
-        if (hasSleepTimer()) {
-            content.addView(activeSleepTimerRow(), marginBottom(8));
-        }
+        content.addView(sleepTimerStatusSlot(), marginBottom(8));
         content.addView(marqueeText(playbackTitle, 23, R.color.ytet_text, true), marginBottom(4));
         content.addView(marqueeText(playbackArtist, 14, R.color.ytet_muted, false), marginBottom(2));
         content.addView(marqueeText(albumQueuePositionText(), 12, R.color.ytet_muted, false), marginBottom(8));
@@ -5201,16 +5412,17 @@ public final class MainActivity extends Activity {
         LinearLayout tools = new LinearLayout(this);
         tools.setOrientation(LinearLayout.HORIZONTAL);
         tools.setGravity(Gravity.CENTER_VERTICAL);
-        boolean timerSelected = hasSleepTimer() || (sleepTimerControlsVisible && sleepTimerMinutes > 0);
+        boolean timerSelected = hasSleepTimer();
         ImageButton timer = playerIconButton(R.drawable.ic_timer, "슬립 타이머", timerSelected, true);
         timer.setOnClickListener(view -> {
             if (sleepTimerControlsVisible) {
-                applySleepTimer(sleepTimerMinutes);
+                sleepTimerMinutes = sleepTimerDraftInitialMinutes;
                 sleepTimerControlsVisible = false;
             } else {
-                if (hasSleepTimer()) {
-                    sleepTimerMinutes = remainingSleepTimerMinutes();
-                }
+                sleepTimerMinutes = clampSleepTimerTotalMinutes(hasSleepTimer()
+                        ? remainingSleepTimerMinutes()
+                        : sleepTimerMinutes);
+                sleepTimerDraftInitialMinutes = sleepTimerMinutes;
                 sleepTimerControlsVisible = true;
             }
             updateExpandedPlayer();
@@ -5222,11 +5434,11 @@ public final class MainActivity extends Activity {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 1f
         );
-        timerParams.setMargins(dp(8), 0, dp(8), 0);
+        timerParams.setMargins(dp(8), 0, 0, 0);
         tools.addView(timerControls, timerParams);
         ImageButton queue = playerIconButton(R.drawable.ic_queue_music, "재생목록", false, playbackHasQueue);
         queue.setOnClickListener(view -> showQueueDialog());
-        tools.addView(queue, new LinearLayout.LayoutParams(dp(58), dp(58)));
+        tools.addView(queue, new LinearLayout.LayoutParams(dp(54), dp(58)));
         content.addView(tools, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 dp(98)
@@ -5248,14 +5460,19 @@ public final class MainActivity extends Activity {
         return placeholder;
     }
 
-    private View activeSleepTimerRow() {
+    private View sleepTimerStatusSlot() {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setMinimumHeight(dp(42));
 
-        TextView remaining = muted(sleepTimerInlineText(), 14);
-        remaining.setGravity(Gravity.CENTER_VERTICAL);
-        row.addView(remaining, new LinearLayout.LayoutParams(0, dp(42), 1f));
+        if (!hasSleepTimer()) {
+            expandedSleepTimerRemainingText = null;
+            return row;
+        }
+
+        View spacer = new View(this);
+        row.addView(spacer, new LinearLayout.LayoutParams(0, dp(42), 1f));
 
         ImageButton toggle = playerIconButton(
                 sleepTimerPaused ? R.drawable.ic_play_arrow : R.drawable.ic_pause,
@@ -5265,12 +5482,15 @@ public final class MainActivity extends Activity {
         );
         toggle.setPadding(dp(9), dp(9), dp(9), dp(9));
         toggle.setOnClickListener(view -> toggleSleepTimerPause());
-        row.addView(toggle, marginRight(4, dp(42), dp(42)));
+        row.addView(toggle, marginRight(8, dp(42), dp(42)));
 
-        ImageButton cancel = playerIconButton(R.drawable.ic_close, "슬립 타이머 끄기", false, true);
-        cancel.setPadding(dp(9), dp(9), dp(9), dp(9));
-        cancel.setOnClickListener(view -> cancelSleepTimer());
-        row.addView(cancel, new LinearLayout.LayoutParams(dp(42), dp(42)));
+        TextView remaining = muted(sleepTimerInlineText(), 14);
+        expandedSleepTimerRemainingText = remaining;
+        remaining.setGravity(Gravity.CENTER_VERTICAL);
+        row.addView(remaining, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                dp(42)
+        ));
         return row;
     }
 
@@ -5321,8 +5541,7 @@ public final class MainActivity extends Activity {
     }
 
     private String sleepTimerInlineText() {
-        String prefix = sleepTimerPaused ? "슬립 타이머 일시정지 · " : "슬립 타이머 · ";
-        return prefix + MusicLibrary.formatDuration(remainingSleepTimerMs());
+        return MusicLibrary.formatDuration(remainingSleepTimerMs());
     }
 
     private String coverInitials() {
@@ -5433,27 +5652,55 @@ public final class MainActivity extends Activity {
         panel.setGravity(Gravity.CENTER_VERTICAL);
         panel.setPadding(0, 0, 0, 0);
 
-        LinearLayout copy = new LinearLayout(this);
-        copy.setOrientation(LinearLayout.VERTICAL);
-        copy.setPadding(0, 0, dp(8), 0);
-        copy.addView(label("슬립 타이머"), marginBottom(2));
-        copy.addView(muted(sleepTimerStatusText(), 12), matchWrap());
-        panel.addView(copy, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        SleepTimerDialView hours = new SleepTimerDialView(this);
+        hours.configure(99, 1, true);
+        hours.setSelectedValue(sleepTimerHours());
+        hours.setTimerActive(hasSleepTimer());
+        hours.setOnTimerChangeListener((value, committed) -> setSleepTimerDraft(value, sleepTimerMinutePart()));
+        panel.addView(hours, new LinearLayout.LayoutParams(dp(64), LinearLayout.LayoutParams.MATCH_PARENT));
 
-        SleepTimerDialView dial = new SleepTimerDialView(this);
-        dial.setSelectedMinutes(sleepTimerMinutes);
-        dial.setTimerActive(hasSleepTimer());
-        dial.setOnTimerChangeListener((minutes, committed) -> {
-            sleepTimerMinutes = minutes;
-            if (committed) {
-                updateExpandedPlayer();
-            }
-        });
-        panel.addView(dial, new LinearLayout.LayoutParams(dp(104), LinearLayout.LayoutParams.MATCH_PARENT));
+        TextView colon = text(":", 26, R.color.ytet_text, true);
+        colon.setGravity(Gravity.CENTER);
+        colon.setIncludeFontPadding(false);
+        panel.addView(colon, new LinearLayout.LayoutParams(dp(18), LinearLayout.LayoutParams.MATCH_PARENT));
+
+        SleepTimerDialView minutes = new SleepTimerDialView(this);
+        minutes.configure(59, 1, true);
+        minutes.setSelectedValue(sleepTimerMinutePart());
+        minutes.setTimerActive(hasSleepTimer());
+        minutes.setOnTimerChangeListener((value, committed) -> setSleepTimerDraft(sleepTimerHours(), value));
+        panel.addView(minutes, new LinearLayout.LayoutParams(dp(64), LinearLayout.LayoutParams.MATCH_PARENT));
+
+        View spacer = new View(this);
+        panel.addView(spacer, new LinearLayout.LayoutParams(0, 1, 1f));
+
+        TimerConfirmButton confirm = new TimerConfirmButton(this);
+        confirm.setOnClickListener(view -> confirmSleepTimerSelection());
+        panel.addView(confirm, new LinearLayout.LayoutParams(dp(48), dp(58)));
         return panel;
     }
 
+    private int sleepTimerHours() {
+        return clampSleepTimerTotalMinutes(sleepTimerMinutes) / 60;
+    }
+
+    private int sleepTimerMinutePart() {
+        return clampSleepTimerTotalMinutes(sleepTimerMinutes) % 60;
+    }
+
+    private void setSleepTimerDraft(int hours, int minutes) {
+        int totalMinutes = Math.max(0, hours) * 60 + Math.max(0, minutes);
+        sleepTimerMinutes = clampSleepTimerTotalMinutes(totalMinutes);
+    }
+
+    private void confirmSleepTimerSelection() {
+        applySleepTimer(sleepTimerMinutes);
+        sleepTimerControlsVisible = false;
+        updateExpandedPlayer();
+    }
+
     private void applySleepTimer(int minutes) {
+        minutes = clampSleepTimerTotalMinutes(minutes);
         startPlayback(PlaybackService.sleepTimerIntent(this, minutes));
         sleepTimerEndAtMs = minutes <= 0 ? 0L : System.currentTimeMillis() + minutes * 60_000L;
         sleepTimerRemainingMs = minutes <= 0 ? 0L : minutes * 60_000L;
@@ -5484,6 +5731,10 @@ public final class MainActivity extends Activity {
         updateExpandedPlayer();
     }
 
+    private int clampSleepTimerTotalMinutes(int minutes) {
+        return Math.max(0, Math.min(99 * 60 + 59, minutes));
+    }
+
     private boolean hasSleepTimer() {
         return sleepTimerPaused || isSleepTimerActive();
     }
@@ -5505,13 +5756,6 @@ public final class MainActivity extends Activity {
             return 0;
         }
         return Math.max(1, (int) Math.ceil(remainingMs / 60_000.0));
-    }
-
-    private String sleepTimerStatusText() {
-        if (sleepTimerMinutes <= 0) {
-            return "다이얼을 드래그해서 설정";
-        }
-        return "← 아이콘을 클릭해서 설정 완료";
     }
 
     private void showQueueDialog() {
@@ -6426,6 +6670,8 @@ public final class MainActivity extends Activity {
         view.setEllipsize(TextUtils.TruncateAt.MARQUEE);
         view.setMarqueeRepeatLimit(-1);
         view.setHorizontallyScrolling(true);
+        view.setHorizontalFadingEdgeEnabled(true);
+        view.setFadingEdgeLength(dp(18));
         view.setIncludeFontPadding(false);
         view.setGravity(Gravity.CENTER_VERTICAL);
         view.setSelected(true);
@@ -7106,6 +7352,53 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private final class MiniPlaybackProgressView extends View {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final RectF rect = new RectF();
+        private long durationMs = 1L;
+        private long positionMs;
+        private boolean progressVisible;
+
+        MiniPlaybackProgressView(Context context) {
+            super(context);
+            setWillNotDraw(false);
+        }
+
+        void setProgress(long duration, long position, boolean visible) {
+            long nextDuration = Math.max(1L, duration);
+            long nextPosition = Math.max(0L, Math.min(position, nextDuration));
+            boolean changed = durationMs != nextDuration
+                    || positionMs != nextPosition
+                    || progressVisible != visible;
+            durationMs = nextDuration;
+            positionMs = nextPosition;
+            progressVisible = visible;
+            if (changed) {
+                invalidate();
+            }
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            if (!progressVisible || getWidth() <= 0 || getHeight() <= 0) {
+                return;
+            }
+            float progress = Math.max(0f, Math.min(1f, positionMs / (float) durationMs));
+            float trackHeight = Math.max(1f, getHeight());
+            float radius = trackHeight / 2f;
+
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(Color.argb(58, 255, 255, 255));
+            rect.set(0f, 0f, getWidth(), trackHeight);
+            canvas.drawRoundRect(rect, radius, radius, paint);
+
+            paint.setColor(Color.WHITE);
+            rect.set(0f, 0f, Math.max(0f, getWidth() * progress), trackHeight);
+            canvas.drawRoundRect(rect, radius, radius, paint);
+        }
+    }
+
     private final class PlaybackSeekBarView extends View {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Rect textBounds = new Rect();
@@ -7483,7 +7776,8 @@ public final class MainActivity extends Activity {
                     || view instanceof RadioGroup
                     || view instanceof ProgressBar
                     || view instanceof PlaybackSeekBarView
-                    || view instanceof SleepTimerDialView;
+                    || view instanceof SleepTimerDialView
+                    || view instanceof TimerConfirmButton;
         }
 
         private boolean isRawPointInsideView(View view, float rawX, float rawY) {
@@ -7511,27 +7805,84 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private final class SleepTimerDialView extends View {
-        private static final int MAX_MINUTES = 120;
-        private static final int STEP_MINUTES = 5;
+    private final class TimerConfirmButton extends View {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Path checkPath = new Path();
 
+        TimerConfirmButton(Context context) {
+            super(context);
+            setWillNotDraw(false);
+            setClickable(true);
+            setFocusable(true);
+            setContentDescription("슬립 타이머 설정");
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            float cx = getWidth() / 2f;
+            float cy = getHeight() / 2f;
+            float outerRadius = Math.min(getWidth(), getHeight()) * 0.31f;
+            float innerRadius = outerRadius * 0.58f;
+            int alpha = isPressed() ? 190 : 235;
+
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(dp(2));
+            paint.setColor(Color.argb(alpha, 255, 255, 255));
+            canvas.drawCircle(cx, cy, outerRadius, paint);
+
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(Color.argb(alpha, 255, 255, 255));
+            canvas.drawCircle(cx, cy, innerRadius, paint);
+
+            checkPath.reset();
+            checkPath.moveTo(cx - innerRadius * 0.46f, cy);
+            checkPath.lineTo(cx - innerRadius * 0.12f, cy + innerRadius * 0.34f);
+            checkPath.lineTo(cx + innerRadius * 0.52f, cy - innerRadius * 0.38f);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setStrokeJoin(Paint.Join.ROUND);
+            paint.setStrokeWidth(dp(2));
+            paint.setColor(color(R.color.ytet_accent));
+            canvas.drawPath(checkPath, paint);
+        }
+
+        @Override
+        protected void drawableStateChanged() {
+            super.drawableStateChanged();
+            invalidate();
+        }
+    }
+
+    private final class SleepTimerDialView extends View {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final RectF wheel = new RectF();
         private TimerChangeListener listener;
-        private int selectedMinutes = 30;
-        private int dragStartMinutes = 30;
+        private int maxValue = 120;
+        private int stepValue = 5;
+        private int selectedValue = 30;
+        private int dragStartValue = 30;
         private float dragStepOffset;
         private float dragStartY;
         private boolean timerActive;
         private boolean dragging;
+        private boolean twoDigit;
 
         SleepTimerDialView(Context context) {
             super(context);
             setWillNotDraw(false);
         }
 
-        void setSelectedMinutes(int minutes) {
-            selectedMinutes = clampTimerMinutes(minutes);
+        void configure(int max, int step, boolean showTwoDigit) {
+            maxValue = Math.max(1, max);
+            stepValue = Math.max(1, step);
+            twoDigit = showTwoDigit;
+            selectedValue = clampTimerValue(selectedValue);
+            invalidate();
+        }
+
+        void setSelectedValue(int value) {
+            selectedValue = clampTimerValue(value);
             if (!dragging) {
                 dragStepOffset = 0f;
             }
@@ -7573,7 +7924,7 @@ public final class MainActivity extends Activity {
                 if (Math.abs(distance) > 1.65f) {
                     continue;
                 }
-                drawDialValue(canvas, timerText(index * STEP_MINUTES), width / 2f, dialValueY(height, distance),
+                drawDialValue(canvas, timerText(index * stepValue), width / 2f, dialValueY(height, distance),
                         dialTextSize(distance), dialTextColor(distance));
             }
         }
@@ -7585,21 +7936,21 @@ public final class MainActivity extends Activity {
                 dragging = true;
                 dragStepOffset = 0f;
                 dragStartY = event.getRawY();
-                dragStartMinutes = selectedMinutes;
+                dragStartValue = selectedValue;
                 getParent().requestDisallowInterceptTouchEvent(true);
                 invalidate();
                 return true;
             }
             if (event.getAction() == MotionEvent.ACTION_MOVE) {
-                float startIndex = dragStartMinutes / (float) STEP_MINUTES;
+                float startIndex = dragStartValue / (float) stepValue;
                 float rawCenterIndex = startIndex + (dragStartY - event.getRawY()) / dp(20);
                 float nextCenterIndex = Math.max(0f, Math.min(maxTimerIndex(), rawCenterIndex));
                 dragStepOffset = nextCenterIndex - startIndex;
-                int nextMinutes = clampTimerMinutes(Math.round(nextCenterIndex) * STEP_MINUTES);
-                if (nextMinutes != selectedMinutes) {
-                    selectedMinutes = nextMinutes;
+                int nextValue = clampTimerValue(Math.round(nextCenterIndex) * stepValue);
+                if (nextValue != selectedValue) {
+                    selectedValue = nextValue;
                     if (listener != null) {
-                        listener.onChanged(selectedMinutes, false);
+                        listener.onChanged(selectedValue, false);
                     }
                 }
                 invalidate();
@@ -7611,7 +7962,7 @@ public final class MainActivity extends Activity {
                 suppressPlayerDragDismiss = false;
                 getParent().requestDisallowInterceptTouchEvent(false);
                 if (listener != null && event.getAction() == MotionEvent.ACTION_UP) {
-                    listener.onChanged(selectedMinutes, true);
+                    listener.onChanged(selectedValue, true);
                 }
                 invalidate();
                 return true;
@@ -7621,9 +7972,9 @@ public final class MainActivity extends Activity {
 
         private float visibleCenterIndex() {
             if (dragging) {
-                return dragStartMinutes / (float) STEP_MINUTES + dragStepOffset;
+                return dragStartValue / (float) stepValue + dragStepOffset;
             }
-            return selectedMinutes / (float) STEP_MINUTES;
+            return selectedValue / (float) stepValue;
         }
 
         private float dialValueY(int height, float distance) {
@@ -7632,7 +7983,7 @@ public final class MainActivity extends Activity {
 
         private int dialTextSize(float distance) {
             float absolute = Math.min(1.4f, Math.abs(distance));
-            return Math.round(22f - absolute * 7f);
+            return Math.round(24f - absolute * 7f);
         }
 
         private int dialTextColor(float distance) {
@@ -7651,16 +8002,17 @@ public final class MainActivity extends Activity {
         }
 
         private String timerText(int minutes) {
-            return minutes <= 0 ? "OFF" : minutes + "m";
+            int value = clampTimerValue(minutes);
+            return twoDigit ? String.format(Locale.US, "%02d", value) : Integer.toString(value);
         }
 
         private int maxTimerIndex() {
-            return MAX_MINUTES / STEP_MINUTES;
+            return maxValue / stepValue;
         }
 
-        private int clampTimerMinutes(int minutes) {
-            int stepped = Math.round(minutes / (float) STEP_MINUTES) * STEP_MINUTES;
-            return Math.max(0, Math.min(MAX_MINUTES, stepped));
+        private int clampTimerValue(int value) {
+            int stepped = Math.round(value / (float) stepValue) * stepValue;
+            return Math.max(0, Math.min(maxValue, stepped));
         }
     }
 
