@@ -132,7 +132,13 @@ public final class MainActivity extends Activity {
     private static final int LIBRARY_RENDER_BATCH_ITEMS = 12;
     private static final int QUEUE_INITIAL_RENDER_ITEMS = 18;
     private static final int QUEUE_RENDER_BATCH_ITEMS = 16;
-    private static final int BOTTOM_CHROME_COLOR = 0x800B0B0D;
+    private static final int BOTTOM_CHROME_BASE = 0xFF0B0B0D;
+    private static final String[] SUPPORTED_VIDEO_URL_MARKERS = {
+            "youtube.com/",
+            "youtu.be/",
+            "music.youtube.com/",
+            "m.youtube.com/"
+    };
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService libraryExecutor = Executors.newSingleThreadExecutor();
@@ -146,6 +152,7 @@ public final class MainActivity extends Activity {
     private TextView nowPlayingTitle;
     private TextView nowPlayingMeta;
     private ImageButton playPauseButton;
+    private View bottomVignette;
     private View bottomNavigationGuard;
     private long renderedNowPlayingTrackId = Long.MIN_VALUE;
     private boolean renderedNowPlayingIdle = true;
@@ -397,9 +404,17 @@ public final class MainActivity extends Activity {
         updateApkPath = getPreferences().getString(PREF_UPDATE_APK_PATH, "");
         ensureDefaultMediaFolders();
         clearInstalledPendingUpdateIfNeeded();
+        applySharedUrlIntent(getIntent(), false);
         setContentView(buildContent());
         registerBackNavigationCallback();
         startUpdateCheck(false);
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        applySharedUrlIntent(intent, true);
     }
 
     @Override
@@ -600,17 +615,28 @@ public final class MainActivity extends Activity {
                 FrameLayout.LayoutParams.MATCH_PARENT
         ));
 
+        bottomVignette = new View(this);
+        bottomVignette.setBackground(bottomVignetteBackground());
+        bottomVignette.setClickable(false);
+        app.addView(bottomVignette, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                bottomVignetteHeight(0),
+                Gravity.BOTTOM
+        ));
+
         LinearLayout bottomChrome = new LinearLayout(this);
         bottomChrome.setOrientation(LinearLayout.VERTICAL);
         bottomChrome.setClickable(true);
         nowPlayingBar = buildNowPlayingBar();
-        bottomChrome.addView(nowPlayingBar, new LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams nowPlayingParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 dp(64)
-        ));
+        );
+        nowPlayingParams.setMargins(dp(20), 0, dp(20), 0);
+        bottomChrome.addView(nowPlayingBar, nowPlayingParams);
         bottomChrome.addView(buildBottomTabs(), matchWrap());
         bottomNavigationGuard = new View(this);
-        bottomNavigationGuard.setBackgroundColor(BOTTOM_CHROME_COLOR);
+        bottomNavigationGuard.setBackgroundColor(Color.TRANSPARENT);
         bottomNavigationGuard.setOnTouchListener((view, event) -> true);
         bottomChrome.addView(bottomNavigationGuard, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -666,7 +692,7 @@ public final class MainActivity extends Activity {
         tabs.setOrientation(LinearLayout.HORIZONTAL);
         tabs.setClickable(true);
         tabs.setPadding(dp(10), dp(4), dp(10), dp(12));
-        tabs.setBackgroundColor(BOTTOM_CHROME_COLOR);
+        tabs.setBackgroundColor(Color.TRANSPARENT);
 
         homeTabButton = tabButton("홈", Tab.HOME, R.drawable.ic_tab_home_outline, R.drawable.ic_tab_home_filled);
         libraryTabButton = tabButton("내 음악", Tab.LIBRARY, R.drawable.ic_tab_library_outline, R.drawable.ic_tab_library_filled);
@@ -705,6 +731,23 @@ public final class MainActivity extends Activity {
         saveCurrentTabInputs();
         currentTab = tab;
         renderCurrentTab();
+    }
+
+    private void showExtractorWithUrl(String sharedUrl, boolean renderImmediately) {
+        String normalizedUrl = sharedUrl == null ? "" : sharedUrl.trim();
+        if (normalizedUrl.isEmpty()) {
+            return;
+        }
+        extractorUrl = normalizedUrl;
+        currentTab = Tab.EXTRACTOR;
+        if (urlInput != null) {
+            urlInput.setText(normalizedUrl);
+            urlInput.setSelection(urlInput.getText().length());
+        }
+        if (renderImmediately && contentScrollView != null) {
+            renderCurrentTab();
+            toast("공유한 링크를 추출기에 입력했습니다.");
+        }
     }
 
     private void renderCurrentTab() {
@@ -4378,7 +4421,21 @@ public final class MainActivity extends Activity {
         int end = idle
                 ? color(R.color.ytet_panel)
                 : blendColors(base, color(R.color.ytet_panel), 0.46f);
-        return new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, new int[]{base, end});
+        GradientDrawable drawable = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, new int[]{base, end});
+        drawable.setCornerRadius(dp(8));
+        return drawable;
+    }
+
+    private GradientDrawable bottomVignetteBackground() {
+        return new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{
+                        Color.TRANSPARENT,
+                        Color.argb(52, Color.red(BOTTOM_CHROME_BASE), Color.green(BOTTOM_CHROME_BASE), Color.blue(BOTTOM_CHROME_BASE)),
+                        Color.argb(142, Color.red(BOTTOM_CHROME_BASE), Color.green(BOTTOM_CHROME_BASE), Color.blue(BOTTOM_CHROME_BASE)),
+                        Color.argb(222, Color.red(BOTTOM_CHROME_BASE), Color.green(BOTTOM_CHROME_BASE), Color.blue(BOTTOM_CHROME_BASE))
+                }
+        );
     }
 
     private GradientDrawable expandedPlayerBackground(boolean roundedTop) {
@@ -4457,6 +4514,9 @@ public final class MainActivity extends Activity {
             if (bottomNavigationGuard != null) {
                 setViewHeight(bottomNavigationGuard, bottomInset);
             }
+            if (bottomVignette != null) {
+                setViewHeight(bottomVignette, bottomVignetteHeight(bottomInset));
+            }
             updateMainContentBottomPadding(bottomInset);
             return insets;
         });
@@ -4476,6 +4536,10 @@ public final class MainActivity extends Activity {
 
     private int bottomTabsHeight() {
         return dp(64);
+    }
+
+    private int bottomVignetteHeight(int navigationInset) {
+        return bottomChromeBaseHeight() + navigationInset;
     }
 
     private void applyQueueWindow(Window window) {
@@ -5928,6 +5992,77 @@ public final class MainActivity extends Activity {
         if (metadataEnhanceCheck != null) {
             extractorEnhanceMetadata = metadataEnhanceCheck.isChecked();
         }
+    }
+
+    private boolean applySharedUrlIntent(Intent intent, boolean renderImmediately) {
+        String sharedUrl = extractSharedVideoUrl(intent);
+        if (sharedUrl == null || sharedUrl.trim().isEmpty()) {
+            return false;
+        }
+        showExtractorWithUrl(sharedUrl, renderImmediately);
+        return true;
+    }
+
+    private String extractSharedVideoUrl(Intent intent) {
+        if (intent == null || !Intent.ACTION_SEND.equals(intent.getAction())) {
+            return null;
+        }
+        String type = intent.getType();
+        if (type != null && !type.startsWith("text/")) {
+            return null;
+        }
+        CharSequence sharedText = intent.getCharSequenceExtra(Intent.EXTRA_TEXT);
+        if (sharedText == null) {
+            sharedText = intent.getCharSequenceExtra(Intent.EXTRA_SUBJECT);
+        }
+        return extractFirstSupportedVideoUrl(sharedText == null ? "" : sharedText.toString());
+    }
+
+    private String extractFirstSupportedVideoUrl(String textValue) {
+        if (textValue == null || textValue.trim().isEmpty()) {
+            return null;
+        }
+        String[] tokens = textValue.split("\\s+");
+        for (String token : tokens) {
+            String candidate = cleanSharedUrlToken(token);
+            if (isSupportedVideoUrl(candidate)) {
+                return candidate;
+            }
+        }
+        String cleaned = cleanSharedUrlToken(textValue);
+        return isSupportedVideoUrl(cleaned) ? cleaned : null;
+    }
+
+    private String cleanSharedUrlToken(String value) {
+        if (value == null) {
+            return "";
+        }
+        String cleaned = value.trim();
+        while (!cleaned.isEmpty()) {
+            char last = cleaned.charAt(cleaned.length() - 1);
+            if (last == ')' || last == ']' || last == '}' || last == ',' || last == '.') {
+                cleaned = cleaned.substring(0, cleaned.length() - 1);
+            } else {
+                break;
+            }
+        }
+        return cleaned;
+    }
+
+    private boolean isSupportedVideoUrl(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return false;
+        }
+        String lower = value.toLowerCase(Locale.US);
+        if (!lower.startsWith("http://") && !lower.startsWith("https://")) {
+            return false;
+        }
+        for (String marker : SUPPORTED_VIDEO_URL_MARKERS) {
+            if (lower.contains(marker)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void selectOption(MediaType mediaType, String optionValue) {

@@ -1,5 +1,7 @@
 <resources>
     <string name="app_name">YTET</string>
+    <string name="share_extract_short_label">YTET 추출</string>
+    <string name="share_extract_long_label">YTET로 추출</string>
     <string name="notification_channel_name">추출 작업</string>
     <string name="playback_notification_channel_name">음악 재생</string>
 </resources>

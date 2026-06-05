@@ -1,0 +1,19 @@
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <share-target android:targetClass="com.ytet.android.ui.MainActivity">
+        <data android:mimeType="text/plain" />
+        <category android:name="com.ytet.android.category.YOUTUBE_URL" />
+    </share-target>
+
+    <shortcut
+        android:shortcutId="share_youtube_url"
+        android:enabled="true"
+        android:icon="@drawable/ytet_launcher_icon"
+        android:shortcutShortLabel="@string/share_extract_short_label"
+        android:shortcutLongLabel="@string/share_extract_long_label">
+        <intent
+            android:action="android.intent.action.SEND"
+            android:targetClass="com.ytet.android.ui.MainActivity"
+            android:targetPackage="com.ytet.android" />
+        <categories android:name="com.ytet.android.category.YOUTUBE_URL" />
+    </shortcut>
+</shortcuts>
