@@ -35,6 +35,7 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.Parcelable;
 import android.provider.MediaStore;
 import android.provider.Settings;
 import android.text.Editable;
@@ -110,6 +111,10 @@ import java.net.URL;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutorService;
 
+import androidx.recyclerview.widget.GridLayoutManager;
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
+
 public final class MainActivity extends Activity {
     private static final int REQUEST_OUTPUT_TREE = 1207;
     private static final int REQUEST_NOTIFICATIONS = 1208;
@@ -128,10 +133,6 @@ public final class MainActivity extends Activity {
     private static final String LIBRARY_SOURCE_COLLECTION = "collection";
     private static final String LIBRARY_SOURCE_DEVICE = "device";
     private static final long LIBRARY_SEARCH_DEBOUNCE_MS = 120L;
-    private static final int LIBRARY_INITIAL_RENDER_ITEMS = 14;
-    private static final int LIBRARY_RENDER_BATCH_ITEMS = 12;
-    private static final int QUEUE_INITIAL_RENDER_ITEMS = 18;
-    private static final int QUEUE_RENDER_BATCH_ITEMS = 16;
     private static final int BOTTOM_CHROME_BASE = 0xFF0B0B0D;
     private static final String[] SUPPORTED_VIDEO_URL_MARKERS = {
             "youtube.com/",
@@ -146,7 +147,13 @@ public final class MainActivity extends Activity {
     private final DeviceMusicLibrary deviceMusicLibrary = new DeviceMusicLibrary();
     private final UpdateChecker updateChecker = new UpdateChecker();
 
+    private FrameLayout contentFrame;
     private ScrollView contentScrollView;
+    private RecyclerView libraryRecyclerView;
+    private LibraryRecyclerAdapter libraryRecyclerAdapter;
+    private Parcelable libraryRecyclerState;
+    private boolean libraryRecyclerGridMode;
+    private int mainNavigationInset;
     private LinearLayout nowPlayingBar;
     private FrameLayout nowPlayingCover;
     private TextView nowPlayingTitle;
@@ -166,7 +173,6 @@ public final class MainActivity extends Activity {
     private Button updateActionButton;
     private Dialog playerDialog;
     private Dialog queueDialog;
-    private int queueRenderGeneration;
     private AlertDialog updateDialog;
     private OnBackInvokedCallback backInvokedCallback;
     private PlaybackSeekBarView expandedPlaybackSeekBar;
@@ -251,8 +257,13 @@ public final class MainActivity extends Activity {
     private boolean librarySearchVisible;
     private ArtistDetailMode artistDetailMode = ArtistDetailMode.ALL;
     private EditText librarySearchInput;
-    private LinearLayout libraryResultsContainer;
-    private int libraryRenderGeneration;
+    private String cachedLibraryTabKey = "";
+    private int libraryDataVersion;
+    private int playlistDataVersion;
+    private String cachedVisibleTracksKey = "";
+    private List<DeviceAudioTrack> cachedVisibleTracks = new ArrayList<>();
+    private String cachedVisibleGroupsKey = "";
+    private List<LibraryGroup> cachedVisibleGroups = new ArrayList<>();
     private LibraryGroup focusedLibraryGroup;
     private LibraryFilter focusedLibraryGroupFilter;
     private LibraryGroup focusedParentArtistGroup;
@@ -594,13 +605,23 @@ public final class MainActivity extends Activity {
         FrameLayout app = new FrameLayout(this);
         app.setBackgroundColor(color(R.color.ytet_background));
 
-        FrameLayout contentFrame = new FrameLayout(this);
+        contentFrame = new FrameLayout(this);
         appContentScrollView = new PullRefreshScrollView(this);
         contentScrollView = appContentScrollView;
         contentScrollView.setFillViewport(true);
         contentScrollView.setClipToPadding(false);
         contentScrollView.setBackgroundColor(color(R.color.ytet_background));
         contentFrame.addView(contentScrollView, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+        ));
+        libraryRecyclerView = new PullRefreshRecyclerView(this);
+        libraryRecyclerView.setVisibility(View.GONE);
+        libraryRecyclerView.setClipToPadding(false);
+        libraryRecyclerView.setBackgroundColor(color(R.color.ytet_background));
+        libraryRecyclerView.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        libraryRecyclerView.setItemAnimator(null);
+        contentFrame.addView(libraryRecyclerView, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT
         ));
@@ -632,7 +653,6 @@ public final class MainActivity extends Activity {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 dp(64)
         );
-        nowPlayingParams.setMargins(dp(20), 0, dp(20), 0);
         bottomChrome.addView(nowPlayingBar, nowPlayingParams);
         bottomChrome.addView(buildBottomTabs(), matchWrap());
         bottomNavigationGuard = new View(this);
@@ -728,7 +748,11 @@ public final class MainActivity extends Activity {
     }
 
     private void showTab(Tab tab) {
+        if (currentTab == tab) {
+            return;
+        }
         saveCurrentTabInputs();
+        saveLibraryTabScroll();
         currentTab = tab;
         renderCurrentTab();
     }
@@ -751,20 +775,33 @@ public final class MainActivity extends Activity {
     }
 
     private void renderCurrentTab() {
-        if (contentScrollView == null) {
+        if (contentScrollView == null || libraryRecyclerView == null) {
             return;
         }
+        saveLibraryTabScroll();
         if (currentTab == Tab.LIBRARY) {
             flushLibrarySearchInput();
+            contentScrollView.setVisibility(View.GONE);
+            libraryRecyclerView.setVisibility(View.VISIBLE);
+            renderLibraryRecyclerTab();
+            updateTabStyles();
+            updateNowPlayingBar();
+            updateLibraryPullIndicator(libraryLoading ? libraryPullRefreshTriggerDistance() : libraryPullDistance, libraryLoading || libraryPullReady);
+            updateExtractorScrollMode();
+            return;
         }
+
+        libraryRecyclerView.setVisibility(View.GONE);
+        contentScrollView.setVisibility(View.VISIBLE);
         contentScrollView.removeAllViews();
         View view;
-        if (currentTab == Tab.LIBRARY) {
-            view = buildLibraryTab();
-        } else if (currentTab == Tab.EXTRACTOR) {
+        if (currentTab == Tab.EXTRACTOR) {
             view = buildExtractorTab();
         } else {
             view = buildHomeTab();
+        }
+        if (view.getParent() instanceof ViewGroup) {
+            ((ViewGroup) view.getParent()).removeView(view);
         }
         contentScrollView.addView(view, new ScrollView.LayoutParams(
                 ScrollView.LayoutParams.MATCH_PARENT,
@@ -772,11 +809,7 @@ public final class MainActivity extends Activity {
         ));
         updateTabStyles();
         updateNowPlayingBar();
-        if (currentTab == Tab.LIBRARY) {
-            updateLibraryPullIndicator(libraryLoading ? libraryPullRefreshTriggerDistance() : libraryPullDistance, libraryLoading || libraryPullReady);
-        } else {
-            resetLibraryPullIndicator();
-        }
+        resetLibraryPullIndicator();
         updateExtractorScrollMode();
     }
 
@@ -790,13 +823,13 @@ public final class MainActivity extends Activity {
 
     private boolean handleLibraryPullToRefresh(MotionEvent event) {
         int action = event.getActionMasked();
-        if (currentTab != Tab.LIBRARY || contentScrollView == null) {
+        if (currentTab != Tab.LIBRARY || (contentScrollView == null && libraryRecyclerView == null)) {
             resetLibraryPullIndicator();
             return false;
         }
         if (action == MotionEvent.ACTION_DOWN) {
             boolean blockedByFilterScroll = isTouchInsideView(event, libraryFilterGestureArea);
-            libraryPullTracking = !blockedByFilterScroll && contentScrollView.getScrollY() <= 0 && !libraryLoading;
+            libraryPullTracking = !blockedByFilterScroll && isLibraryContentAtTop() && !libraryLoading;
             libraryPullConsumed = false;
             libraryPullStartX = event.getRawX();
             libraryPullStartY = event.getRawY();
@@ -816,7 +849,7 @@ public final class MainActivity extends Activity {
                 updateLibraryPullIndicator(0f, false);
                 return false;
             }
-            if (dragDistance <= 0f || contentScrollView.getScrollY() > 0) {
+            if (dragDistance <= 0f || !isLibraryContentAtTop()) {
                 libraryPullDistance = 0f;
                 libraryPullReady = false;
                 updateLibraryPullIndicator(0f, false);
@@ -847,6 +880,13 @@ public final class MainActivity extends Activity {
             }
         }
         return false;
+    }
+
+    private boolean isLibraryContentAtTop() {
+        if (libraryRecyclerView != null && libraryRecyclerView.getVisibility() == View.VISIBLE) {
+            return !libraryRecyclerView.canScrollVertically(-1);
+        }
+        return contentScrollView == null || contentScrollView.getScrollY() <= 0;
     }
 
     private boolean isTouchInsideView(MotionEvent event, View view) {
@@ -1058,7 +1098,7 @@ public final class MainActivity extends Activity {
 
         AlertDialog dialog = new AlertDialog.Builder(this).create();
         LinearLayout body = dialogBody("업데이트 사용 가능");
-        body.addView(muted("GitHub 정식 릴리즈에서 새 APK를 찾았습니다. Nightly와 prerelease는 제외됩니다.", 13), marginBottom(12));
+        body.addView(muted("새 버전을 찾았습니다.", 13), marginBottom(12));
         body.addView(trackDetailItem("현재 버전", currentAppVersionName()), marginBottom(10));
         body.addView(trackDetailItem("새 버전", update.tagName()), marginBottom(10));
         if (!update.releaseName().isEmpty() && !update.releaseName().equals(update.tagName())) {
@@ -1436,12 +1476,119 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private View buildLibraryTab() {
-        LinearLayout root = screenRoot();
-        libraryTrackItemViews.clear();
-        libraryResultsContainer = null;
+    private void saveLibraryTabScroll() {
+        if (libraryRecyclerView != null
+                && libraryRecyclerView.getVisibility() == View.VISIBLE
+                && libraryRecyclerView.getLayoutManager() != null) {
+            libraryRecyclerState = libraryRecyclerView.getLayoutManager().onSaveInstanceState();
+        }
+    }
 
+    private String libraryTabCacheKey() {
+        String focusedKey = focusedLibraryGroup == null ? "" : focusedLibraryGroup.key;
+        String focusedFilter = focusedLibraryGroupFilter == null ? "" : focusedLibraryGroupFilter.name();
+        String parentKey = focusedParentArtistGroup == null ? "" : focusedParentArtistGroup.key;
+        return librarySource
+                + "|data=" + libraryDataVersion
+                + "|playlists=" + playlistDataVersion
+                + "|loaded=" + libraryLoaded
+                + "|loading=" + libraryLoading
+                + "|status=" + libraryStatus
+                + "|filter=" + libraryFilter.name()
+                + "|sort=" + librarySort.key
+                + "|grid=" + libraryGridView
+                + "|searchVisible=" + librarySearchVisible
+                + "|search=" + librarySearchQuery
+                + "|focused=" + focusedKey
+                + "|focusedFilter=" + focusedFilter
+                + "|parent=" + parentKey
+                + "|artistMode=" + artistDetailMode.name();
+    }
+
+    private void invalidateLibraryContentCache() {
+        cachedLibraryTabKey = "";
+        libraryRecyclerState = null;
+        invalidateLibraryResultCache();
+    }
+
+    private void invalidateLibraryResultCache() {
+        cachedVisibleTracksKey = "";
+        cachedVisibleTracks = new ArrayList<>();
+        cachedVisibleGroupsKey = "";
+        cachedVisibleGroups = new ArrayList<>();
+    }
+
+    private void markLibraryDataChanged() {
+        libraryDataVersion++;
+        invalidateLibraryContentCache();
+    }
+
+    private void markPlaylistDataChanged() {
+        playlistDataVersion++;
+        invalidateLibraryContentCache();
+    }
+
+    private void renderLibraryRecyclerTab() {
+        libraryTrackItemViews.clear();
+        String key = libraryTabCacheKey();
+        boolean sameLibrarySurface = key.equals(cachedLibraryTabKey);
+        if (!sameLibrarySurface) {
+            libraryRecyclerState = null;
+            cachedLibraryTabKey = key;
+        }
+        List<LibraryListItem> items = buildLibraryRecyclerItems();
+        boolean gridMode = libraryGridView && libraryRecyclerItemsCanUseGrid(items);
+        if (libraryRecyclerView.getLayoutManager() == null || libraryRecyclerGridMode != gridMode) {
+            libraryRecyclerGridMode = gridMode;
+            if (gridMode) {
+                GridLayoutManager manager = new GridLayoutManager(this, 2);
+                manager.setSpanSizeLookup(new GridLayoutManager.SpanSizeLookup() {
+                    @Override
+                    public int getSpanSize(int position) {
+                        if (libraryRecyclerAdapter == null) {
+                            return 2;
+                        }
+                        int type = libraryRecyclerAdapter.getItemViewType(position);
+                        return type == LibraryListItem.TYPE_TRACK_CARD || type == LibraryListItem.TYPE_GROUP_CARD ? 1 : 2;
+                    }
+                });
+                libraryRecyclerView.setLayoutManager(manager);
+            } else {
+                libraryRecyclerView.setLayoutManager(new LinearLayoutManager(this));
+            }
+        }
+        if (libraryRecyclerAdapter == null) {
+            libraryRecyclerAdapter = new LibraryRecyclerAdapter();
+            libraryRecyclerView.setAdapter(libraryRecyclerAdapter);
+        }
+        libraryRecyclerAdapter.submitItems(items);
+        updateMainContentBottomPadding(mainNavigationInset);
+        if (sameLibrarySurface && libraryRecyclerState != null) {
+            Parcelable state = libraryRecyclerState;
+            libraryRecyclerView.post(() -> {
+                if (libraryRecyclerView != null && libraryRecyclerView.getLayoutManager() != null) {
+                    libraryRecyclerView.getLayoutManager().onRestoreInstanceState(state);
+                }
+            });
+        }
+    }
+
+    private boolean libraryRecyclerItemsCanUseGrid(List<LibraryListItem> items) {
+        if (items == null) {
+            return false;
+        }
+        for (LibraryListItem item : items) {
+            if (item != null && (item.type == LibraryListItem.TYPE_TRACK_CARD || item.type == LibraryListItem.TYPE_GROUP_CARD)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private List<LibraryListItem> buildLibraryRecyclerItems() {
+        List<LibraryListItem> items = new ArrayList<>();
         if (!hasAudioPermission()) {
+            LinearLayout root = screenRoot();
             LinearLayout permission = panel();
             permission.addView(label("오디오 권한 필요"), marginBottom(8));
             permission.addView(muted("Android 미디어 저장소에서 음악 파일을 읽어 앨범과 아티스트로 정리합니다.", 14), marginBottom(14));
@@ -1449,7 +1596,8 @@ public final class MainActivity extends Activity {
             request.setOnClickListener(view -> requestAudioPermission());
             permission.addView(request, matchWrap());
             root.addView(permission, marginBottom(16));
-            return root;
+            items.add(LibraryListItem.staticView(root));
+            return items;
         }
 
         if (!libraryLoaded && !libraryLoading) {
@@ -1459,52 +1607,71 @@ public final class MainActivity extends Activity {
         if (focusedLibraryGroup != null && isGroupDetailFilter(focusedLibraryGroupFilter)) {
             LibraryGroup group = currentFocusedLibraryGroup();
             if (group != null && (!group.tracks.isEmpty() || focusedLibraryGroupFilter == LibraryFilter.PLAYLIST)) {
+                LinearLayout root = screenRoot();
                 buildLibraryGroupDetail(root, group);
-                return root;
+                items.add(LibraryListItem.staticView(root));
+                return items;
             }
             focusedLibraryGroup = null;
             focusedLibraryGroupFilter = null;
             focusedParentArtistGroup = null;
         }
 
+        items.add(LibraryListItem.staticView(libraryRecyclerHeader()));
+        appendLibraryRecyclerResults(items);
+        return items;
+    }
+
+    private void appendLibraryRecyclerResults(List<LibraryListItem> items) {
+        if (libraryFilter == LibraryFilter.ALL) {
+            List<DeviceAudioTrack> visibleTracks = visibleLibraryTracks();
+            if (visibleTracks.isEmpty()) {
+                items.add(LibraryListItem.staticView(wrapLibraryContent(emptyLibraryView())));
+                return;
+            }
+            for (DeviceAudioTrack track : visibleTracks) {
+                items.add(libraryGridView ? LibraryListItem.trackCard(track) : LibraryListItem.trackRow(track));
+            }
+            return;
+        }
+
+        if (libraryFilter == LibraryFilter.PLAYLIST) {
+            items.add(LibraryListItem.staticView(wrapLibraryContent(createPlaylistPanel())));
+        }
+
+        List<LibraryGroup> visibleGroups = visibleLibraryGroups();
+        if (visibleGroups.isEmpty()) {
+            items.add(LibraryListItem.staticView(wrapLibraryContent(emptyLibraryView())));
+            return;
+        }
+        for (LibraryGroup group : visibleGroups) {
+            items.add(libraryGridView ? LibraryListItem.groupCard(group) : LibraryListItem.groupRow(group));
+        }
+    }
+
+    private View libraryRecyclerHeader() {
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(20), dp(32), dp(20), dp(14));
         root.addView(librarySearchToolbar(), marginBottom(8));
         root.addView(libraryFilterBar(), marginBottom(shouldShowLibrarySearchInput() ? 8 : 12));
         if (shouldShowLibrarySearchInput()) {
             root.addView(librarySearchInputRow(), marginBottom(10));
         }
         if (!libraryStatus.trim().isEmpty()) {
-            root.addView(libraryViewToolbar(), marginBottom(14));
+            root.addView(libraryViewToolbar(), marginBottom(0));
         }
-
-        libraryResultsContainer = new LinearLayout(this);
-        libraryResultsContainer.setOrientation(LinearLayout.VERTICAL);
-        populateLibraryResults(libraryResultsContainer);
-        root.addView(libraryResultsContainer, matchWrap());
         return root;
     }
 
-    private void populateLibraryResults(LinearLayout root) {
-        int generation = ++libraryRenderGeneration;
-        if (libraryFilter == LibraryFilter.ALL) {
-            List<DeviceAudioTrack> visibleTracks = visibleLibraryTracks();
-            if (visibleTracks.isEmpty()) {
-                root.addView(emptyLibraryView(), matchWrap());
-                return;
-            }
-            appendTrackItems(root, visibleTracks, visibleTracks.size(), generation, null);
-            return;
-        }
-
-        if (libraryFilter == LibraryFilter.PLAYLIST) {
-            root.addView(createPlaylistPanel(), marginBottom(10));
-        }
-
-        List<LibraryGroup> visibleGroups = visibleLibraryGroups();
-        if (visibleGroups.isEmpty()) {
-            root.addView(emptyLibraryView(), matchWrap());
-            return;
-        }
-        appendLibraryGroupItems(root, visibleGroups, visibleGroups.size(), generation, null);
+    private View wrapLibraryContent(View content) {
+        FrameLayout frame = new FrameLayout(this);
+        frame.setPadding(dp(20), 0, dp(20), 0);
+        frame.addView(content, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT
+        ));
+        return frame;
     }
 
     private View emptyLibraryView() {
@@ -1518,90 +1685,6 @@ public final class MainActivity extends Activity {
                 : emptyLibraryHint();
         empty.addView(muted(hint, 13), matchWrap());
         return empty;
-    }
-
-    private void appendTrackItems(
-            LinearLayout root,
-            List<DeviceAudioTrack> tracks,
-            int limit,
-            int generation,
-            Runnable onComplete
-    ) {
-        appendTrackItems(root, tracks, limit, generation, 0, onComplete);
-    }
-
-    private void appendTrackItems(
-            LinearLayout root,
-            List<DeviceAudioTrack> tracks,
-            int limit,
-            int generation,
-            int start,
-            Runnable onComplete
-    ) {
-        if (!isCurrentLibraryRender(root, generation)) {
-            return;
-        }
-        int batchSize = start == 0 ? LIBRARY_INITIAL_RENDER_ITEMS : LIBRARY_RENDER_BATCH_ITEMS;
-        int end = Math.min(limit, start + batchSize);
-        if (libraryGridView) {
-            addTrackCardGrid(root, tracks, start, end);
-        } else {
-            for (int index = start; index < end; index++) {
-                root.addView(trackRow(tracks.get(index)), marginBottom(8));
-            }
-        }
-        if (end >= limit) {
-            if (onComplete != null) {
-                onComplete.run();
-            }
-            return;
-        }
-        mainHandler.post(() -> appendTrackItems(root, tracks, limit, generation, end, onComplete));
-    }
-
-    private void appendLibraryGroupItems(
-            LinearLayout root,
-            List<LibraryGroup> groups,
-            int limit,
-            int generation,
-            Runnable onComplete
-    ) {
-        appendLibraryGroupItems(root, groups, limit, generation, 0, onComplete);
-    }
-
-    private void appendLibraryGroupItems(
-            LinearLayout root,
-            List<LibraryGroup> groups,
-            int limit,
-            int generation,
-            int start,
-            Runnable onComplete
-    ) {
-        if (!isCurrentLibraryRender(root, generation)) {
-            return;
-        }
-        int batchSize = start == 0 ? LIBRARY_INITIAL_RENDER_ITEMS : LIBRARY_RENDER_BATCH_ITEMS;
-        int end = Math.min(limit, start + batchSize);
-        if (libraryGridView) {
-            addLibraryGroupCardGrid(root, groups, start, end);
-        } else {
-            for (int index = start; index < end; index++) {
-                root.addView(libraryGroupRow(groups.get(index)), marginBottom(8));
-            }
-        }
-        if (end >= limit) {
-            if (onComplete != null) {
-                onComplete.run();
-            }
-            return;
-        }
-        mainHandler.post(() -> appendLibraryGroupItems(root, groups, limit, generation, end, onComplete));
-    }
-
-    private boolean isCurrentLibraryRender(LinearLayout root, int generation) {
-        return currentTab == Tab.LIBRARY
-                && libraryResultsContainer == root
-                && libraryRenderGeneration == generation;
     }
 
     private View libraryFilterBar() {
@@ -2019,13 +2102,21 @@ public final class MainActivity extends Activity {
     }
 
     private void refreshLibraryResultsOnly() {
-        if (currentTab != Tab.LIBRARY || libraryResultsContainer == null) {
+        if (currentTab != Tab.LIBRARY || libraryRecyclerView == null || libraryRecyclerAdapter == null) {
             renderCurrentTab();
             return;
         }
         libraryTrackItemViews.clear();
-        libraryResultsContainer.removeAllViews();
-        populateLibraryResults(libraryResultsContainer);
+        List<LibraryListItem> items = new ArrayList<>();
+        LibraryListItem header = libraryRecyclerAdapter.firstItem();
+        if (header != null && header.type == LibraryListItem.TYPE_STATIC) {
+            items.add(header);
+        } else {
+            items.add(LibraryListItem.staticView(libraryRecyclerHeader()));
+        }
+        appendLibraryRecyclerResults(items);
+        libraryRecyclerAdapter.submitItems(items);
+        cachedLibraryTabKey = libraryTabCacheKey();
     }
 
     private void focusLibrarySearchInput() {
@@ -2063,25 +2154,59 @@ public final class MainActivity extends Activity {
     }
 
     private List<DeviceAudioTrack> visibleLibraryTracks() {
+        String cacheKey = visibleTracksCacheKey();
+        if (cacheKey.equals(cachedVisibleTracksKey)) {
+            return cachedVisibleTracks;
+        }
         String query = librarySearchQuery == null ? "" : librarySearchQuery.trim().toLowerCase(Locale.ROOT);
+        List<DeviceAudioTrack> result;
         if (query.isEmpty()) {
-            return sortedLibraryTracks(libraryTracks, libraryFilter);
-        }
-
-        List<DeviceAudioTrack> matches = new ArrayList<>();
-        for (DeviceAudioTrack track : libraryTracks) {
-            if (trackMatchesQuery(track, query)) {
-                matches.add(track);
+            result = sortedLibraryTracks(libraryTracks, libraryFilter);
+        } else {
+            List<DeviceAudioTrack> matches = new ArrayList<>();
+            for (DeviceAudioTrack track : libraryTracks) {
+                if (trackMatchesQuery(track, query)) {
+                    matches.add(track);
+                }
             }
+            result = sortedLibraryTracks(matches, libraryFilter);
         }
-        return sortedLibraryTracks(matches, libraryFilter);
+        cachedVisibleTracksKey = cacheKey;
+        cachedVisibleTracks = result;
+        return result;
     }
 
     private List<LibraryGroup> visibleLibraryGroups() {
-        if (libraryFilter == LibraryFilter.PLAYLIST) {
-            return visiblePlaylistGroups();
+        String cacheKey = visibleGroupsCacheKey();
+        if (cacheKey.equals(cachedVisibleGroupsKey)) {
+            return cachedVisibleGroups;
         }
-        return libraryGroupsForTracks(visibleLibraryTracks(), libraryFilter);
+        List<LibraryGroup> result;
+        if (libraryFilter == LibraryFilter.PLAYLIST) {
+            result = visiblePlaylistGroups();
+        } else {
+            result = libraryGroupsForTracks(visibleLibraryTracks(), libraryFilter);
+        }
+        cachedVisibleGroupsKey = cacheKey;
+        cachedVisibleGroups = result;
+        return result;
+    }
+
+    private String visibleTracksCacheKey() {
+        return "tracks|source=" + librarySource
+                + "|data=" + libraryDataVersion
+                + "|filter=" + libraryFilter.name()
+                + "|sort=" + librarySort.key
+                + "|query=" + librarySearchQuery;
+    }
+
+    private String visibleGroupsCacheKey() {
+        return "groups|source=" + librarySource
+                + "|data=" + libraryDataVersion
+                + "|playlists=" + playlistDataVersion
+                + "|filter=" + libraryFilter.name()
+                + "|sort=" + librarySort.key
+                + "|query=" + librarySearchQuery;
     }
 
     private List<LibraryGroup> visiblePlaylistGroups() {
@@ -2567,21 +2692,6 @@ public final class MainActivity extends Activity {
         return fallback;
     }
 
-    private void addLibraryGroupCardGrid(LinearLayout root, List<LibraryGroup> groups, int start, int end) {
-        int rowStart = start - (start % 2);
-        for (int index = rowStart; index < end; index += 2) {
-            LinearLayout row = new LinearLayout(this);
-            row.setOrientation(LinearLayout.HORIZONTAL);
-            row.addView(libraryGroupCard(groups.get(index)), cardColumnParams(8));
-            if (index + 1 < end) {
-                row.addView(libraryGroupCard(groups.get(index + 1)), cardColumnParams(0));
-            } else {
-                row.addView(new View(this), cardColumnParams(0));
-            }
-            root.addView(row, marginBottom(10));
-        }
-    }
-
     private View libraryGroupCard(LibraryGroup group) {
         return libraryGroupCard(group, () -> handleLibraryGroupClick(group));
     }
@@ -3048,6 +3158,7 @@ public final class MainActivity extends Activity {
             UserPlaylists.Playlist playlist = UserPlaylists.create(this, title, trackIdsForTracks(tracksToAdd));
             dialog.dismiss();
             toast(playlist.title() + " 재생목록을 만들었습니다.");
+            markPlaylistDataChanged();
             renderLibraryDependentTabs();
         });
         actions.addView(cancel, fixedButtonParams(76, 38, 8));
@@ -3122,6 +3233,7 @@ public final class MainActivity extends Activity {
             }
             dialog.dismiss();
             toast("재생목록을 수정했습니다.");
+            markPlaylistDataChanged();
             renderLibraryDependentTabs();
         });
         actions.addView(cancel, fixedButtonParams(76, 38, 8));
@@ -3190,6 +3302,7 @@ public final class MainActivity extends Activity {
             focusedParentArtistGroup = null;
             dialog.dismiss();
             toast("재생목록을 삭제했습니다.");
+            markPlaylistDataChanged();
             renderLibraryDependentTabs();
         });
         actions.addView(cancel, fixedButtonParams(76, 38, 8));
@@ -3294,21 +3407,6 @@ public final class MainActivity extends Activity {
         builder.append(value);
     }
 
-    private void addTrackCardGrid(LinearLayout root, List<DeviceAudioTrack> visibleTracks, int start, int end) {
-        int rowStart = start - (start % 2);
-        for (int index = rowStart; index < end; index += 2) {
-            LinearLayout row = new LinearLayout(this);
-            row.setOrientation(LinearLayout.HORIZONTAL);
-            row.addView(trackCard(visibleTracks.get(index)), cardColumnParams(8));
-            if (index + 1 < end) {
-                row.addView(trackCard(visibleTracks.get(index + 1)), cardColumnParams(0));
-            } else {
-                row.addView(new View(this), cardColumnParams(0));
-            }
-            root.addView(row, marginBottom(10));
-        }
-    }
-
     private View trackCard(DeviceAudioTrack track) {
         LinearLayout card = panel();
         card.setPadding(dp(10), dp(10), dp(10), dp(12));
@@ -3396,8 +3494,10 @@ public final class MainActivity extends Activity {
     }
 
     private void selectLibraryTrack(DeviceAudioTrack track) {
+        long previousSelectedId = selectedTrack == null ? Long.MIN_VALUE : selectedTrack.id();
         selectedTrack = track;
-        refreshVisibleTrackSelection();
+        refreshTrackSelection(previousSelectedId);
+        refreshTrackSelection(track == null ? Long.MIN_VALUE : track.id());
     }
 
     private void registerLibraryTrackView(DeviceAudioTrack track, View view) {
@@ -3407,13 +3507,26 @@ public final class MainActivity extends Activity {
         libraryTrackItemViews.put(track.id(), view);
     }
 
-    private void refreshVisibleTrackSelection() {
-        for (DeviceAudioTrack track : visibleLibraryTracks()) {
-            View view = libraryTrackItemViews.get(track.id());
-            if (view != null) {
-                applyTrackSelectionBackground(view, track);
+    private void refreshTrackSelection(long trackId) {
+        if (trackId == Long.MIN_VALUE) {
+            return;
+        }
+        View view = libraryTrackItemViews.get(trackId);
+        if (view != null) {
+            applyTrackSelectionBackground(view, findLibraryTrackById(trackId));
+        }
+    }
+
+    private DeviceAudioTrack findLibraryTrackById(long trackId) {
+        if (selectedTrack != null && selectedTrack.id() == trackId) {
+            return selectedTrack;
+        }
+        for (DeviceAudioTrack track : libraryTracks) {
+            if (track.id() == trackId) {
+                return track;
             }
         }
+        return null;
     }
 
     private void applyTrackSelectionBackground(View view, DeviceAudioTrack track) {
@@ -3726,6 +3839,7 @@ public final class MainActivity extends Activity {
             return;
         }
         toast(updated.title() + "에 저장했습니다.");
+        markPlaylistDataChanged();
         renderLibraryDependentTabs();
     }
 
@@ -3848,6 +3962,7 @@ public final class MainActivity extends Activity {
         homeTracks = replaceEditedTrack(homeTracks, edited);
         activeQueuePreview = replaceEditedTrack(activeQueuePreview, edited);
         librarySearchIndex.remove(edited.id());
+        markLibraryDataChanged();
         if (playbackTrackId == edited.id()) {
             playbackTitle = edited.title();
             playbackArtist = edited.artist();
@@ -3878,6 +3993,7 @@ public final class MainActivity extends Activity {
         libraryTracks = replaceEditedTracks(libraryTracks, edits);
         homeTracks = replaceEditedTracks(homeTracks, edits);
         activeQueuePreview = replaceEditedTracks(activeQueuePreview, edits);
+        markLibraryDataChanged();
         DeviceAudioTrack current = edits.get(playbackTrackId);
         if (current != null) {
             playbackTitle = current.title();
@@ -4431,9 +4547,11 @@ public final class MainActivity extends Activity {
                 GradientDrawable.Orientation.TOP_BOTTOM,
                 new int[]{
                         Color.TRANSPARENT,
-                        Color.argb(52, Color.red(BOTTOM_CHROME_BASE), Color.green(BOTTOM_CHROME_BASE), Color.blue(BOTTOM_CHROME_BASE)),
-                        Color.argb(142, Color.red(BOTTOM_CHROME_BASE), Color.green(BOTTOM_CHROME_BASE), Color.blue(BOTTOM_CHROME_BASE)),
-                        Color.argb(222, Color.red(BOTTOM_CHROME_BASE), Color.green(BOTTOM_CHROME_BASE), Color.blue(BOTTOM_CHROME_BASE))
+                        Color.argb(42, Color.red(BOTTOM_CHROME_BASE), Color.green(BOTTOM_CHROME_BASE), Color.blue(BOTTOM_CHROME_BASE)),
+                        Color.argb(122, Color.red(BOTTOM_CHROME_BASE), Color.green(BOTTOM_CHROME_BASE), Color.blue(BOTTOM_CHROME_BASE)),
+                        Color.argb(218, Color.red(BOTTOM_CHROME_BASE), Color.green(BOTTOM_CHROME_BASE), Color.blue(BOTTOM_CHROME_BASE)),
+                        Color.argb(250, Color.red(BOTTOM_CHROME_BASE), Color.green(BOTTOM_CHROME_BASE), Color.blue(BOTTOM_CHROME_BASE)),
+                        Color.argb(255, Color.red(BOTTOM_CHROME_BASE), Color.green(BOTTOM_CHROME_BASE), Color.blue(BOTTOM_CHROME_BASE))
                 }
         );
     }
@@ -4524,10 +4642,14 @@ public final class MainActivity extends Activity {
     }
 
     private void updateMainContentBottomPadding(int navigationInset) {
+        mainNavigationInset = navigationInset;
         if (contentScrollView == null) {
             return;
         }
         contentScrollView.setPadding(0, 0, 0, bottomChromeBaseHeight() + navigationInset + dp(8));
+        if (libraryRecyclerView != null) {
+            libraryRecyclerView.setPadding(0, 0, 0, bottomChromeBaseHeight() + navigationInset + dp(8));
+        }
     }
 
     private int bottomChromeBaseHeight() {
@@ -4883,9 +5005,9 @@ public final class MainActivity extends Activity {
         if (hasSleepTimer()) {
             content.addView(activeSleepTimerRow(), marginBottom(8));
         }
-        content.addView(text(playbackTitle, 23, R.color.ytet_text, true), marginBottom(4));
-        content.addView(muted(playbackArtist, 14), marginBottom(2));
-        content.addView(muted(albumQueuePositionText(), 12), marginBottom(8));
+        content.addView(marqueeText(playbackTitle, 23, R.color.ytet_text, true), marginBottom(4));
+        content.addView(marqueeText(playbackArtist, 14, R.color.ytet_muted, false), marginBottom(2));
+        content.addView(marqueeText(albumQueuePositionText(), 12, R.color.ytet_muted, false), marginBottom(8));
 
         PlaybackSeekBarView progress = new PlaybackSeekBarView(this);
         progress.setProgress(playbackDurationMs, playbackSeeking ? playbackSeekPreviewMs : playbackPositionMs);
@@ -5288,7 +5410,6 @@ public final class MainActivity extends Activity {
         if (queueDialog == null) {
             queueDialog = new Dialog(this);
             queueDialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
-            queueDialog.setOnDismissListener(dialog -> queueRenderGeneration++);
         }
         queueDialog.setContentView(buildQueueDialogContent());
         queueDialog.show();
@@ -5303,7 +5424,6 @@ public final class MainActivity extends Activity {
     }
 
     private View buildQueueDialogContent() {
-        int generation = ++queueRenderGeneration;
         List<DeviceAudioTrack> queueSnapshot = new ArrayList<>(activeQueuePreview);
         int currentIndex = playbackQueueIndex;
         DragDismissLayout root = new DragDismissLayout(this);
@@ -5328,18 +5448,14 @@ public final class MainActivity extends Activity {
         top.addView(spacer, new LinearLayout.LayoutParams(dp(44), dp(42)));
         root.addView(top, marginBottom(18));
 
-        ScrollView scroll = new ScrollView(this);
-        LinearLayout list = new LinearLayout(this);
-        list.setOrientation(LinearLayout.VERTICAL);
-        if (queueSnapshot.isEmpty()) {
-            list.addView(muted("재생목록을 불러오는 중입니다.", 14), matchWrap());
-        } else {
-            addQueueSectionNow(list, queueSnapshot, "이전 곡", 0, Math.max(0, currentIndex), true);
-            addQueueSectionNow(list, queueSnapshot, "현재 곡", Math.max(0, currentIndex), Math.min(queueSnapshot.size(), currentIndex + 1), false);
-            appendQueueSection(list, queueSnapshot, "다음 곡", Math.max(0, currentIndex + 1), queueSnapshot.size(), generation);
-        }
-        scroll.addView(list, matchWrap());
-        root.addView(scroll, new LinearLayout.LayoutParams(
+        RecyclerView list = new RecyclerView(this);
+        list.setClipToPadding(false);
+        list.setItemAnimator(null);
+        list.setLayoutManager(new LinearLayoutManager(this));
+        QueueRecyclerAdapter adapter = new QueueRecyclerAdapter();
+        list.setAdapter(adapter);
+        adapter.submitItems(buildQueueRecyclerItems(queueSnapshot, currentIndex));
+        root.addView(list, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 0,
                 1f
@@ -5347,67 +5463,38 @@ public final class MainActivity extends Activity {
         return root;
     }
 
-    private void addQueueSectionNow(
-            LinearLayout list,
+    private List<QueueListItem> buildQueueRecyclerItems(List<DeviceAudioTrack> queue, int currentIndex) {
+        List<QueueListItem> items = new ArrayList<>();
+        if (queue == null || queue.isEmpty()) {
+            items.add(QueueListItem.staticView(muted("재생목록을 불러오는 중입니다.", 14)));
+            return items;
+        }
+        addQueueSectionItems(items, queue, "이전 곡", 0, Math.max(0, currentIndex), true);
+        addQueueSectionItems(items, queue, "현재 곡", Math.max(0, currentIndex), Math.min(queue.size(), currentIndex + 1), false);
+        addQueueSectionItems(items, queue, "다음 곡", Math.max(0, currentIndex + 1), queue.size(), false);
+        return items;
+    }
+
+    private void addQueueSectionItems(
+            List<QueueListItem> items,
             List<DeviceAudioTrack> queue,
             String title,
             int from,
             int to,
             boolean compactPrevious
     ) {
-        if (queue == null || from >= to || from >= queue.size()) {
+        if (items == null || queue == null || from >= to || from >= queue.size()) {
             return;
         }
-        list.addView(sectionTitle(title), marginBottom(10));
+        items.add(QueueListItem.staticView(sectionTitle(title)));
         int start = compactPrevious ? Math.max(from, to - 5) : from;
         int end = Math.min(to, queue.size());
         for (int index = start; index < end; index++) {
-            list.addView(queueRow(queue.get(index), index), marginBottom(8));
+            items.add(QueueListItem.track(queue.get(index), index));
         }
         if (compactPrevious && start > from) {
-            list.addView(muted("이전 " + (start - from) + "곡은 접혀 있습니다.", 12), marginBottom(12));
+            items.add(QueueListItem.staticView(muted("이전 " + (start - from) + "곡은 접혀 있습니다.", 12)));
         }
-    }
-
-    private void appendQueueSection(
-            LinearLayout list,
-            List<DeviceAudioTrack> queue,
-            String title,
-            int from,
-            int to,
-            int generation
-    ) {
-        if (queue == null || from >= to || from >= queue.size()) {
-            return;
-        }
-        list.addView(sectionTitle(title), marginBottom(10));
-        appendQueueRows(list, queue, Math.max(0, from), Math.min(to, queue.size()), generation, from);
-    }
-
-    private void appendQueueRows(
-            LinearLayout list,
-            List<DeviceAudioTrack> queue,
-            int start,
-            int end,
-            int generation,
-            int sectionStart
-    ) {
-        if (!isCurrentQueueRender(generation)) {
-            return;
-        }
-        int batchSize = start == sectionStart ? QUEUE_INITIAL_RENDER_ITEMS : QUEUE_RENDER_BATCH_ITEMS;
-        int batchEnd = Math.min(end, start + batchSize);
-        for (int index = start; index < batchEnd; index++) {
-            list.addView(queueRow(queue.get(index), index), marginBottom(8));
-        }
-        if (batchEnd >= end) {
-            return;
-        }
-        mainHandler.post(() -> appendQueueRows(list, queue, batchEnd, end, generation, sectionStart));
-    }
-
-    private boolean isCurrentQueueRender(int generation) {
-        return queueDialog != null && queueRenderGeneration == generation;
     }
 
     private void updateQueuePreviewFromIds(long[] ids) {
@@ -5538,6 +5625,7 @@ public final class MainActivity extends Activity {
                 runOnUiThread(() -> {
                     libraryTracks = tracks;
                     librarySearchIndex.clear();
+                    markLibraryDataChanged();
                     libraryLoaded = true;
                     libraryLoading = false;
                     libraryStatus = tracks.isEmpty()
@@ -5551,6 +5639,7 @@ public final class MainActivity extends Activity {
                     libraryLoading = false;
                     libraryTracks = new ArrayList<>();
                     librarySearchIndex.clear();
+                    markLibraryDataChanged();
                     selectedTrack = null;
                     libraryStatus = "스캔 실패: " + exception.getMessage();
                     renderLibraryDependentTabs();
@@ -6248,6 +6337,8 @@ public final class MainActivity extends Activity {
         LinearLayout button = new LinearLayout(this);
         button.setOrientation(LinearLayout.HORIZONTAL);
         button.setGravity(Gravity.CENTER);
+        button.setClipChildren(false);
+        button.setClipToPadding(false);
         button.setClickable(true);
         button.setFocusable(true);
         button.setPadding(dp(12), 0, dp(12), 0);
@@ -6257,6 +6348,8 @@ public final class MainActivity extends Activity {
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.HORIZONTAL);
         content.setGravity(Gravity.CENTER);
+        content.setClipChildren(false);
+        content.setClipToPadding(false);
 
         Drawable icon = getDrawable(iconRes);
         if (icon != null) {
@@ -6525,6 +6618,298 @@ public final class MainActivity extends Activity {
 
     private void toast(String message) {
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
+    }
+
+    private final class LibraryRecyclerAdapter extends RecyclerView.Adapter<LibraryRecyclerViewHolder> {
+        private final List<LibraryListItem> items = new ArrayList<>();
+
+        void submitItems(List<LibraryListItem> nextItems) {
+            items.clear();
+            if (nextItems != null) {
+                items.addAll(nextItems);
+            }
+            notifyDataSetChanged();
+        }
+
+        LibraryListItem firstItem() {
+            return items.isEmpty() ? null : items.get(0);
+        }
+
+        @Override
+        public int getItemViewType(int position) {
+            if (position < 0 || position >= items.size()) {
+                return LibraryListItem.TYPE_STATIC;
+            }
+            return items.get(position).type;
+        }
+
+        @Override
+        public LibraryRecyclerViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
+            FrameLayout container = new FrameLayout(parent.getContext());
+            container.setLayoutParams(new RecyclerView.LayoutParams(
+                    RecyclerView.LayoutParams.MATCH_PARENT,
+                    RecyclerView.LayoutParams.WRAP_CONTENT
+            ));
+            return new LibraryRecyclerViewHolder(container);
+        }
+
+        @Override
+        public void onBindViewHolder(LibraryRecyclerViewHolder holder, int position) {
+            LibraryListItem item = items.get(position);
+            holder.bind(item);
+        }
+
+        @Override
+        public void onViewRecycled(LibraryRecyclerViewHolder holder) {
+            holder.clear();
+            super.onViewRecycled(holder);
+        }
+
+        @Override
+        public int getItemCount() {
+            return items.size();
+        }
+    }
+
+    private final class LibraryRecyclerViewHolder extends RecyclerView.ViewHolder {
+        private final FrameLayout container;
+        private long boundTrackId = Long.MIN_VALUE;
+
+        LibraryRecyclerViewHolder(FrameLayout container) {
+            super(container);
+            this.container = container;
+        }
+
+        void bind(LibraryListItem item) {
+            clear();
+            applyLibraryItemMargins(item);
+            View view;
+            switch (item.type) {
+                case LibraryListItem.TYPE_TRACK_ROW:
+                    view = trackRow(item.track);
+                    boundTrackId = item.track == null ? Long.MIN_VALUE : item.track.id();
+                    break;
+                case LibraryListItem.TYPE_TRACK_CARD:
+                    view = trackCard(item.track);
+                    boundTrackId = item.track == null ? Long.MIN_VALUE : item.track.id();
+                    break;
+                case LibraryListItem.TYPE_GROUP_ROW:
+                    view = libraryGroupRow(item.group);
+                    break;
+                case LibraryListItem.TYPE_GROUP_CARD:
+                    view = libraryGroupCard(item.group);
+                    break;
+                case LibraryListItem.TYPE_STATIC:
+                default:
+                    view = item.view == null ? new View(MainActivity.this) : item.view;
+                    break;
+            }
+            if (view.getParent() instanceof ViewGroup) {
+                ((ViewGroup) view.getParent()).removeView(view);
+            }
+            container.addView(view, new FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT
+            ));
+        }
+
+        void clear() {
+            if (boundTrackId != Long.MIN_VALUE) {
+                libraryTrackItemViews.remove(boundTrackId);
+                boundTrackId = Long.MIN_VALUE;
+            }
+            container.removeAllViews();
+        }
+
+        private void applyLibraryItemMargins(LibraryListItem item) {
+            RecyclerView.LayoutParams params = itemView.getLayoutParams() instanceof RecyclerView.LayoutParams
+                    ? (RecyclerView.LayoutParams) itemView.getLayoutParams()
+                    : new RecyclerView.LayoutParams(
+                    RecyclerView.LayoutParams.MATCH_PARENT,
+                    RecyclerView.LayoutParams.WRAP_CONTENT
+            );
+            int left = 0;
+            int right = 0;
+            int bottom = 0;
+            if (item != null) {
+                if (item.type == LibraryListItem.TYPE_TRACK_ROW || item.type == LibraryListItem.TYPE_GROUP_ROW) {
+                    left = dp(20);
+                    right = dp(20);
+                    bottom = dp(8);
+                } else if (item.type == LibraryListItem.TYPE_TRACK_CARD || item.type == LibraryListItem.TYPE_GROUP_CARD) {
+                    left = dp(6);
+                    right = dp(6);
+                    bottom = dp(10);
+                }
+            }
+            params.setMargins(left, 0, right, bottom);
+            itemView.setLayoutParams(params);
+        }
+    }
+
+    private static final class LibraryListItem {
+        static final int TYPE_STATIC = 1;
+        static final int TYPE_TRACK_ROW = 2;
+        static final int TYPE_TRACK_CARD = 3;
+        static final int TYPE_GROUP_ROW = 4;
+        static final int TYPE_GROUP_CARD = 5;
+
+        final int type;
+        final View view;
+        final DeviceAudioTrack track;
+        final LibraryGroup group;
+
+        private LibraryListItem(int type, View view, DeviceAudioTrack track, LibraryGroup group) {
+            this.type = type;
+            this.view = view;
+            this.track = track;
+            this.group = group;
+        }
+
+        static LibraryListItem staticView(View view) {
+            return new LibraryListItem(TYPE_STATIC, view, null, null);
+        }
+
+        static LibraryListItem trackRow(DeviceAudioTrack track) {
+            return new LibraryListItem(TYPE_TRACK_ROW, null, track, null);
+        }
+
+        static LibraryListItem trackCard(DeviceAudioTrack track) {
+            return new LibraryListItem(TYPE_TRACK_CARD, null, track, null);
+        }
+
+        static LibraryListItem groupRow(LibraryGroup group) {
+            return new LibraryListItem(TYPE_GROUP_ROW, null, null, group);
+        }
+
+        static LibraryListItem groupCard(LibraryGroup group) {
+            return new LibraryListItem(TYPE_GROUP_CARD, null, null, group);
+        }
+    }
+
+    private final class QueueRecyclerAdapter extends RecyclerView.Adapter<QueueRecyclerViewHolder> {
+        private final List<QueueListItem> items = new ArrayList<>();
+
+        void submitItems(List<QueueListItem> nextItems) {
+            items.clear();
+            if (nextItems != null) {
+                items.addAll(nextItems);
+            }
+            notifyDataSetChanged();
+        }
+
+        @Override
+        public int getItemViewType(int position) {
+            if (position < 0 || position >= items.size()) {
+                return QueueListItem.TYPE_STATIC;
+            }
+            return items.get(position).type;
+        }
+
+        @Override
+        public QueueRecyclerViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
+            FrameLayout container = new FrameLayout(parent.getContext());
+            container.setLayoutParams(new RecyclerView.LayoutParams(
+                    RecyclerView.LayoutParams.MATCH_PARENT,
+                    RecyclerView.LayoutParams.WRAP_CONTENT
+            ));
+            return new QueueRecyclerViewHolder(container);
+        }
+
+        @Override
+        public void onBindViewHolder(QueueRecyclerViewHolder holder, int position) {
+            holder.bind(items.get(position));
+        }
+
+        @Override
+        public void onViewRecycled(QueueRecyclerViewHolder holder) {
+            holder.clear();
+            super.onViewRecycled(holder);
+        }
+
+        @Override
+        public int getItemCount() {
+            return items.size();
+        }
+    }
+
+    private final class QueueRecyclerViewHolder extends RecyclerView.ViewHolder {
+        private final FrameLayout container;
+
+        QueueRecyclerViewHolder(FrameLayout container) {
+            super(container);
+            this.container = container;
+        }
+
+        void bind(QueueListItem item) {
+            clear();
+            applyQueueItemMargins(item);
+            View view = item.type == QueueListItem.TYPE_TRACK
+                    ? queueRow(item.track, item.index)
+                    : item.view == null ? new View(MainActivity.this) : item.view;
+            if (view.getParent() instanceof ViewGroup) {
+                ((ViewGroup) view.getParent()).removeView(view);
+            }
+            container.addView(view, new FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT
+            ));
+        }
+
+        void clear() {
+            container.removeAllViews();
+        }
+
+        private void applyQueueItemMargins(QueueListItem item) {
+            RecyclerView.LayoutParams params = itemView.getLayoutParams() instanceof RecyclerView.LayoutParams
+                    ? (RecyclerView.LayoutParams) itemView.getLayoutParams()
+                    : new RecyclerView.LayoutParams(
+                    RecyclerView.LayoutParams.MATCH_PARENT,
+                    RecyclerView.LayoutParams.WRAP_CONTENT
+            );
+            int bottom = item != null && item.type == QueueListItem.TYPE_TRACK ? dp(8) : dp(10);
+            params.setMargins(0, 0, 0, bottom);
+            itemView.setLayoutParams(params);
+        }
+    }
+
+    private static final class QueueListItem {
+        static final int TYPE_STATIC = 1;
+        static final int TYPE_TRACK = 2;
+
+        final int type;
+        final View view;
+        final DeviceAudioTrack track;
+        final int index;
+
+        private QueueListItem(int type, View view, DeviceAudioTrack track, int index) {
+            this.type = type;
+            this.view = view;
+            this.track = track;
+            this.index = index;
+        }
+
+        static QueueListItem staticView(View view) {
+            return new QueueListItem(TYPE_STATIC, view, null, -1);
+        }
+
+        static QueueListItem track(DeviceAudioTrack track, int index) {
+            return new QueueListItem(TYPE_TRACK, null, track, index);
+        }
+    }
+
+    private final class PullRefreshRecyclerView extends RecyclerView {
+        PullRefreshRecyclerView(Context context) {
+            super(context);
+        }
+
+        @Override
+        public boolean dispatchTouchEvent(MotionEvent event) {
+            if (handleLibraryPullToRefresh(event)) {
+                return true;
+            }
+            return super.dispatchTouchEvent(event);
+        }
     }
 
     private final class PullRefreshScrollView extends ScrollView {
