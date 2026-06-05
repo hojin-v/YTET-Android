@@ -160,6 +160,7 @@ public final class MainActivity extends Activity {
     private TextView nowPlayingMeta;
     private ImageButton playPauseButton;
     private View bottomVignette;
+    private LinearLayout bottomChrome;
     private View bottomNavigationGuard;
     private long renderedNowPlayingTrackId = Long.MIN_VALUE;
     private boolean renderedNowPlayingIdle = true;
@@ -645,9 +646,10 @@ public final class MainActivity extends Activity {
                 Gravity.BOTTOM
         ));
 
-        LinearLayout bottomChrome = new LinearLayout(this);
+        bottomChrome = new LinearLayout(this);
         bottomChrome.setOrientation(LinearLayout.VERTICAL);
         bottomChrome.setClickable(true);
+        bottomChrome.setBackground(bottomChromeBackground());
         nowPlayingBar = buildNowPlayingBar();
         LinearLayout.LayoutParams nowPlayingParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -711,7 +713,7 @@ public final class MainActivity extends Activity {
         LinearLayout tabs = new LinearLayout(this);
         tabs.setOrientation(LinearLayout.HORIZONTAL);
         tabs.setClickable(true);
-        tabs.setPadding(dp(10), dp(4), dp(10), dp(12));
+        tabs.setPadding(dp(10), dp(2), dp(10), dp(6));
         tabs.setBackgroundColor(Color.TRANSPARENT);
 
         homeTabButton = tabButton("홈", Tab.HOME, R.drawable.ic_tab_home_outline, R.drawable.ic_tab_home_filled);
@@ -727,13 +729,13 @@ public final class MainActivity extends Activity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setGravity(Gravity.CENTER);
-        root.setPadding(0, dp(2), 0, dp(2));
+        root.setPadding(0, dp(1), 0, dp(1));
         root.setBackgroundColor(Color.TRANSPARENT);
         root.setOnClickListener(view -> showTab(tab));
 
         ImageView icon = new ImageView(this);
         icon.setScaleType(ImageView.ScaleType.CENTER);
-        root.addView(icon, new LinearLayout.LayoutParams(dp(24), dp(24)));
+        root.addView(icon, new LinearLayout.LayoutParams(dp(23), dp(23)));
 
         TextView text = text(label, 11, R.color.ytet_muted, true);
         text.setGravity(Gravity.CENTER);
@@ -742,7 +744,7 @@ public final class MainActivity extends Activity {
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
         );
-        textParams.setMargins(0, dp(3), 0, 0);
+        textParams.setMargins(0, dp(1), 0, 0);
         root.addView(text, textParams);
         return new TabItem(root, icon, text, outlineIcon, filledIcon);
     }
@@ -4550,15 +4552,34 @@ public final class MainActivity extends Activity {
     }
 
     private GradientDrawable bottomVignetteBackground() {
+        int red = Color.red(BOTTOM_CHROME_BASE);
+        int green = Color.green(BOTTOM_CHROME_BASE);
+        int blue = Color.blue(BOTTOM_CHROME_BASE);
         return new GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
                 new int[]{
                         Color.TRANSPARENT,
-                        Color.argb(42, Color.red(BOTTOM_CHROME_BASE), Color.green(BOTTOM_CHROME_BASE), Color.blue(BOTTOM_CHROME_BASE)),
-                        Color.argb(122, Color.red(BOTTOM_CHROME_BASE), Color.green(BOTTOM_CHROME_BASE), Color.blue(BOTTOM_CHROME_BASE)),
-                        Color.argb(218, Color.red(BOTTOM_CHROME_BASE), Color.green(BOTTOM_CHROME_BASE), Color.blue(BOTTOM_CHROME_BASE)),
-                        Color.argb(250, Color.red(BOTTOM_CHROME_BASE), Color.green(BOTTOM_CHROME_BASE), Color.blue(BOTTOM_CHROME_BASE)),
-                        Color.argb(255, Color.red(BOTTOM_CHROME_BASE), Color.green(BOTTOM_CHROME_BASE), Color.blue(BOTTOM_CHROME_BASE))
+                        Color.argb(56, red, green, blue),
+                        Color.argb(136, red, green, blue),
+                        Color.argb(224, red, green, blue),
+                        Color.argb(252, red, green, blue),
+                        Color.argb(255, red, green, blue)
+                }
+        );
+    }
+
+    private GradientDrawable bottomChromeBackground() {
+        int red = Color.red(BOTTOM_CHROME_BASE);
+        int green = Color.green(BOTTOM_CHROME_BASE);
+        int blue = Color.blue(BOTTOM_CHROME_BASE);
+        return new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{
+                        Color.argb(34, red, green, blue),
+                        Color.argb(104, red, green, blue),
+                        Color.argb(188, red, green, blue),
+                        Color.argb(238, red, green, blue),
+                        Color.argb(255, red, green, blue)
                 }
         );
     }
@@ -4613,9 +4634,13 @@ public final class MainActivity extends Activity {
         }
         window.setStatusBarColor(Color.TRANSPARENT);
         window.setNavigationBarColor(Color.TRANSPARENT);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            window.setNavigationBarDividerColor(Color.TRANSPARENT);
+        }
         View decor = window.getDecorView();
         int flags = decor.getSystemUiVisibility()
                 | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
                 | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION;
         flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
         flags &= ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
@@ -4664,11 +4689,11 @@ public final class MainActivity extends Activity {
     }
 
     private int bottomTabsHeight() {
-        return dp(64);
+        return dp(50);
     }
 
     private int bottomVignetteHeight(int navigationInset) {
-        return bottomChromeBaseHeight() + navigationInset;
+        return bottomChromeBaseHeight() + navigationInset + dp(72);
     }
 
     private void applyQueueWindow(Window window) {
@@ -6435,7 +6460,7 @@ public final class MainActivity extends Activity {
         button.setPadding(dp(11), dp(11), dp(11), dp(11));
         button.setScaleType(ImageView.ScaleType.CENTER);
         button.setEnabled(enabled);
-        button.setAlpha(enabled ? 1f : 0.48f);
+        button.setAlpha(enabled ? 1f : 0.62f);
         return button;
     }
 
@@ -6600,7 +6625,7 @@ public final class MainActivity extends Activity {
     }
 
     private LinearLayout.LayoutParams tabParams() {
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(48), 1f);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(42), 1f);
         params.setMargins(dp(4), 0, dp(4), 0);
         return params;
     }

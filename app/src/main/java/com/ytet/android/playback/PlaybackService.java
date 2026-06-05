@@ -48,6 +48,8 @@ public final class PlaybackService extends Service {
     public static final String ACTION_SEEK_TO = "com.ytet.android.action.PLAYBACK_SEEK_TO";
     public static final String ACTION_TOGGLE_SHUFFLE = "com.ytet.android.action.PLAYBACK_TOGGLE_SHUFFLE";
     public static final String ACTION_TOGGLE_REPEAT = "com.ytet.android.action.PLAYBACK_TOGGLE_REPEAT";
+    private static final String ACTION_PREVIOUS_UNAVAILABLE = "com.ytet.android.action.PLAYBACK_PREVIOUS_UNAVAILABLE";
+    private static final String ACTION_NEXT_UNAVAILABLE = "com.ytet.android.action.PLAYBACK_NEXT_UNAVAILABLE";
     public static final String ACTION_PLAY_NEXT = "com.ytet.android.action.PLAYBACK_PLAY_NEXT";
     public static final String ACTION_ADD_TO_QUEUE = "com.ytet.android.action.PLAYBACK_ADD_TO_QUEUE";
     public static final String ACTION_SET_SLEEP_TIMER = "com.ytet.android.action.PLAYBACK_SET_SLEEP_TIMER";
@@ -257,6 +259,9 @@ public final class PlaybackService extends Service {
                     toggleShuffle();
                 } else if (ACTION_TOGGLE_REPEAT.equals(action)) {
                     toggleRepeat();
+                } else if (ACTION_PREVIOUS_UNAVAILABLE.equals(action)
+                        || ACTION_NEXT_UNAVAILABLE.equals(action)) {
+                    broadcastState();
                 }
             }
         });
@@ -1041,10 +1046,12 @@ public final class PlaybackService extends Service {
                 | PlaybackState.ACTION_STOP;
         if (track != null) {
             actions |= PlaybackState.ACTION_SEEK_TO;
-            if (canMoveToPreviousTrack()) {
+            boolean previousAvailable = canMoveToPreviousTrack();
+            boolean nextAvailable = canMoveToNextTrack();
+            if (previousAvailable) {
                 actions |= PlaybackState.ACTION_SKIP_TO_PREVIOUS;
             }
-            if (canMoveToNextTrack()) {
+            if (nextAvailable) {
                 actions |= PlaybackState.ACTION_SKIP_TO_NEXT;
             }
         }
@@ -1052,6 +1059,14 @@ public final class PlaybackService extends Service {
                 .setActions(actions)
                 .setState(state, currentPosition(), playing ? 1f : 0f);
         if (track != null) {
+            boolean previousAvailable = canMoveToPreviousTrack();
+            boolean nextAvailable = canMoveToNextTrack();
+            if (!previousAvailable) {
+                builder.addCustomAction(disabledPreviousAction());
+            }
+            if (!nextAvailable) {
+                builder.addCustomAction(disabledNextAction());
+            }
             builder.addCustomAction(new PlaybackState.CustomAction.Builder(
                     ACTION_TOGGLE_SHUFFLE,
                     shuffleNotificationLabel(),
@@ -1067,6 +1082,22 @@ public final class PlaybackService extends Service {
             builder.setErrorMessage(errorStatus);
         }
         mediaSession.setPlaybackState(builder.build());
+    }
+
+    private PlaybackState.CustomAction disabledPreviousAction() {
+        return new PlaybackState.CustomAction.Builder(
+                ACTION_PREVIOUS_UNAVAILABLE,
+                "이전 없음",
+                R.drawable.ic_skip_previous_disabled
+        ).build();
+    }
+
+    private PlaybackState.CustomAction disabledNextAction() {
+        return new PlaybackState.CustomAction.Builder(
+                ACTION_NEXT_UNAVAILABLE,
+                "다음 없음",
+                R.drawable.ic_skip_next_disabled
+        ).build();
     }
 
     private int shuffleIcon() {
