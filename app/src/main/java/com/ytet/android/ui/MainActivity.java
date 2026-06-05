@@ -172,6 +172,8 @@ public final class MainActivity extends Activity {
     private TabItem extractorTabButton;
     private TextView updateStatusText;
     private Button updateActionButton;
+    private TextView updateDownloadStatusText;
+    private ProgressBar updateDownloadProgressBar;
     private Dialog playerDialog;
     private Dialog queueDialog;
     private AlertDialog updateDialog;
@@ -1166,6 +1168,68 @@ public final class MainActivity extends Activity {
         styleDetailDialog(dialog);
     }
 
+    private void showUpdateDownloadDialog(UpdateInfo update) {
+        if (!canShowUpdateDialog()) {
+            return;
+        }
+        dismissUpdateDialog();
+
+        AlertDialog dialog = new AlertDialog.Builder(this).create();
+        dialog.setCancelable(false);
+        LinearLayout body = dialogBody("업데이트 다운로드");
+        String tag = update == null ? "새 버전" : displayVersionTag(update.tagName());
+        body.addView(muted(tag + " APK를 다운로드하고 있습니다.", 13), marginBottom(12));
+
+        updateDownloadStatusText = text("다운로드 준비 중입니다.", 14, R.color.ytet_text, false);
+        body.addView(updateDownloadStatusText, marginBottom(12));
+
+        updateDownloadProgressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        updateDownloadProgressBar.setIndeterminate(true);
+        updateDownloadProgressBar.setMax(100);
+        updateDownloadProgressBar.setProgress(0);
+        body.addView(updateDownloadProgressBar, matchWrap());
+
+        dialog.setView(body);
+        updateDialog = dialog;
+        dialog.setOnDismissListener(view -> {
+            if (updateDialog == dialog) {
+                updateDialog = null;
+            }
+            clearUpdateDownloadProgressViews();
+        });
+        dialog.show();
+        styleDetailDialog(dialog);
+    }
+
+    private void showUpdateMessageDialog(String title, String message) {
+        if (!canShowUpdateDialog()) {
+            toast(message);
+            return;
+        }
+        dismissUpdateDialog();
+
+        AlertDialog dialog = new AlertDialog.Builder(this).create();
+        LinearLayout body = dialogBody(title);
+        body.addView(muted(message, 13), marginBottom(14));
+
+        LinearLayout actions = new LinearLayout(this);
+        actions.setGravity(Gravity.END);
+        Button close = detailActionButton("닫기");
+        close.setOnClickListener(view -> dialog.dismiss());
+        actions.addView(close, fixedButtonParams(76, 38, 0));
+        body.addView(actions, matchWrap());
+
+        dialog.setView(body);
+        updateDialog = dialog;
+        dialog.setOnDismissListener(view -> {
+            if (updateDialog == dialog) {
+                updateDialog = null;
+            }
+        });
+        dialog.show();
+        styleDetailDialog(dialog);
+    }
+
     private boolean canShowUpdateDialog() {
         return !isFinishing() && !isDestroyed();
     }
@@ -1175,6 +1239,12 @@ public final class MainActivity extends Activity {
             updateDialog.dismiss();
             updateDialog = null;
         }
+        clearUpdateDownloadProgressViews();
+    }
+
+    private void clearUpdateDownloadProgressViews() {
+        updateDownloadStatusText = null;
+        updateDownloadProgressBar = null;
     }
 
     private void startUpdateCheck(boolean manual) {
@@ -1224,6 +1294,7 @@ public final class MainActivity extends Activity {
         updateDownloading = true;
         updateStatus = update.tagName() + " 업데이트 APK를 다운로드하는 중입니다.";
         renderUpdateState();
+        showUpdateDownloadDialog(update);
         File targetFile;
         try {
             targetFile = new File(updateDownloadDir(), updateApkFileName(update));
@@ -1231,6 +1302,7 @@ public final class MainActivity extends Activity {
             updateDownloading = false;
             updateStatus = "업데이트 다운로드를 시작할 수 없습니다: " + safeMessage(exception);
             renderUpdateState();
+            showUpdateMessageDialog("업데이트 다운로드 실패", updateStatus);
             return;
         }
 
@@ -1249,6 +1321,7 @@ public final class MainActivity extends Activity {
                     updateDownloading = false;
                     updateApkPath = targetFile.getAbsolutePath();
                     updateStatus = update.tagName() + " APK 다운로드가 완료되었습니다. 설치할 수 있습니다.";
+                    updateDownloadProgress(1L, 1L, "다운로드 완료. 설치 화면을 여는 중입니다.");
                     getPreferences().edit()
                             .putString(PREF_UPDATE_APK_PATH, updateApkPath)
                             .putString(PREF_UPDATE_TAG, update.tagName())
@@ -1269,6 +1342,7 @@ public final class MainActivity extends Activity {
                     clearPendingUpdateDownload();
                     updateStatus = "업데이트 다운로드에 실패했습니다: " + safeMessage(exception);
                     renderUpdateState();
+                    showUpdateMessageDialog("업데이트 다운로드 실패", updateStatus);
                 });
             }
         });
@@ -1431,19 +1505,67 @@ public final class MainActivity extends Activity {
             if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
                 throw new IOException("업데이트 폴더를 만들 수 없습니다.");
             }
+            long totalBytes = Math.max(0L, connection.getContentLengthLong());
+            updateDownloadProgress(0L, totalBytes, "다운로드를 시작하는 중입니다.");
             try (InputStream input = connection.getInputStream();
                  FileOutputStream output = new FileOutputStream(targetFile, false)) {
                 byte[] buffer = new byte[64 * 1024];
+                long downloadedBytes = 0L;
+                long lastPublishedBytes = 0L;
+                int lastPublishedPercent = -1;
                 int read;
                 while ((read = input.read(buffer)) != -1) {
                     output.write(buffer, 0, read);
+                    downloadedBytes += read;
+                    int percent = downloadPercent(downloadedBytes, totalBytes);
+                    if (downloadedBytes - lastPublishedBytes >= 256L * 1024L
+                            || (percent >= 0 && percent != lastPublishedPercent)) {
+                        lastPublishedBytes = downloadedBytes;
+                        lastPublishedPercent = percent;
+                        updateDownloadProgress(downloadedBytes, totalBytes, null);
+                    }
                 }
+                updateDownloadProgress(downloadedBytes, totalBytes, null);
             }
             if (targetFile.length() <= 0L) {
                 throw new IOException("빈 업데이트 파일입니다.");
             }
         } finally {
             connection.disconnect();
+        }
+    }
+
+    private int downloadPercent(long downloadedBytes, long totalBytes) {
+        if (totalBytes <= 0L) {
+            return -1;
+        }
+        return Math.max(0, Math.min(100, Math.round(downloadedBytes * 100f / totalBytes)));
+    }
+
+    private void updateDownloadProgress(long downloadedBytes, long totalBytes, String explicitStatus) {
+        Runnable update = () -> {
+            if (updateDownloadProgressBar == null || updateDownloadStatusText == null) {
+                return;
+            }
+            int percent = downloadPercent(downloadedBytes, totalBytes);
+            if (percent >= 0) {
+                updateDownloadProgressBar.setIndeterminate(false);
+                updateDownloadProgressBar.setProgress(percent);
+                updateDownloadStatusText.setText(explicitStatus == null || explicitStatus.trim().isEmpty()
+                        ? percent + "% · " + MusicLibrary.formatBytes(downloadedBytes)
+                        + " / " + MusicLibrary.formatBytes(totalBytes)
+                        : explicitStatus);
+            } else {
+                updateDownloadProgressBar.setIndeterminate(true);
+                updateDownloadStatusText.setText(explicitStatus == null || explicitStatus.trim().isEmpty()
+                        ? "다운로드 중 · " + MusicLibrary.formatBytes(downloadedBytes)
+                        : explicitStatus);
+            }
+        };
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            update.run();
+        } else {
+            runOnUiThread(update);
         }
     }
 
@@ -4559,11 +4681,11 @@ public final class MainActivity extends Activity {
                 GradientDrawable.Orientation.TOP_BOTTOM,
                 new int[]{
                         Color.TRANSPARENT,
-                        Color.argb(56, red, green, blue),
-                        Color.argb(136, red, green, blue),
-                        Color.argb(224, red, green, blue),
-                        Color.argb(252, red, green, blue),
-                        Color.argb(255, red, green, blue)
+                        Color.TRANSPARENT,
+                        Color.TRANSPARENT,
+                        Color.argb(24, red, green, blue),
+                        Color.argb(96, red, green, blue),
+                        Color.argb(218, red, green, blue)
                 }
         );
     }
@@ -4572,16 +4694,9 @@ public final class MainActivity extends Activity {
         int red = Color.red(BOTTOM_CHROME_BASE);
         int green = Color.green(BOTTOM_CHROME_BASE);
         int blue = Color.blue(BOTTOM_CHROME_BASE);
-        return new GradientDrawable(
-                GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{
-                        Color.argb(34, red, green, blue),
-                        Color.argb(104, red, green, blue),
-                        Color.argb(188, red, green, blue),
-                        Color.argb(238, red, green, blue),
-                        Color.argb(255, red, green, blue)
-                }
-        );
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setColor(Color.argb(108, red, green, blue));
+        return drawable;
     }
 
     private GradientDrawable expandedPlayerBackground(boolean roundedTop) {
@@ -4693,7 +4808,7 @@ public final class MainActivity extends Activity {
     }
 
     private int bottomVignetteHeight(int navigationInset) {
-        return bottomChromeBaseHeight() + navigationInset + dp(72);
+        return Math.max(dp(28), navigationInset);
     }
 
     private void applyQueueWindow(Window window) {
