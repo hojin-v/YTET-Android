@@ -132,6 +132,7 @@ public final class MainActivity extends Activity {
     private static final int LIBRARY_RENDER_BATCH_ITEMS = 12;
     private static final int QUEUE_INITIAL_RENDER_ITEMS = 18;
     private static final int QUEUE_RENDER_BATCH_ITEMS = 16;
+    private static final int BOTTOM_CHROME_COLOR = 0x800B0B0D;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService libraryExecutor = Executors.newSingleThreadExecutor();
@@ -145,6 +146,7 @@ public final class MainActivity extends Activity {
     private TextView nowPlayingTitle;
     private TextView nowPlayingMeta;
     private ImageButton playPauseButton;
+    private View bottomNavigationGuard;
     private long renderedNowPlayingTrackId = Long.MIN_VALUE;
     private boolean renderedNowPlayingIdle = true;
     private String renderedNowPlayingTitle = "";
@@ -388,6 +390,7 @@ public final class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        applyMainWindowBars();
         outputTreeUri = getPreferences().getString(PREF_OUTPUT_TREE, null);
         librarySource = getPreferences().getString(PREF_LIBRARY_SOURCE, LIBRARY_SOURCE_COLLECTION);
         librarySort = LibrarySort.fromKey(getPreferences().getString(PREF_LIBRARY_SORT, LibrarySort.NEWEST.key));
@@ -573,14 +576,14 @@ public final class MainActivity extends Activity {
     }
 
     private View buildContent() {
-        LinearLayout app = new LinearLayout(this);
-        app.setOrientation(LinearLayout.VERTICAL);
+        FrameLayout app = new FrameLayout(this);
         app.setBackgroundColor(color(R.color.ytet_background));
 
         FrameLayout contentFrame = new FrameLayout(this);
         appContentScrollView = new PullRefreshScrollView(this);
         contentScrollView = appContentScrollView;
         contentScrollView.setFillViewport(true);
+        contentScrollView.setClipToPadding(false);
         contentScrollView.setBackgroundColor(color(R.color.ytet_background));
         contentFrame.addView(contentScrollView, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
@@ -592,18 +595,34 @@ public final class MainActivity extends Activity {
                 Gravity.TOP | Gravity.CENTER_HORIZONTAL
         );
         contentFrame.addView(libraryPullRefreshIndicator(), refreshParams);
-        app.addView(contentFrame, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                0,
-                1f
+        app.addView(contentFrame, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
         ));
 
+        LinearLayout bottomChrome = new LinearLayout(this);
+        bottomChrome.setOrientation(LinearLayout.VERTICAL);
+        bottomChrome.setClickable(true);
         nowPlayingBar = buildNowPlayingBar();
-        app.addView(nowPlayingBar, new LinearLayout.LayoutParams(
+        bottomChrome.addView(nowPlayingBar, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 dp(64)
         ));
-        app.addView(buildBottomTabs(), matchWrap());
+        bottomChrome.addView(buildBottomTabs(), matchWrap());
+        bottomNavigationGuard = new View(this);
+        bottomNavigationGuard.setBackgroundColor(BOTTOM_CHROME_COLOR);
+        bottomNavigationGuard.setOnTouchListener((view, event) -> true);
+        bottomChrome.addView(bottomNavigationGuard, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0
+        ));
+        app.addView(bottomChrome, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM
+        ));
+        updateMainContentBottomPadding(0);
+        applyMainContentInsets(app);
 
         renderCurrentTab();
         return app;
@@ -645,8 +664,9 @@ public final class MainActivity extends Activity {
     private LinearLayout buildBottomTabs() {
         LinearLayout tabs = new LinearLayout(this);
         tabs.setOrientation(LinearLayout.HORIZONTAL);
+        tabs.setClickable(true);
         tabs.setPadding(dp(10), dp(4), dp(10), dp(12));
-        tabs.setBackgroundColor(0x800B0B0D);
+        tabs.setBackgroundColor(BOTTOM_CHROME_COLOR);
 
         homeTabButton = tabButton("홈", Tab.HOME, R.drawable.ic_tab_home_outline, R.drawable.ic_tab_home_filled);
         libraryTabButton = tabButton("내 음악", Tab.LIBRARY, R.drawable.ic_tab_library_outline, R.drawable.ic_tab_library_filled);
@@ -4387,6 +4407,75 @@ public final class MainActivity extends Activity {
         int statusColor = playerStatusBarColor();
         int navigationColor = blendColors(color(R.color.ytet_background), statusColor, 0.16f);
         applyExpandedDialogBars(window, statusColor, navigationColor);
+    }
+
+    private void applyMainWindowBars() {
+        Window window = getWindow();
+        if (window == null) {
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.setDecorFitsSystemWindows(false);
+        }
+        window.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS
+                | WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION);
+        window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            WindowManager.LayoutParams attributes = window.getAttributes();
+            attributes.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
+            window.setAttributes(attributes);
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window.setStatusBarContrastEnforced(false);
+            window.setNavigationBarContrastEnforced(false);
+        }
+        window.setStatusBarColor(Color.TRANSPARENT);
+        window.setNavigationBarColor(Color.TRANSPARENT);
+        View decor = window.getDecorView();
+        int flags = decor.getSystemUiVisibility()
+                | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION;
+        flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+        flags &= ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+        decor.setSystemUiVisibility(flags);
+    }
+
+    private void applyMainContentInsets(View root) {
+        root.setOnApplyWindowInsetsListener((view, insets) -> {
+            int topInset;
+            int bottomInset;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                Insets topInsets = insets.getInsets(WindowInsets.Type.statusBars() | WindowInsets.Type.displayCutout());
+                Insets bottomInsets = insets.getInsets(WindowInsets.Type.navigationBars());
+                topInset = topInsets.top;
+                bottomInset = bottomInsets.bottom;
+            } else {
+                topInset = insets.getSystemWindowInsetTop();
+                bottomInset = insets.getSystemWindowInsetBottom();
+            }
+            view.setPadding(0, topInset, 0, 0);
+            if (bottomNavigationGuard != null) {
+                setViewHeight(bottomNavigationGuard, bottomInset);
+            }
+            updateMainContentBottomPadding(bottomInset);
+            return insets;
+        });
+        root.post(root::requestApplyInsets);
+    }
+
+    private void updateMainContentBottomPadding(int navigationInset) {
+        if (contentScrollView == null) {
+            return;
+        }
+        contentScrollView.setPadding(0, 0, 0, bottomChromeBaseHeight() + navigationInset + dp(8));
+    }
+
+    private int bottomChromeBaseHeight() {
+        return dp(64) + bottomTabsHeight();
+    }
+
+    private int bottomTabsHeight() {
+        return dp(64);
     }
 
     private void applyQueueWindow(Window window) {
