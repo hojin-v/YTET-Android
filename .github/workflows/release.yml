@@ -28,6 +28,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Set up Java
         uses: actions/setup-java@v5
@@ -230,7 +232,18 @@ jobs:
           zip="dist/YTET-Android-${tag}-android.zip"
 
           title="YTET Android $tag"
-          notes="Automated YTET Android release build for $tag. Includes embedded Python yt-dlp runtime and arm64 FFmpegKit remuxing; see README before distribution."
+          notes_file="$RUNNER_TEMP/release-notes.md"
+          tag_notes="$(git for-each-ref "refs/tags/$tag" --format='%(contents)' || true)"
+          if [[ -n "${tag_notes//[[:space:]]/}" ]]; then
+            printf '%s\n' "$tag_notes" > "$notes_file"
+          else
+            {
+              echo "YTET Android $tag"
+              echo
+              echo "패치노트"
+              echo "- 정식 릴리즈 빌드입니다."
+            } > "$notes_file"
+          fi
           prerelease_flag=""
           if [[ "$tag" == "nightly" ]]; then
             git config user.name "github-actions[bot]"
@@ -238,21 +251,21 @@ jobs:
             git tag -f nightly "$GITHUB_SHA"
             git push origin refs/tags/nightly --force
             title="YTET Android Nightly"
-            notes="Automated Android release build from $GITHUB_SHA. Includes embedded Python yt-dlp runtime and arm64 FFmpegKit remuxing; see README before distribution."
+            echo "Automated Android release build from $GITHUB_SHA. Includes embedded Python yt-dlp runtime and arm64 FFmpegKit remuxing; see README before distribution." > "$notes_file"
             prerelease_flag="--prerelease"
           fi
 
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" "$apk" "$zip" --clobber
             if [[ -n "$prerelease_flag" ]]; then
-              gh release edit "$tag" --title "$title" --notes "$notes" "$prerelease_flag"
+              gh release edit "$tag" --title "$title" --notes-file "$notes_file" "$prerelease_flag"
             else
-              gh release edit "$tag" --title "$title" --notes "$notes"
+              gh release edit "$tag" --title "$title" --notes-file "$notes_file"
             fi
           else
             if [[ -n "$prerelease_flag" ]]; then
-              gh release create "$tag" "$apk" "$zip" --title "$title" --notes "$notes" "$prerelease_flag"
+              gh release create "$tag" "$apk" "$zip" --title "$title" --notes-file "$notes_file" "$prerelease_flag"
             else
-              gh release create "$tag" "$apk" "$zip" --title "$title" --notes "$notes"
+              gh release create "$tag" "$apk" "$zip" --title "$title" --notes-file "$notes_file"
             fi
           fi

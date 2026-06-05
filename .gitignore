@@ -13,3 +13,5 @@ dist/
 *.jks
 __pycache__/
 *.pyc
+AGENTS.md
+legacy/

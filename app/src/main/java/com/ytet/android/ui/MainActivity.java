@@ -1049,7 +1049,7 @@ public final class MainActivity extends Activity {
     private View updatePanel() {
         LinearLayout panel = panel();
         panel.addView(label("업데이트"), marginBottom(8));
-        panel.addView(muted("GitHub의 정식 버전 릴리즈만 확인합니다. Nightly와 prerelease는 건너뜁니다.", 13), marginBottom(10));
+        panel.addView(muted("새로운 업데이트가 있습니다.", 13), marginBottom(10));
         updateStatusText = text(updateStatus, 14, R.color.ytet_text, false);
         panel.addView(updateStatusText, marginBottom(12));
         updateActionButton = secondaryButton(updateActionLabel());
@@ -1098,12 +1098,9 @@ public final class MainActivity extends Activity {
 
         AlertDialog dialog = new AlertDialog.Builder(this).create();
         LinearLayout body = dialogBody("업데이트 사용 가능");
-        body.addView(muted("새 버전을 찾았습니다.", 13), marginBottom(12));
-        body.addView(trackDetailItem("현재 버전", currentAppVersionName()), marginBottom(10));
-        body.addView(trackDetailItem("새 버전", update.tagName()), marginBottom(10));
-        if (!update.releaseName().isEmpty() && !update.releaseName().equals(update.tagName())) {
-            body.addView(trackDetailItem("릴리즈", update.releaseName()), marginBottom(10));
-        }
+        body.addView(muted("새로운 업데이트가 있습니다.", 13), marginBottom(12));
+        body.addView(trackDetailItem("현재 버전", displayVersionTag(currentAppVersionName())), marginBottom(10));
+        body.addView(trackDetailItem("새 버전", displayVersionTag(update.tagName())), marginBottom(10));
         body.addView(trackDetailItem("파일", update.apkName()), marginBottom(14));
 
         LinearLayout actions = new LinearLayout(this);
@@ -1474,6 +1471,16 @@ public final class MainActivity extends Activity {
         } catch (PackageManager.NameNotFoundException exception) {
             return "0.0.0";
         }
+    }
+
+    private String displayVersionTag(String value) {
+        String version = value == null ? "" : value.trim();
+        if (version.isEmpty()) {
+            return "v0.0.0";
+        }
+        version = version.replaceFirst("^v", "");
+        version = version.replaceFirst("-android$", "");
+        return "v" + version;
     }
 
     private void saveLibraryTabScroll() {
