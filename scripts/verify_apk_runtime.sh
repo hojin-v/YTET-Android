@@ -31,6 +31,7 @@ reject_entry() {
 
 require_entry '^assets/chaquopy/app\.imy$' "missing packaged app Python module archive"
 require_entry '^assets/chaquopy/requirements-arm64-v8a\.imy$' "missing arm64 yt-dlp requirements archive"
+require_entry '^assets/chaquopy/requirements-common\.imy$' "missing common yt-dlp requirements archive"
 require_entry '^lib/arm64-v8a/libpython3\.12\.so$' "missing arm64 embedded Python runtime"
 require_entry '^lib/arm64-v8a/libffmpegkit\.so$' "missing arm64 FFmpegKit native runtime"
 require_entry '^lib/arm64-v8a/libavformat\.so$' "missing arm64 FFmpeg demux/mux library"
@@ -38,24 +39,23 @@ require_entry '^lib/arm64-v8a/libavcodec\.so$' "missing arm64 FFmpeg codec libra
 reject_entry '^lib/x86_64/' "x86_64 native libraries should not be packaged without matching FFmpegKit runtime"
 reject_entry '^assets/runtime/' "stale executable asset runtime packaged into APK"
 
-if ! strings "$apk" | grep -q 'ytet_ydl\.pyc'; then
-  echo "missing compiled ytet_ydl Python module in APK" >&2
-  exit 1
-fi
+require_archive_string() {
+  local entry="$1"
+  local pattern="$2"
+  local message="$3"
+  if ! unzip -p "$apk" "$entry" | strings | grep "$pattern" >/dev/null; then
+    echo "$message" >&2
+    exit 1
+  fi
+}
 
-if ! strings "$apk" | grep -q 'yt_dlp-2026\.3\.17\.dist-info'; then
-  echo "missing packaged yt-dlp 2026.3.17 runtime in APK" >&2
-  exit 1
-fi
-
-if ! strings "$apk" | grep -q 'yt_dlp_ejs-0\.8\.0\.dist-info'; then
-  echo "missing packaged yt-dlp-ejs 0.8.0 scripts in APK" >&2
-  exit 1
-fi
-
-if ! strings "$apk" | grep -q 'mutagen-1\.47\.0\.dist-info'; then
-  echo "missing packaged mutagen 1.47.0 tag writer in APK" >&2
-  exit 1
-fi
+require_archive_string 'assets/chaquopy/app.imy' 'ytet_ydl\.pyc' \
+  "missing compiled ytet_ydl Python module in APK"
+require_archive_string 'assets/chaquopy/requirements-common.imy' 'yt_dlp-2026\.3\.17\.dist-info' \
+  "missing packaged yt-dlp 2026.3.17 runtime in APK"
+require_archive_string 'assets/chaquopy/requirements-common.imy' 'yt_dlp_ejs-0\.8\.0\.dist-info' \
+  "missing packaged yt-dlp-ejs 0.8.0 scripts in APK"
+require_archive_string 'assets/chaquopy/requirements-common.imy' 'mutagen-1\.47\.0\.dist-info' \
+  "missing packaged mutagen 1.47.0 tag writer in APK"
 
 echo "APK runtime packaging checks passed."

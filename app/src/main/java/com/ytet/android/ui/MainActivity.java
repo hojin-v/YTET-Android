@@ -129,6 +129,8 @@ public final class MainActivity extends Activity {
     private static final String LIBRARY_SOURCE_COLLECTION = "collection";
     private static final String LIBRARY_SOURCE_DEVICE = "device";
     private static final long LIBRARY_SEARCH_DEBOUNCE_MS = 120L;
+    private static final int MAX_SLEEP_TIMER_HOURS = 23;
+    private static final int MAX_SLEEP_TIMER_MINUTES = MAX_SLEEP_TIMER_HOURS * 60 + 59;
     private static final int BOTTOM_CHROME_BASE = 0xFF0B0B0D;
     private static final int NOW_PLAYING_TRANSITION_NONE = 0;
     private static final int NOW_PLAYING_TRANSITION_NEXT = 1;
@@ -5416,12 +5418,12 @@ public final class MainActivity extends Activity {
         ImageButton timer = playerIconButton(R.drawable.ic_timer, "슬립 타이머", timerSelected, true);
         timer.setOnClickListener(view -> {
             if (sleepTimerControlsVisible) {
-                sleepTimerMinutes = sleepTimerDraftInitialMinutes;
+                sleepTimerMinutes = hasSleepTimer() ? sleepTimerDraftInitialMinutes : 0;
                 sleepTimerControlsVisible = false;
             } else {
                 sleepTimerMinutes = clampSleepTimerTotalMinutes(hasSleepTimer()
                         ? remainingSleepTimerMinutes()
-                        : sleepTimerMinutes);
+                        : 0);
                 sleepTimerDraftInitialMinutes = sleepTimerMinutes;
                 sleepTimerControlsVisible = true;
             }
@@ -5471,8 +5473,12 @@ public final class MainActivity extends Activity {
             return row;
         }
 
-        View spacer = new View(this);
-        row.addView(spacer, new LinearLayout.LayoutParams(0, dp(42), 1f));
+        row.setGravity(Gravity.CENTER);
+
+        TextView remaining = muted(sleepTimerInlineText(), 14);
+        expandedSleepTimerRemainingText = remaining;
+        remaining.setGravity(Gravity.CENTER_VERTICAL);
+        row.addView(remaining, marginRight(8, LinearLayout.LayoutParams.WRAP_CONTENT, dp(42)));
 
         ImageButton toggle = playerIconButton(
                 sleepTimerPaused ? R.drawable.ic_play_arrow : R.drawable.ic_pause,
@@ -5484,13 +5490,10 @@ public final class MainActivity extends Activity {
         toggle.setOnClickListener(view -> toggleSleepTimerPause());
         row.addView(toggle, marginRight(8, dp(42), dp(42)));
 
-        TextView remaining = muted(sleepTimerInlineText(), 14);
-        expandedSleepTimerRemainingText = remaining;
-        remaining.setGravity(Gravity.CENTER_VERTICAL);
-        row.addView(remaining, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                dp(42)
-        ));
+        ImageButton cancel = playerIconButton(R.drawable.ic_close, "슬립 타이머 취소", false, true);
+        cancel.setPadding(dp(10), dp(10), dp(10), dp(10));
+        cancel.setOnClickListener(view -> cancelSleepTimer());
+        row.addView(cancel, new LinearLayout.LayoutParams(dp(42), dp(42)));
         return row;
     }
 
@@ -5653,7 +5656,7 @@ public final class MainActivity extends Activity {
         panel.setPadding(0, 0, 0, 0);
 
         SleepTimerDialView hours = new SleepTimerDialView(this);
-        hours.configure(99, 1, true);
+        hours.configure(MAX_SLEEP_TIMER_HOURS, 1, true);
         hours.setSelectedValue(sleepTimerHours());
         hours.setTimerActive(hasSleepTimer());
         hours.setOnTimerChangeListener((value, committed) -> setSleepTimerDraft(value, sleepTimerMinutePart()));
@@ -5732,7 +5735,7 @@ public final class MainActivity extends Activity {
     }
 
     private int clampSleepTimerTotalMinutes(int minutes) {
-        return Math.max(0, Math.min(99 * 60 + 59, minutes));
+        return Math.max(0, Math.min(MAX_SLEEP_TIMER_MINUTES, minutes));
     }
 
     private boolean hasSleepTimer() {
