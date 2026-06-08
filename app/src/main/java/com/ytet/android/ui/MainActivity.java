@@ -5037,7 +5037,12 @@ public final class MainActivity extends Activity {
                 : 0;
     }
 
-    private void applyExpandedPlayerInsets(DragDismissLayout root, View statusScrim, LinearLayout content) {
+    private void applyExpandedPlayerInsets(
+            DragDismissLayout root,
+            View statusScrim,
+            LinearLayout content,
+            ExpandedPlayerLayout layout
+    ) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             return;
         }
@@ -5047,10 +5052,155 @@ public final class MainActivity extends Activity {
             int topInset = Math.max(topInsets.top, expandedPlayerStatusInset());
             int bottomInset = Math.max(bottomInsets.bottom, expandedPlayerNavigationInset());
             setViewHeight(statusScrim, topInset);
-            content.setPadding(dp(20), dp(22) + topInset, dp(20), dp(24) + bottomInset);
+            content.setPadding(
+                    layout.horizontalPadding,
+                    layout.topPadding + topInset,
+                    layout.horizontalPadding,
+                    layout.bottomPadding + bottomInset
+            );
             return insets;
         });
         root.requestApplyInsets();
+    }
+
+    private ExpandedPlayerLayout expandedPlayerLayout(int statusInset, int navigationInset) {
+        int screenHeight = getResources().getDisplayMetrics().heightPixels;
+        int topPadding = dp(22);
+        int bottomPadding = dp(24);
+        int availableHeight = Math.max(
+                dp(360),
+                screenHeight - statusInset - navigationInset - topPadding - bottomPadding
+        );
+        boolean compact = availableHeight < dp(640);
+        boolean tight = availableHeight < dp(560);
+        boolean tiny = availableHeight < dp(500);
+
+        int topGap = tiny ? dp(8) : tight ? dp(12) : compact ? dp(18) : dp(26);
+        int coverBottom = tiny ? dp(6) : tight ? dp(8) : compact ? dp(10) : dp(14);
+        int sleepStatusBottom = tiny ? dp(2) : compact ? dp(4) : dp(8);
+        int titleBottom = tiny ? dp(2) : dp(4);
+        int artistBottom = tiny ? dp(1) : dp(2);
+        int albumBottom = tiny ? dp(3) : compact ? dp(5) : dp(8);
+        int progressTextBottom = tiny ? dp(4) : compact ? dp(6) : dp(10);
+        int controlsBottom = tiny ? dp(2) : compact ? dp(4) : dp(6);
+        int progressHeight = tiny ? dp(34) : compact ? dp(38) : dp(42);
+        int controlButtonHeight = tiny ? dp(44) : compact ? dp(47) : dp(50);
+        int toolsHeight = tiny ? dp(76) : tight ? dp(84) : compact ? dp(90) : dp(98);
+        int toolIconSize = tiny ? dp(50) : tight ? dp(54) : dp(58);
+        int queueIconSize = Math.max(dp(46), toolIconSize - dp(4));
+        int titleTextSp = tiny ? 20 : compact ? 22 : 23;
+
+        int fixedWithoutCover = 0;
+        fixedWithoutCover += dp(42) + topGap;
+        fixedWithoutCover += dp(42) + sleepStatusBottom;
+        fixedWithoutCover += estimatedTextLineHeight(titleTextSp) + titleBottom;
+        fixedWithoutCover += estimatedTextLineHeight(14) + artistBottom;
+        fixedWithoutCover += estimatedTextLineHeight(12) + albumBottom;
+        fixedWithoutCover += progressHeight;
+        fixedWithoutCover += estimatedTextLineHeight(12) + progressTextBottom;
+        fixedWithoutCover += controlButtonHeight + controlsBottom;
+        fixedWithoutCover += toolsHeight;
+        fixedWithoutCover += dp(6);
+
+        int coverTarget = Math.min(dp(284), Math.max(dp(168), Math.round(availableHeight * 0.38f)));
+        int coverMax = availableHeight - fixedWithoutCover - coverBottom;
+        int coverMin = tiny ? dp(112) : tight ? dp(136) : dp(164);
+        int coverHeight = clampPx(coverTarget, coverMin, dp(284));
+        if (coverMax > 0) {
+            coverHeight = Math.min(coverHeight, coverMax);
+        }
+        coverHeight = Math.max(dp(96), coverHeight);
+
+        return new ExpandedPlayerLayout(
+                dp(20),
+                topPadding,
+                bottomPadding,
+                topGap,
+                coverHeight,
+                coverBottom,
+                sleepStatusBottom,
+                titleTextSp,
+                titleBottom,
+                artistBottom,
+                albumBottom,
+                progressHeight,
+                progressTextBottom,
+                controlButtonHeight,
+                controlsBottom,
+                toolsHeight,
+                toolIconSize,
+                queueIconSize
+        );
+    }
+
+    private int estimatedTextLineHeight(int sizeSp) {
+        float scaledDensity = getResources().getDisplayMetrics().scaledDensity;
+        return Math.round(sizeSp * scaledDensity + dp(5));
+    }
+
+    private int clampPx(int value, int min, int max) {
+        return Math.max(min, Math.min(max, value));
+    }
+
+    private static final class ExpandedPlayerLayout {
+        final int horizontalPadding;
+        final int topPadding;
+        final int bottomPadding;
+        final int topGap;
+        final int coverHeight;
+        final int coverBottom;
+        final int sleepStatusBottom;
+        final int titleTextSp;
+        final int titleBottom;
+        final int artistBottom;
+        final int albumBottom;
+        final int progressHeight;
+        final int progressTextBottom;
+        final int controlButtonHeight;
+        final int controlsBottom;
+        final int toolsHeight;
+        final int toolIconSize;
+        final int queueIconSize;
+
+        ExpandedPlayerLayout(
+                int horizontalPadding,
+                int topPadding,
+                int bottomPadding,
+                int topGap,
+                int coverHeight,
+                int coverBottom,
+                int sleepStatusBottom,
+                int titleTextSp,
+                int titleBottom,
+                int artistBottom,
+                int albumBottom,
+                int progressHeight,
+                int progressTextBottom,
+                int controlButtonHeight,
+                int controlsBottom,
+                int toolsHeight,
+                int toolIconSize,
+                int queueIconSize
+        ) {
+            this.horizontalPadding = horizontalPadding;
+            this.topPadding = topPadding;
+            this.bottomPadding = bottomPadding;
+            this.topGap = topGap;
+            this.coverHeight = coverHeight;
+            this.coverBottom = coverBottom;
+            this.sleepStatusBottom = sleepStatusBottom;
+            this.titleTextSp = titleTextSp;
+            this.titleBottom = titleBottom;
+            this.artistBottom = artistBottom;
+            this.albumBottom = albumBottom;
+            this.progressHeight = progressHeight;
+            this.progressTextBottom = progressTextBottom;
+            this.controlButtonHeight = controlButtonHeight;
+            this.controlsBottom = controlsBottom;
+            this.toolsHeight = toolsHeight;
+            this.toolIconSize = toolIconSize;
+            this.queueIconSize = queueIconSize;
+        }
     }
 
     private void setViewHeight(View view, int height) {
@@ -5298,14 +5448,30 @@ public final class MainActivity extends Activity {
                 statusInset
         ));
 
-        LinearLayout content = new LinearLayout(this);
-        content.setOrientation(LinearLayout.VERTICAL);
-        content.setPadding(dp(20), dp(22) + statusInset, dp(20), dp(24) + navigationInset);
-        root.addView(content, new LinearLayout.LayoutParams(
+        ExpandedPlayerLayout layout = expandedPlayerLayout(statusInset, navigationInset);
+
+        ScrollView playerScroll = new ScrollView(this);
+        playerScroll.setFillViewport(true);
+        playerScroll.setClipToPadding(false);
+        playerScroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        root.addView(playerScroll, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.MATCH_PARENT
         ));
-        applyExpandedPlayerInsets(root, statusScrim, content);
+
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setPadding(
+                layout.horizontalPadding,
+                layout.topPadding + statusInset,
+                layout.horizontalPadding,
+                layout.bottomPadding + navigationInset
+        );
+        playerScroll.addView(content, new ScrollView.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+        ));
+        applyExpandedPlayerInsets(root, statusScrim, content, layout);
 
         LinearLayout top = new LinearLayout(this);
         top.setOrientation(LinearLayout.HORIZONTAL);
@@ -5322,13 +5488,13 @@ public final class MainActivity extends Activity {
         top.addView(mix, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         View spacer = new View(this);
         top.addView(spacer, new LinearLayout.LayoutParams(dp(44), dp(42)));
-        content.addView(top, marginBottom(26));
+        content.addView(top, marginBottomPx(layout.topGap));
 
-        content.addView(coverArtView(), coverParams());
-        content.addView(sleepTimerStatusSlot(), marginBottom(8));
-        content.addView(marqueeText(playbackTitle, 23, R.color.ytet_text, true), marginBottom(4));
-        content.addView(marqueeText(playbackArtist, 14, R.color.ytet_muted, false), marginBottom(2));
-        content.addView(marqueeText(albumQueuePositionText(), 12, R.color.ytet_muted, false), marginBottom(8));
+        content.addView(coverArtView(), coverParams(layout.coverHeight, layout.coverBottom));
+        content.addView(sleepTimerStatusSlot(), marginBottomPx(layout.sleepStatusBottom));
+        content.addView(marqueeText(playbackTitle, layout.titleTextSp, R.color.ytet_text, true), marginBottomPx(layout.titleBottom));
+        content.addView(marqueeText(playbackArtist, 14, R.color.ytet_muted, false), marginBottomPx(layout.artistBottom));
+        content.addView(marqueeText(albumQueuePositionText(), 12, R.color.ytet_muted, false), marginBottomPx(layout.albumBottom));
 
         PlaybackSeekBarView progress = new PlaybackSeekBarView(this);
         progress.setProgress(playbackDurationMs, playbackSeeking ? playbackSeekPreviewMs : playbackPositionMs);
@@ -5374,10 +5540,10 @@ public final class MainActivity extends Activity {
             }
         });
         expandedPlaybackSeekBar = progress;
-        content.addView(progress, controlParams(42, 0));
+        content.addView(progress, fixedHeightParams(layout.progressHeight));
         TextView progressText = muted(playbackProgressText(), 12);
         expandedPlaybackProgressText = progressText;
-        content.addView(progressText, marginBottom(10));
+        content.addView(progressText, marginBottomPx(layout.progressTextBottom));
         content.addView(new View(this), new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 0,
@@ -5404,12 +5570,12 @@ public final class MainActivity extends Activity {
                 playbackHasQueue
         );
         repeat.setOnClickListener(view -> toggleRepeat());
-        controls.addView(shuffle, playerControlParams(5));
-        controls.addView(previous, playerControlParams(5));
-        controls.addView(play, playerControlParams(5));
-        controls.addView(next, playerControlParams(5));
-        controls.addView(repeat, playerControlParams(0));
-        content.addView(controls, marginBottom(6));
+        controls.addView(shuffle, playerControlParams(5, layout.controlButtonHeight));
+        controls.addView(previous, playerControlParams(5, layout.controlButtonHeight));
+        controls.addView(play, playerControlParams(5, layout.controlButtonHeight));
+        controls.addView(next, playerControlParams(5, layout.controlButtonHeight));
+        controls.addView(repeat, playerControlParams(0, layout.controlButtonHeight));
+        content.addView(controls, marginBottomPx(layout.controlsBottom));
 
         LinearLayout tools = new LinearLayout(this);
         tools.setOrientation(LinearLayout.HORIZONTAL);
@@ -5429,7 +5595,7 @@ public final class MainActivity extends Activity {
             }
             updateExpandedPlayer();
         });
-        tools.addView(timer, new LinearLayout.LayoutParams(dp(58), dp(58)));
+        tools.addView(timer, new LinearLayout.LayoutParams(layout.toolIconSize, layout.toolIconSize));
         View timerControls = sleepTimerControlsVisible ? sleepTimerControlsPanel() : nextTrackInfoPanel();
         LinearLayout.LayoutParams timerParams = new LinearLayout.LayoutParams(
                 0,
@@ -5440,10 +5606,10 @@ public final class MainActivity extends Activity {
         tools.addView(timerControls, timerParams);
         ImageButton queue = playerIconButton(R.drawable.ic_queue_music, "재생목록", false, playbackHasQueue);
         queue.setOnClickListener(view -> showQueueDialog());
-        tools.addView(queue, new LinearLayout.LayoutParams(dp(54), dp(58)));
+        tools.addView(queue, new LinearLayout.LayoutParams(layout.queueIconSize, layout.toolIconSize));
         content.addView(tools, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(98)
+                layout.toolsHeight
         ));
         return frame;
     }
@@ -6908,6 +7074,12 @@ public final class MainActivity extends Activity {
         return params;
     }
 
+    private LinearLayout.LayoutParams marginBottomPx(int bottomPx) {
+        LinearLayout.LayoutParams params = matchWrap();
+        params.setMargins(0, 0, 0, Math.max(0, bottomPx));
+        return params;
+    }
+
     private LinearLayout.LayoutParams marginRight(int rightDp, int width, int height) {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(width, height);
         params.setMargins(0, 0, dp(rightDp), 0);
@@ -6943,17 +7115,21 @@ public final class MainActivity extends Activity {
     }
 
     private LinearLayout.LayoutParams playerControlParams(int rightDp) {
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, dp(50), 1f);
+        return playerControlParams(rightDp, dp(50));
+    }
+
+    private LinearLayout.LayoutParams playerControlParams(int rightDp, int heightPx) {
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, Math.max(dp(40), heightPx), 1f);
         params.setMargins(0, 0, dp(rightDp), 0);
         return params;
     }
 
-    private LinearLayout.LayoutParams coverParams() {
+    private LinearLayout.LayoutParams coverParams(int heightPx, int bottomPx) {
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(284)
+                Math.max(dp(96), heightPx)
         );
-        params.setMargins(0, 0, 0, dp(14));
+        params.setMargins(0, 0, 0, Math.max(0, bottomPx));
         return params;
     }
 
@@ -6964,6 +7140,13 @@ public final class MainActivity extends Activity {
         );
         params.setMargins(0, 0, 0, dp(bottomDp));
         return params;
+    }
+
+    private LinearLayout.LayoutParams fixedHeightParams(int heightPx) {
+        return new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                Math.max(1, heightPx)
+        );
     }
 
     private LinearLayout.LayoutParams tabParams() {
