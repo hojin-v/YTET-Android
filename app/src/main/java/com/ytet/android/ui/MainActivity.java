@@ -6233,6 +6233,9 @@ public final class MainActivity extends Activity {
 
     private View coverArtView() {
         if (playbackAlbumArtUri != null && !playbackAlbumArtUri.trim().isEmpty()) {
+            if (isHttpUrl(playbackAlbumArtUri)) {
+                return onlineImageView(playbackAlbumArtUri, playbackTitle, 284, 8);
+            }
             ImageView image = new ImageView(this);
             image.setBackground(rounded(color(R.color.ytet_panel_alt), 8));
             image.setScaleType(ImageView.ScaleType.CENTER_CROP);
