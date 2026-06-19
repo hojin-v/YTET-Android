@@ -57,6 +57,7 @@ public final class PlaybackService extends Service {
     private static final String ACTION_NEXT_UNAVAILABLE = "com.ytet.android.action.PLAYBACK_NEXT_UNAVAILABLE";
     public static final String ACTION_PLAY_NEXT = "com.ytet.android.action.PLAYBACK_PLAY_NEXT";
     public static final String ACTION_ADD_TO_QUEUE = "com.ytet.android.action.PLAYBACK_ADD_TO_QUEUE";
+    public static final String ACTION_REORDER_QUEUE = "com.ytet.android.action.PLAYBACK_REORDER_QUEUE";
     public static final String ACTION_SET_SLEEP_TIMER = "com.ytet.android.action.PLAYBACK_SET_SLEEP_TIMER";
     public static final String ACTION_CANCEL_SLEEP_TIMER = "com.ytet.android.action.PLAYBACK_CANCEL_SLEEP_TIMER";
     public static final String ACTION_TOGGLE_SLEEP_TIMER_PAUSE = "com.ytet.android.action.PLAYBACK_TOGGLE_SLEEP_TIMER_PAUSE";
@@ -226,6 +227,10 @@ public final class PlaybackService extends Service {
         return intent;
     }
 
+    public static Intent reorderQueueIntent(Context context, List<DeviceAudioTrack> tracks) {
+        return queueEditIntent(context, ACTION_REORDER_QUEUE, tracks);
+    }
+
     public static Intent sleepTimerIntent(Context context, int minutes) {
         Intent intent = new Intent(context, PlaybackService.class);
         intent.setAction(minutes <= 0 ? ACTION_CANCEL_SLEEP_TIMER : ACTION_SET_SLEEP_TIMER);
@@ -325,6 +330,8 @@ public final class PlaybackService extends Service {
             editQueueAsync(intent, true);
         } else if (ACTION_ADD_TO_QUEUE.equals(action)) {
             editQueueAsync(intent, false);
+        } else if (ACTION_REORDER_QUEUE.equals(action)) {
+            reorderQueue(intent.getLongArrayExtra(EXTRA_TRACK_IDS));
         } else if (ACTION_SET_SLEEP_TIMER.equals(action)) {
             setSleepTimer(intent.getIntExtra(EXTRA_SLEEP_TIMER_MINUTES, 0));
         } else if (ACTION_CANCEL_SLEEP_TIMER.equals(action)) {
@@ -475,6 +482,38 @@ public final class PlaybackService extends Service {
         shuffleEnabled = shuffleEnabled && queue.size() > 1;
         persistPlaybackSnapshot();
         updateTransportState();
+        showNotification();
+        broadcastState();
+    }
+
+    private void reorderQueue(long[] orderedIds) {
+        if (orderedIds == null || orderedIds.length != queue.size() || queue.isEmpty()) {
+            broadcastState();
+            return;
+        }
+        DeviceAudioTrack current = currentTrack();
+        long currentId = current == null ? -1L : current.id();
+        ArrayList<DeviceAudioTrack> reordered = new ArrayList<>();
+        boolean[] used = new boolean[queue.size()];
+        for (long id : orderedIds) {
+            int found = -1;
+            for (int index = 0; index < queue.size(); index++) {
+                if (!used[index] && queue.get(index).id() == id) {
+                    found = index;
+                    break;
+                }
+            }
+            if (found < 0) {
+                broadcastState();
+                return;
+            }
+            used[found] = true;
+            reordered.add(queue.get(found));
+        }
+        queue.clear();
+        queue.addAll(reordered);
+        queueIndex = restoredQueueIndex(queueIndex, currentId);
+        persistPlaybackSnapshot();
         showNotification();
         broadcastState();
     }

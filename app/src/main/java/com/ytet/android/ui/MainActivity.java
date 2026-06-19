@@ -108,6 +108,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutorService;
 
 import androidx.recyclerview.widget.GridLayoutManager;
+import androidx.recyclerview.widget.ItemTouchHelper;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
@@ -196,6 +197,7 @@ public final class MainActivity extends Activity {
     private QueueSheetLayout queueSheetLayout;
     private QueueRecyclerAdapter queueRecyclerAdapter;
     private RecyclerView queueRecyclerView;
+    private ItemTouchHelper queueItemTouchHelper;
     private FrameLayout queueCurrentTrackContainer;
     private int queueDialogRenderedIndex = Integer.MIN_VALUE;
     private int queueDialogRenderedQueueSize = Integer.MIN_VALUE;
@@ -6033,7 +6035,7 @@ public final class MainActivity extends Activity {
     }
 
     private View queueRow(DeviceAudioTrack track, int index) {
-        return queueTrackRow(track, index, false, true);
+        return queueTrackRow(track, index, false, true, null);
     }
 
     private View queueCurrentTrackRow(DeviceAudioTrack track, int index) {
@@ -6043,11 +6045,17 @@ public final class MainActivity extends Activity {
         TextView label = muted("현재 곡", 12);
         label.setGravity(Gravity.START);
         wrapper.addView(label, marginBottom(6));
-        wrapper.addView(queueTrackRow(track, index, true, false), matchWrap());
+        wrapper.addView(queueTrackRow(track, index, true, false, null), matchWrap());
         return wrapper;
     }
 
-    private View queueTrackRow(DeviceAudioTrack track, int index, boolean currentOverride, boolean clickable) {
+    private View queueTrackRow(
+            DeviceAudioTrack track,
+            int index,
+            boolean currentOverride,
+            boolean clickable,
+            QueueRecyclerViewHolder dragHolder
+    ) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
@@ -6072,8 +6080,40 @@ public final class MainActivity extends Activity {
         meta.setEllipsize(TextUtils.TruncateAt.END);
         info.addView(meta, matchWrap());
         row.addView(info, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        if (dragHolder != null) {
+            ImageButton drag = playerIconButton(R.drawable.ic_drag_handle, "재생목록 순서 변경", false, true);
+            drag.setColorFilter(0x99FFFFFF);
+            drag.setPadding(dp(10), dp(10), dp(10), dp(10));
+            drag.setOnTouchListener((button, event) -> {
+                int action = event.getActionMasked();
+                if (action == MotionEvent.ACTION_DOWN && queueItemTouchHelper != null) {
+                    if (queueSheetLayout != null) {
+                        queueSheetLayout.setQueueReordering(true);
+                        queueSheetLayout.requestDisallowInterceptTouchEvent(true);
+                    }
+                    if (queueRecyclerView != null) {
+                        queueRecyclerView.requestDisallowInterceptTouchEvent(true);
+                    }
+                    queueItemTouchHelper.startDrag(dragHolder);
+                    return true;
+                }
+                return action == MotionEvent.ACTION_MOVE
+                        || action == MotionEvent.ACTION_UP
+                        || action == MotionEvent.ACTION_CANCEL;
+            });
+            row.addView(drag, new LinearLayout.LayoutParams(dp(44), dp(48)));
+        }
         if (clickable) {
-            row.setOnClickListener(view -> playQueueTrack(track, index));
+            row.setOnClickListener(view -> {
+                int targetIndex = index;
+                if (dragHolder != null && queueRecyclerAdapter != null) {
+                    int adapterPosition = dragHolder.getBindingAdapterPosition();
+                    if (adapterPosition != RecyclerView.NO_POSITION) {
+                        targetIndex = queueRecyclerAdapter.queueIndexForAdapterPosition(adapterPosition);
+                    }
+                }
+                playQueueTrack(track, targetIndex);
+            });
         }
         return row;
     }
@@ -6238,6 +6278,7 @@ public final class MainActivity extends Activity {
                 queueSheetLayout = null;
                 queueRecyclerAdapter = null;
                 queueRecyclerView = null;
+                queueItemTouchHelper = null;
                 queueCurrentTrackContainer = null;
                 queueDialogRenderedIndex = Integer.MIN_VALUE;
                 queueDialogRenderedQueueSize = Integer.MIN_VALUE;
@@ -6304,6 +6345,8 @@ public final class MainActivity extends Activity {
         list.setLayoutManager(new QueueLinearLayoutManager(this));
         queueRecyclerAdapter = new QueueRecyclerAdapter();
         list.setAdapter(queueRecyclerAdapter);
+        queueItemTouchHelper = new ItemTouchHelper(new QueueDragCallback());
+        queueItemTouchHelper.attachToRecyclerView(list);
         sheet.addView(list, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 0,
@@ -6344,7 +6387,7 @@ public final class MainActivity extends Activity {
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.WRAP_CONTENT
         ));
-        queueRecyclerAdapter.submitItems(buildQueueRecyclerItems(queueSnapshot, currentIndex));
+        queueRecyclerAdapter.submitItems(buildQueueRecyclerItems(queueSnapshot, currentIndex), currentIndex);
         queueDialogRenderedIndex = currentIndex;
         queueDialogRenderedQueueSize = queueSnapshot.size();
         queueDialogRenderedTrackId = currentId;
@@ -6414,6 +6457,47 @@ public final class MainActivity extends Activity {
             items.add(QueueListItem.staticView(muted("다른 곡이 없습니다.", 14)));
         }
         return items;
+    }
+
+    private void commitQueueReorderFromAdapter() {
+        if (queueRecyclerAdapter == null || activeQueuePreview.isEmpty()) {
+            return;
+        }
+        int currentIndex = safeQueueIndex(activeQueuePreview);
+        DeviceAudioTrack current = currentIndex >= 0 && currentIndex < activeQueuePreview.size()
+                ? activeQueuePreview.get(currentIndex)
+                : null;
+        if (current == null) {
+            return;
+        }
+        List<DeviceAudioTrack> reordered = queueRecyclerAdapter.orderedQueueWithCurrent(current);
+        if (reordered.size() != activeQueuePreview.size() || sameTrackOrder(reordered, activeQueuePreview)) {
+            return;
+        }
+        activeQueuePreview = new ArrayList<>(reordered);
+        playbackQueueIndex = indexOfTrack(activeQueuePreview, current);
+        playbackQueueSize = activeQueuePreview.size();
+        queueDialogRenderedIndex = playbackQueueIndex;
+        queueDialogRenderedQueueSize = activeQueuePreview.size();
+        queueDialogRenderedTrackId = current.id();
+        queueDialogRenderedFingerprint = queueFingerprint(activeQueuePreview);
+        startPlayback(PlaybackService.reorderQueueIntent(this, activeQueuePreview));
+    }
+
+    private boolean sameTrackOrder(List<DeviceAudioTrack> first, List<DeviceAudioTrack> second) {
+        if (first == null || second == null || first.size() != second.size()) {
+            return false;
+        }
+        for (int index = 0; index < first.size(); index++) {
+            DeviceAudioTrack firstTrack = first.get(index);
+            DeviceAudioTrack secondTrack = second.get(index);
+            long firstId = firstTrack == null ? Long.MIN_VALUE : firstTrack.id();
+            long secondId = secondTrack == null ? Long.MIN_VALUE : secondTrack.id();
+            if (firstId != secondId) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private void updateQueuePreviewFromIds(long[] ids) {
@@ -7757,13 +7841,61 @@ public final class MainActivity extends Activity {
 
     private final class QueueRecyclerAdapter extends RecyclerView.Adapter<QueueRecyclerViewHolder> {
         private final List<QueueListItem> items = new ArrayList<>();
+        private int currentIndex = -1;
 
-        void submitItems(List<QueueListItem> nextItems) {
+        void submitItems(List<QueueListItem> nextItems, int nextCurrentIndex) {
+            currentIndex = nextCurrentIndex;
             items.clear();
             if (nextItems != null) {
                 items.addAll(nextItems);
             }
             notifyDataSetChanged();
+        }
+
+        boolean isTrackPosition(int position) {
+            return position >= 0
+                    && position < items.size()
+                    && items.get(position).type == QueueListItem.TYPE_TRACK
+                    && items.get(position).track != null;
+        }
+
+        boolean moveItem(int fromPosition, int toPosition) {
+            if (!isTrackPosition(fromPosition) || !isTrackPosition(toPosition) || fromPosition == toPosition) {
+                return false;
+            }
+            QueueListItem moved = items.remove(fromPosition);
+            items.add(toPosition, moved);
+            notifyItemMoved(fromPosition, toPosition);
+            return true;
+        }
+
+        int queueIndexForAdapterPosition(int adapterPosition) {
+            if (adapterPosition < 0) {
+                return -1;
+            }
+            if (currentIndex < 0) {
+                return adapterPosition;
+            }
+            int trackOffset = 0;
+            for (int position = 0; position < Math.min(adapterPosition, items.size()); position++) {
+                if (items.get(position).type == QueueListItem.TYPE_TRACK) {
+                    trackOffset++;
+                }
+            }
+            return trackOffset >= currentIndex ? trackOffset + 1 : trackOffset;
+        }
+
+        List<DeviceAudioTrack> orderedQueueWithCurrent(DeviceAudioTrack current) {
+            List<DeviceAudioTrack> ordered = new ArrayList<>();
+            for (QueueListItem item : items) {
+                if (item.type == QueueListItem.TYPE_TRACK && item.track != null) {
+                    ordered.add(item.track);
+                }
+            }
+            if (current != null) {
+                ordered.add(Math.max(0, Math.min(currentIndex, ordered.size())), current);
+            }
+            return ordered;
         }
 
         @Override
@@ -7786,7 +7918,7 @@ public final class MainActivity extends Activity {
 
         @Override
         public void onBindViewHolder(QueueRecyclerViewHolder holder, int position) {
-            holder.bind(items.get(position));
+            holder.bind(items.get(position), queueIndexForAdapterPosition(position));
         }
 
         @Override
@@ -7812,6 +7944,104 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private final class QueueDragCallback extends ItemTouchHelper.SimpleCallback {
+        QueueDragCallback() {
+            super(ItemTouchHelper.UP | ItemTouchHelper.DOWN, 0);
+        }
+
+        @Override
+        public boolean isLongPressDragEnabled() {
+            return false;
+        }
+
+        @Override
+        public boolean isItemViewSwipeEnabled() {
+            return false;
+        }
+
+        @Override
+        public int getMovementFlags(RecyclerView recyclerView, RecyclerView.ViewHolder viewHolder) {
+            int position = viewHolder.getBindingAdapterPosition();
+            if (queueRecyclerAdapter == null || !queueRecyclerAdapter.isTrackPosition(position)) {
+                return 0;
+            }
+            return makeMovementFlags(ItemTouchHelper.UP | ItemTouchHelper.DOWN, 0);
+        }
+
+        @Override
+        public boolean canDropOver(
+                RecyclerView recyclerView,
+                RecyclerView.ViewHolder current,
+                RecyclerView.ViewHolder target
+        ) {
+            int position = target.getBindingAdapterPosition();
+            return queueRecyclerAdapter != null && queueRecyclerAdapter.isTrackPosition(position);
+        }
+
+        @Override
+        public boolean onMove(
+                RecyclerView recyclerView,
+                RecyclerView.ViewHolder viewHolder,
+                RecyclerView.ViewHolder target
+        ) {
+            if (queueRecyclerAdapter == null) {
+                return false;
+            }
+            return queueRecyclerAdapter.moveItem(
+                    viewHolder.getBindingAdapterPosition(),
+                    target.getBindingAdapterPosition()
+            );
+        }
+
+        @Override
+        public void onSwiped(RecyclerView.ViewHolder viewHolder, int direction) {
+            // Queue rows are never swipe-dismissed.
+        }
+
+        @Override
+        public void onSelectedChanged(RecyclerView.ViewHolder viewHolder, int actionState) {
+            super.onSelectedChanged(viewHolder, actionState);
+            if (actionState == ItemTouchHelper.ACTION_STATE_DRAG && viewHolder != null) {
+                if (queueSheetLayout != null) {
+                    queueSheetLayout.setQueueReordering(true);
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    viewHolder.itemView.setTranslationZ(dp(14));
+                }
+                viewHolder.itemView.animate()
+                        .scaleX(1.035f)
+                        .scaleY(1.035f)
+                        .alpha(0.96f)
+                        .setDuration(120L)
+                        .start();
+            }
+        }
+
+        @Override
+        public void clearView(RecyclerView recyclerView, RecyclerView.ViewHolder viewHolder) {
+            super.clearView(recyclerView, viewHolder);
+            viewHolder.itemView.animate()
+                    .scaleX(1f)
+                    .scaleY(1f)
+                    .alpha(1f)
+                    .setDuration(160L)
+                    .withEndAction(() -> {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                            viewHolder.itemView.setTranslationZ(0f);
+                        }
+                    })
+                    .start();
+            if (queueSheetLayout != null) {
+                queueSheetLayout.setQueueReordering(false);
+                queueSheetLayout.requestDisallowInterceptTouchEvent(false);
+            }
+            if (queueRecyclerView != null) {
+                queueRecyclerView.requestDisallowInterceptTouchEvent(false);
+            }
+            commitQueueReorderFromAdapter();
+        }
+    }
+
     private final class QueueSheetLayout extends FrameLayout {
         private View sheet;
         private float downY;
@@ -7819,6 +8049,7 @@ public final class MainActivity extends Activity {
         private float startTranslationY;
         private boolean dragging;
         private boolean expanded;
+        private boolean queueReordering;
         private final int touchSlop;
 
         QueueSheetLayout(Context context) {
@@ -7833,6 +8064,13 @@ public final class MainActivity extends Activity {
 
         boolean isExpanded() {
             return expanded;
+        }
+
+        void setQueueReordering(boolean reordering) {
+            queueReordering = reordering;
+            if (!reordering) {
+                dragging = false;
+            }
         }
 
         void prepareCollapsed() {
@@ -7869,7 +8107,7 @@ public final class MainActivity extends Activity {
 
         @Override
         public boolean onInterceptTouchEvent(MotionEvent event) {
-            if (sheet == null) {
+            if (sheet == null || queueReordering) {
                 return super.onInterceptTouchEvent(event);
             }
             int action = event.getActionMasked();
@@ -7899,7 +8137,7 @@ public final class MainActivity extends Activity {
 
         @Override
         public boolean onTouchEvent(MotionEvent event) {
-            if (sheet == null) {
+            if (sheet == null || queueReordering) {
                 return super.onTouchEvent(event);
             }
             int action = event.getActionMasked();
@@ -7941,11 +8179,11 @@ public final class MainActivity extends Activity {
             this.container = container;
         }
 
-        void bind(QueueListItem item) {
+        void bind(QueueListItem item, int queueIndex) {
             clear();
             applyQueueItemMargins(item);
             View view = item.type == QueueListItem.TYPE_TRACK
-                    ? queueRow(item.track, item.index)
+                    ? queueTrackRow(item.track, queueIndex, false, true, this)
                     : item.view == null ? new View(MainActivity.this) : item.view;
             if (view.getParent() instanceof ViewGroup) {
                 ((ViewGroup) view.getParent()).removeView(view);
