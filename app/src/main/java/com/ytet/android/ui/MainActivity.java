@@ -706,6 +706,7 @@ public final class MainActivity extends Activity {
         bottomChrome.setClickable(true);
         bottomChrome.setBackground(bottomChromeBackground());
         nowPlayingBar = buildNowPlayingBar();
+        nowPlayingBar.setVisibility(View.GONE);
         LinearLayout.LayoutParams nowPlayingParams = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 dp(64)
@@ -1397,6 +1398,7 @@ public final class MainActivity extends Activity {
     }
 
     private void installDownloadedUpdate() {
+        updateApkPath = getPreferences().getString(PREF_UPDATE_APK_PATH, updateApkPath);
         File apkFile = updateApkFile();
         if (apkFile == null || !apkFile.isFile()) {
             toast("설치할 업데이트 APK가 아직 준비되지 않았습니다.");
@@ -1451,6 +1453,7 @@ public final class MainActivity extends Activity {
 
     private void refreshPendingUpdateDownloadState() {
         clearInstalledPendingUpdateIfNeeded();
+        updateApkPath = getPreferences().getString(PREF_UPDATE_APK_PATH, "");
         File apkFile = updateApkFile();
         if (apkFile == null) {
             return;
@@ -1470,6 +1473,7 @@ public final class MainActivity extends Activity {
     }
 
     private boolean isDownloadedUpdateReady() {
+        updateApkPath = getPreferences().getString(PREF_UPDATE_APK_PATH, updateApkPath);
         File apkFile = updateApkFile();
         return apkFile != null && apkFile.isFile();
     }
@@ -4617,6 +4621,29 @@ public final class MainActivity extends Activity {
             return;
         }
         boolean idle = !playbackHasQueue && activeStation == null;
+        if (idle) {
+            boolean wasVisible = nowPlayingBar.getVisibility() == View.VISIBLE;
+            cancelNowPlayingContentAnimations();
+            updatePlaybackThemeColor(true);
+            nowPlayingBar.setVisibility(View.GONE);
+            nowPlayingContentInitialized = false;
+            renderedNowPlayingIdle = true;
+            renderedNowPlayingTrackId = -1L;
+            renderedNowPlayingTitle = "";
+            renderedNowPlayingMeta = "";
+            if (nowPlayingProgress != null) {
+                nowPlayingProgress.setProgress(0L, 0L, false);
+            }
+            if (wasVisible) {
+                updateMainContentBottomPadding(mainNavigationInset);
+            }
+            return;
+        }
+        boolean wasHidden = nowPlayingBar.getVisibility() != View.VISIBLE;
+        nowPlayingBar.setVisibility(View.VISIBLE);
+        if (wasHidden) {
+            updateMainContentBottomPadding(mainNavigationInset);
+        }
         String title = idle ? "로컬 재생 대기" : playbackTitle;
         String meta = idle
                 ? "기기 음악을 스캔하면 재생할 수 있습니다."
@@ -4937,7 +4964,8 @@ public final class MainActivity extends Activity {
     }
 
     private int bottomChromeBaseHeight() {
-        return dp(64) + bottomTabsHeight();
+        int nowPlayingHeight = nowPlayingBar != null && nowPlayingBar.getVisibility() == View.VISIBLE ? dp(64) : 0;
+        return nowPlayingHeight + bottomTabsHeight();
     }
 
     private int bottomTabsHeight() {

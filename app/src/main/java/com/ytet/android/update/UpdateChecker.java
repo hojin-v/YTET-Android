@@ -18,6 +18,7 @@ public final class UpdateChecker {
     private static final String RELEASES_API_URL = "https://api.github.com/repos/hojin-v/YTET-Android/releases";
     private static final Pattern STABLE_TAG_PATTERN = Pattern.compile("^v(\\d+)\\.(\\d+)\\.(\\d+)$");
     private static final Pattern CURRENT_VERSION_PATTERN = Pattern.compile("^(\\d+)\\.(\\d+)\\.(\\d+)");
+    private static final Pattern STABLE_APK_ASSET_PATTERN = Pattern.compile("^ytet-android-v\\d+\\.\\d+\\.\\d+\\.apk$");
     private static final Pattern UNSTABLE_MARKER_PATTERN = Pattern.compile(
             "(^|[^a-z0-9])(nightly|alpha|beta|rc|dev|preview)([^a-z0-9]|$)",
             Pattern.CASE_INSENSITIVE
@@ -92,10 +93,8 @@ public final class UpdateChecker {
 
     static boolean isApkAssetName(String assetName) {
         String lower = assetName == null ? "" : assetName.toLowerCase();
-        return lower.endsWith(".apk")
-                && lower.contains("ytet")
-                && !UNSTABLE_MARKER_PATTERN.matcher(lower).find()
-                && !lower.contains("source");
+        return STABLE_APK_ASSET_PATTERN.matcher(lower).matches()
+                && !UNSTABLE_MARKER_PATTERN.matcher(lower).find();
     }
 
     public static int compareStableTagToCurrentVersion(String tagName, String currentVersionName) {

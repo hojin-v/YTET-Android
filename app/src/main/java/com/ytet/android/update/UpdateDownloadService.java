@@ -45,7 +45,7 @@ public final class UpdateDownloadService extends Service {
     public static final String EXTRA_CANCELED = "com.ytet.android.extra.UPDATE_CANCELED";
 
     private static final String CHANNEL_ID = "ytet_updates";
-    private static final int NOTIFICATION_ID = 4211;
+    private static final int NOTIFICATION_ID = 4213;
     private static final String PREFS = "ytet_android";
     private static final String PREF_UPDATE_APK_PATH = "update_apk_path";
     private static final String PREF_UPDATE_DOWNLOAD_ID = "update_download_id";
@@ -54,6 +54,7 @@ public final class UpdateDownloadService extends Service {
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final AtomicBoolean cancelRequested = new AtomicBoolean(false);
     private volatile Future<?> currentTask;
+    private volatile int latestStartId;
 
     @Override
     public void onCreate() {
@@ -64,6 +65,7 @@ public final class UpdateDownloadService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null && ACTION_CANCEL.equals(intent.getAction())) {
+            latestStartId = startId;
             requestCancellation();
             return START_NOT_STICKY;
         }
@@ -73,8 +75,9 @@ public final class UpdateDownloadService extends Service {
             return START_NOT_STICKY;
         }
 
+        latestStartId = startId;
         if (currentTask != null && !currentTask.isDone()) {
-            return START_NOT_STICKY;
+            return START_REDELIVER_INTENT;
         }
 
         String tag = clean(intent.getStringExtra(EXTRA_TAG));
@@ -88,7 +91,7 @@ public final class UpdateDownloadService extends Service {
 
         cancelRequested.set(false);
         currentTask = executor.submit(() -> downloadUpdate(tag, apkName, apkUrl, startId));
-        return START_NOT_STICKY;
+        return START_REDELIVER_INTENT;
     }
 
     public static Intent downloadIntent(Context context, UpdateInfo update) {
@@ -162,6 +165,9 @@ public final class UpdateDownloadService extends Service {
         connection.setRequestProperty("User-Agent", "YTET-Android-Updater");
         try {
             int status = connection.getResponseCode();
+            if (status == HttpURLConnection.HTTP_PARTIAL) {
+                throw new IOException("부분 다운로드 응답은 지원하지 않습니다.");
+            }
             if (status < 200 || status >= 300) {
                 throw new IOException("서버 응답 " + status);
             }
@@ -193,6 +199,9 @@ public final class UpdateDownloadService extends Service {
                     }
                 }
                 publishProgress(tag, downloadPercent(downloadedBytes, totalBytes), totalBytes, downloadedBytes);
+                if (totalBytes > 0L && downloadedBytes != totalBytes) {
+                    throw new IOException("다운로드 크기가 일치하지 않습니다.");
+                }
             }
             if (targetFile.length() <= 0L) {
                 throw new IOException("빈 업데이트 파일입니다.");
@@ -229,7 +238,7 @@ public final class UpdateDownloadService extends Service {
         intent.putExtra(EXTRA_MESSAGE, message);
         intent.putExtra(EXTRA_DONE, true);
         sendBroadcast(intent);
-        stopSelf(startId);
+        stopSelf(terminalStartId(startId));
     }
 
     private void publishError(String message, int startId) {
@@ -242,7 +251,7 @@ public final class UpdateDownloadService extends Service {
         intent.putExtra(EXTRA_ERROR, message);
         intent.putExtra(EXTRA_DONE, true);
         sendBroadcast(intent);
-        stopSelf(startId);
+        stopSelf(terminalStartId(startId));
     }
 
     private void publishCanceled(int startId) {
@@ -258,7 +267,7 @@ public final class UpdateDownloadService extends Service {
         intent.putExtra(EXTRA_DONE, true);
         intent.putExtra(EXTRA_CANCELED, true);
         sendBroadcast(intent);
-        stopSelf(startId);
+        stopSelf(terminalStartId(startId));
     }
 
     private Notification notification(String title, String message, int percent, boolean finished, boolean failed) {
@@ -282,8 +291,10 @@ public final class UpdateDownloadService extends Service {
 
         if (failed) {
             builder.setProgress(0, 0, false);
-        } else if (percent > 0 && percent < 100) {
-            builder.setProgress(100, percent, false);
+        } else if (percent >= 0 && !finished) {
+            builder.setProgress(100, Math.max(0, Math.min(100, percent)), false);
+        } else if (finished) {
+            builder.setProgress(0, 0, false);
         } else {
             builder.setProgress(0, 0, percent <= 0 && !finished);
         }
@@ -367,12 +378,19 @@ public final class UpdateDownloadService extends Service {
         manager.createNotificationChannel(channel);
     }
 
-    private void saveDownloadedUpdate(File targetFile, String tag) {
-        prefs().edit()
+    private void saveDownloadedUpdate(File targetFile, String tag) throws IOException {
+        boolean saved = prefs().edit()
                 .putString(PREF_UPDATE_APK_PATH, targetFile.getAbsolutePath())
                 .putString(PREF_UPDATE_TAG, tag)
                 .remove(PREF_UPDATE_DOWNLOAD_ID)
-                .apply();
+                .commit();
+        if (!saved) {
+            throw new IOException("업데이트 상태를 저장할 수 없습니다.");
+        }
+    }
+
+    private int terminalStartId(int fallbackStartId) {
+        return latestStartId > 0 ? latestStartId : fallbackStartId;
     }
 
     private SharedPreferences prefs() {

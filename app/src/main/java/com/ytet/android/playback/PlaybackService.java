@@ -9,6 +9,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.SharedPreferences;
 import android.content.pm.ServiceInfo;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -33,6 +34,7 @@ import com.ytet.android.stream.MusicStation;
 import com.ytet.android.ui.MainActivity;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.io.InputStream;
@@ -98,6 +100,14 @@ public final class PlaybackService extends Service {
     private static final String EXTRA_START_INDEX = "com.ytet.android.extra.START_INDEX";
     private static final String CHANNEL_ID = "ytet_playback";
     private static final int NOTIFICATION_ID = 4211;
+    private static final String PREFS = "ytet_android";
+    private static final String PREF_PLAYBACK_QUEUE_IDS = "playback_queue_ids";
+    private static final String PREF_PLAYBACK_QUEUE_INDEX = "playback_queue_index";
+    private static final String PREF_PLAYBACK_TRACK_ID = "playback_track_id";
+    private static final String PREF_PLAYBACK_MIX_TITLE = "playback_mix_title";
+    private static final String PREF_PLAYBACK_MIX_SUBTITLE = "playback_mix_subtitle";
+    private static final String PREF_PLAYBACK_SHUFFLE = "playback_shuffle";
+    private static final String PREF_PLAYBACK_REPEAT = "playback_repeat";
 
     private final ArrayList<DeviceAudioTrack> queue = new ArrayList<>();
     private final DeviceMusicLibrary musicLibrary = new DeviceMusicLibrary();
@@ -312,6 +322,9 @@ public final class PlaybackService extends Service {
         } else if (ACTION_TOGGLE_SLEEP_TIMER_PAUSE.equals(action)) {
             toggleSleepTimerPause();
         } else if (ACTION_REQUEST_STATE.equals(action)) {
+            if (queue.isEmpty() && restoreQueueAsync(startId)) {
+                return START_NOT_STICKY;
+            }
             broadcastState();
             if (queue.isEmpty()) {
                 stopSelf(startId);
@@ -388,6 +401,7 @@ public final class PlaybackService extends Service {
             shuffleQueueFromCurrentTrack();
         }
         failedTrackSkips = 0;
+        persistPlaybackSnapshot();
         prepareCurrentTrack(shouldStartWhenPrepared);
     }
 
@@ -400,6 +414,7 @@ public final class PlaybackService extends Service {
         preparing = false;
         playing = false;
         startWhenPrepared = false;
+        clearPlaybackSnapshot();
         errorStatus = "재생 큐를 불러오지 못했습니다: " + safeMessage(exception);
         updateTransportState();
         showNotification();
@@ -441,12 +456,14 @@ public final class PlaybackService extends Service {
             queue.addAll(loadedTracks);
             queueIndex = 0;
             failedTrackSkips = 0;
+            persistPlaybackSnapshot();
             prepareCurrentTrack(true);
             return;
         }
         int insertIndex = playNext ? Math.min(queueIndex + 1, queue.size()) : queue.size();
         queue.addAll(insertIndex, loadedTracks);
         shuffleEnabled = shuffleEnabled && queue.size() > 1;
+        persistPlaybackSnapshot();
         updateTransportState();
         showNotification();
         broadcastState();
@@ -480,6 +497,7 @@ public final class PlaybackService extends Service {
         releasePlayer();
 
         DeviceAudioTrack track = currentTrack();
+        persistPlaybackSnapshot();
         try {
             MediaPlayer player = new MediaPlayer();
             player.setAudioAttributes(audioAttributes());
@@ -715,6 +733,7 @@ public final class PlaybackService extends Service {
         startWhenPrepared = false;
         resumeOnAudioFocusGain = false;
         abandonAudioFocus();
+        persistPlaybackSnapshot();
         updateTransportState();
         showNotification();
         broadcastState();
@@ -733,6 +752,7 @@ public final class PlaybackService extends Service {
         errorStatus = null;
         releasePlayer();
         abandonAudioFocus();
+        clearPlaybackSnapshot();
         updateTransportState();
         broadcastState();
         stopForeground(STOP_FOREGROUND_REMOVE);
@@ -805,6 +825,7 @@ public final class PlaybackService extends Service {
         if (shuffleEnabled) {
             shuffleQueueFromCurrentTrack();
         }
+        persistPlaybackSnapshot();
         updateTransportState();
         showNotification();
         broadcastState();
@@ -832,6 +853,7 @@ public final class PlaybackService extends Service {
         } else {
             repeatMode = REPEAT_OFF;
         }
+        persistPlaybackSnapshot();
         updateTransportState();
         showNotification();
         broadcastState();
@@ -908,6 +930,185 @@ public final class PlaybackService extends Service {
             // The service can be torn down during rapid playback transitions; treat it as unregistered.
         }
         noisyAudioReceiverRegistered = false;
+    }
+
+    private boolean restoreQueueAsync(int startId) {
+        SharedPreferences prefs = playbackPreferences();
+        long[] ids = persistedQueueIds(prefs);
+        if (ids.length == 0) {
+            return false;
+        }
+
+        int version = ++queueLoadVersion;
+        int restoredIndex = Math.max(0, prefs.getInt(PREF_PLAYBACK_QUEUE_INDEX, 0));
+        long restoredTrackId = prefs.getLong(PREF_PLAYBACK_TRACK_ID, -1L);
+        String restoredMixTitle = valueOrDefault(prefs.getString(PREF_PLAYBACK_MIX_TITLE, null), "로컬 음악");
+        String restoredMixSubtitle = valueOrDefault(prefs.getString(PREF_PLAYBACK_MIX_SUBTITLE, null), "기기 저장 음악");
+        boolean restoredShuffle = prefs.getBoolean(PREF_PLAYBACK_SHUFFLE, false);
+        int restoredRepeatMode = prefs.getInt(PREF_PLAYBACK_REPEAT, REPEAT_OFF);
+
+        failedTrackSkips = 0;
+        errorStatus = null;
+        preparing = false;
+        playing = false;
+        startWhenPrepared = false;
+        resumeOnAudioFocusGain = false;
+        releasePlayer();
+        abandonAudioFocus();
+
+        queueExecutor.execute(() -> {
+            List<DeviceAudioTrack> loadedTracks;
+            try {
+                loadedTracks = musicLibrary.loadTracksByIds(this, ids);
+            } catch (Exception exception) {
+                mainHandler.post(() -> finishRestoredQueueLoad(
+                        version,
+                        new ArrayList<>(),
+                        restoredIndex,
+                        restoredTrackId,
+                        restoredMixTitle,
+                        restoredMixSubtitle,
+                        restoredShuffle,
+                        restoredRepeatMode,
+                        startId
+                ));
+                return;
+            }
+            mainHandler.post(() -> finishRestoredQueueLoad(
+                    version,
+                    loadedTracks,
+                    restoredIndex,
+                    restoredTrackId,
+                    restoredMixTitle,
+                    restoredMixSubtitle,
+                    restoredShuffle,
+                    restoredRepeatMode,
+                    startId
+            ));
+        });
+        return true;
+    }
+
+    private void finishRestoredQueueLoad(
+            int version,
+            List<DeviceAudioTrack> loadedTracks,
+            int restoredIndex,
+            long restoredTrackId,
+            String restoredMixTitle,
+            String restoredMixSubtitle,
+            boolean restoredShuffle,
+            int restoredRepeatMode,
+            int startId
+    ) {
+        if (version != queueLoadVersion) {
+            return;
+        }
+        queue.clear();
+        if (loadedTracks != null) {
+            queue.addAll(loadedTracks);
+        }
+        if (queue.isEmpty()) {
+            queueIndex = 0;
+            clearPlaybackSnapshot();
+            broadcastState();
+            stopSelf(startId);
+            return;
+        }
+
+        mixTitle = restoredMixTitle;
+        mixSubtitle = restoredMixSubtitle;
+        queueIndex = restoredQueueIndex(restoredIndex, restoredTrackId);
+        shuffleEnabled = restoredShuffle && queue.size() > 1;
+        repeatMode = validRepeatMode(restoredRepeatMode);
+        preparing = false;
+        playing = false;
+        startWhenPrepared = false;
+        resumeOnAudioFocusGain = false;
+        errorStatus = null;
+        failedTrackSkips = 0;
+        persistPlaybackSnapshot();
+        updateTransportState();
+        broadcastState();
+    }
+
+    private int restoredQueueIndex(int fallbackIndex, long trackId) {
+        if (trackId >= 0L) {
+            for (int index = 0; index < queue.size(); index++) {
+                if (queue.get(index).id() == trackId) {
+                    return index;
+                }
+            }
+        }
+        return Math.min(Math.max(0, fallbackIndex), queue.size() - 1);
+    }
+
+    private int validRepeatMode(int mode) {
+        return mode == REPEAT_ALL || mode == REPEAT_ONE ? mode : REPEAT_OFF;
+    }
+
+    private SharedPreferences playbackPreferences() {
+        return getSharedPreferences(PREFS, MODE_PRIVATE);
+    }
+
+    private void persistPlaybackSnapshot() {
+        if (queue.isEmpty()) {
+            clearPlaybackSnapshot();
+            return;
+        }
+        DeviceAudioTrack track = currentTrack();
+        playbackPreferences().edit()
+                .putString(PREF_PLAYBACK_QUEUE_IDS, serializedQueueIds())
+                .putInt(PREF_PLAYBACK_QUEUE_INDEX, queueIndex)
+                .putLong(PREF_PLAYBACK_TRACK_ID, track == null ? -1L : track.id())
+                .putString(PREF_PLAYBACK_MIX_TITLE, mixTitle)
+                .putString(PREF_PLAYBACK_MIX_SUBTITLE, mixSubtitle)
+                .putBoolean(PREF_PLAYBACK_SHUFFLE, shuffleEnabled)
+                .putInt(PREF_PLAYBACK_REPEAT, repeatMode)
+                .apply();
+    }
+
+    private void clearPlaybackSnapshot() {
+        playbackPreferences().edit()
+                .remove(PREF_PLAYBACK_QUEUE_IDS)
+                .remove(PREF_PLAYBACK_QUEUE_INDEX)
+                .remove(PREF_PLAYBACK_TRACK_ID)
+                .remove(PREF_PLAYBACK_MIX_TITLE)
+                .remove(PREF_PLAYBACK_MIX_SUBTITLE)
+                .remove(PREF_PLAYBACK_SHUFFLE)
+                .remove(PREF_PLAYBACK_REPEAT)
+                .apply();
+    }
+
+    private String serializedQueueIds() {
+        StringBuilder builder = new StringBuilder();
+        for (int index = 0; index < queue.size(); index++) {
+            if (index > 0) {
+                builder.append(',');
+            }
+            builder.append(queue.get(index).id());
+        }
+        return builder.toString();
+    }
+
+    private long[] persistedQueueIds(SharedPreferences prefs) {
+        String serialized = prefs.getString(PREF_PLAYBACK_QUEUE_IDS, "");
+        if (serialized == null || serialized.trim().isEmpty()) {
+            return new long[0];
+        }
+        String[] parts = serialized.split(",");
+        long[] ids = new long[parts.length];
+        int count = 0;
+        for (String part : parts) {
+            try {
+                long id = Long.parseLong(part.trim());
+                if (id >= 0L) {
+                    ids[count++] = id;
+                }
+            } catch (NumberFormatException ignored) {
+                // Ignore malformed entries and keep the rest of the saved queue usable.
+            }
+        }
+        return count == ids.length ? ids : Arrays.copyOf(ids, count);
     }
 
     private boolean requestAudioFocus() {
@@ -1330,6 +1531,10 @@ public final class PlaybackService extends Service {
 
     private static String safeExtra(Intent intent, String key, String fallback) {
         String value = intent.getStringExtra(key);
+        return value == null || value.trim().isEmpty() ? fallback : value.trim();
+    }
+
+    private static String valueOrDefault(String value, String fallback) {
         return value == null || value.trim().isEmpty() ? fallback : value.trim();
     }
 

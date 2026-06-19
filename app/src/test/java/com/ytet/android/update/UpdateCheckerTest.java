@@ -26,7 +26,9 @@ public final class UpdateCheckerTest {
 
     @Test
     public void acceptsOnlyYtetApkAssets() {
-        assertTrue(UpdateChecker.isApkAssetName("YTET-Android-v0.1.4-debug.apk"));
+        assertTrue(UpdateChecker.isApkAssetName("YTET-Android-v0.1.4.apk"));
+        assertFalse(UpdateChecker.isApkAssetName("YTET-Android-v0.1.4-debug.apk"));
+        assertFalse(UpdateChecker.isApkAssetName("app-release.apk"));
         assertFalse(UpdateChecker.isApkAssetName("YTET-Android-v0.1.4-android-debug.zip"));
         assertFalse(UpdateChecker.isApkAssetName("YTET-Android-nightly-debug.apk"));
         assertFalse(UpdateChecker.isApkAssetName("YTET-Android-v0.1.4-beta-debug.apk"));
