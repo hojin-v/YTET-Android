@@ -114,6 +114,7 @@ import java.net.URL;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutorService;
 
+import androidx.recyclerview.widget.DefaultItemAnimator;
 import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.ItemTouchHelper;
 import androidx.recyclerview.widget.LinearLayoutManager;
@@ -208,6 +209,16 @@ public final class MainActivity extends Activity {
     private QueueRecyclerAdapter queueRecyclerAdapter;
     private RecyclerView queueRecyclerView;
     private ItemTouchHelper queueItemTouchHelper;
+    private FrameLayout queuePlayerCover;
+    private TextView queuePlayerTitle;
+    private TextView queuePlayerMeta;
+    private ImageButton queuePlayerShuffleButton;
+    private ImageButton queuePlayerPreviousButton;
+    private ImageButton queuePlayerPlayButton;
+    private ImageButton queuePlayerNextButton;
+    private ImageButton queuePlayerRepeatButton;
+    private long queuePlayerRenderedTrackId = Long.MIN_VALUE;
+    private String queuePlayerRenderedAlbumArtUri = "";
     private int queueDialogRenderedIndex = Integer.MIN_VALUE;
     private int queueDialogRenderedQueueSize = Integer.MIN_VALUE;
     private long queueDialogRenderedTrackId = Long.MIN_VALUE;
@@ -792,6 +803,8 @@ public final class MainActivity extends Activity {
 
         nowPlayingInfoFrame = new FrameLayout(this);
         nowPlayingInfoFrame.setClickable(true);
+        nowPlayingInfoFrame.setClipChildren(true);
+        nowPlayingInfoFrame.setClipToPadding(true);
         nowPlayingInfoFrame.setOnTouchListener(this::handleNowPlayingInfoTouch);
 
         nowPlayingCurrentFrame = new FrameLayout(this);
@@ -4842,7 +4855,7 @@ public final class MainActivity extends Activity {
             if (nowPlayingSwipeConsumed) {
                 int direction = dx < 0f ? NOW_PLAYING_TRANSITION_NEXT : NOW_PLAYING_TRANSITION_PREVIOUS;
                 boolean canMove = direction == NOW_PLAYING_TRANSITION_PREVIOUS ? hasPreviousTrack() : hasNextTrack();
-                float resistance = canMove ? 0.42f : 0.16f;
+                float resistance = canMove ? 0.86f : 0.18f;
                 float maxOffset = nowPlayingSwipeMaxOffset(view);
                 float offset = Math.max(-maxOffset, Math.min(maxOffset, dx * resistance));
                 applyNowPlayingSwipeOffset(direction, canMove, offset, maxOffset);
@@ -4856,7 +4869,7 @@ public final class MainActivity extends Activity {
             if (nowPlayingSwipeConsumed && action == MotionEvent.ACTION_UP) {
                 int direction = dx < 0f ? NOW_PLAYING_TRANSITION_NEXT : NOW_PLAYING_TRANSITION_PREVIOUS;
                 boolean canMove = direction == NOW_PLAYING_TRANSITION_PREVIOUS ? hasPreviousTrack() : hasNextTrack();
-                if (canMove && nowPlayingSwipeVisualProgress(view, dx, canMove) >= 0.72f) {
+                if (canMove && nowPlayingSwipeVisualProgress(view, dx, canMove) >= 0.64f) {
                     triggerNowPlayingSwipe(direction);
                     return true;
                 }
@@ -4874,11 +4887,11 @@ public final class MainActivity extends Activity {
 
     private float nowPlayingSwipeMaxOffset(View view) {
         int width = view == null ? 0 : view.getWidth();
-        return Math.max(dp(72), width * 0.34f);
+        return Math.max(dp(150), width + dp(12));
     }
 
     private float nowPlayingSwipeVisualProgress(View view, float dx, boolean canMove) {
-        float resistance = canMove ? 0.42f : 0.16f;
+        float resistance = canMove ? 0.86f : 0.18f;
         float maxOffset = nowPlayingSwipeMaxOffset(view);
         float offset = Math.max(-maxOffset, Math.min(maxOffset, dx * resistance));
         return Math.min(1f, Math.abs(offset) / Math.max(1f, maxOffset));
@@ -4888,10 +4901,10 @@ public final class MainActivity extends Activity {
         float progress = Math.min(1f, Math.abs(offset) / Math.max(1f, maxOffset));
         if (nowPlayingCurrentFrame != null) {
             float currentFade = canMove
-                    ? Math.max(0f, (progress - 0.22f) / 0.78f)
+                    ? Math.max(0f, (progress - 0.46f) / 0.54f)
                     : progress;
             nowPlayingCurrentFrame.setTranslationX(offset);
-            nowPlayingCurrentFrame.setAlpha(1f - currentFade * (canMove ? 0.88f : 0.28f));
+            nowPlayingCurrentFrame.setAlpha(1f - currentFade * (canMove ? 0.82f : 0.24f));
         }
         if (!canMove) {
             hideNowPlayingSwipePreview();
@@ -4906,7 +4919,7 @@ public final class MainActivity extends Activity {
         setNowPlayingSwipePreviewTrack(previewTrack, direction);
         if (nowPlayingPreviewFrame != null) {
             float previewStart = direction == NOW_PLAYING_TRANSITION_NEXT ? maxOffset : -maxOffset;
-            float previewProgress = Math.max(0f, (progress - 0.34f) / 0.66f);
+            float previewProgress = Math.max(0f, (progress - 0.50f) / 0.50f);
             nowPlayingPreviewFrame.setVisibility(View.VISIBLE);
             nowPlayingPreviewFrame.setTranslationX(previewStart + offset);
             nowPlayingPreviewFrame.setAlpha(Math.min(0.96f, previewProgress * 1.12f));
@@ -4969,17 +4982,17 @@ public final class MainActivity extends Activity {
         }
         pendingNowPlayingTransitionDirection = direction;
         long requestedTrackId = playbackTrackId;
-        float exitX = direction == NOW_PLAYING_TRANSITION_NEXT ? -dp(64) : dp(64);
         nowPlayingCurrentFrame.animate()
-                .translationX(exitX)
                 .alpha(0f)
-                .setDuration(110L)
+                .setDuration(100L)
                 .start();
         if (nowPlayingPreviewFrame != null && nowPlayingPreviewFrame.getVisibility() == View.VISIBLE) {
+            nowPlayingPreviewFrame.animate().cancel();
+            nowPlayingPreviewFrame.setTranslationX(0f);
+            nowPlayingPreviewFrame.setAlpha(0f);
             nowPlayingPreviewFrame.animate()
-                    .translationX(0f)
                     .alpha(1f)
-                    .setDuration(110L)
+                    .setDuration(130L)
                     .start();
         }
         if (direction == NOW_PLAYING_TRANSITION_NEXT) {
@@ -5133,19 +5146,16 @@ public final class MainActivity extends Activity {
         if (direction != NOW_PLAYING_TRANSITION_NONE
                 && nowPlayingPreviewFrame != null
                 && nowPlayingPreviewFrame.getVisibility() == View.VISIBLE) {
-            float previewX = nowPlayingPreviewFrame.getTranslationX();
-            float previewAlpha = nowPlayingPreviewFrame.getAlpha();
             setNowPlayingCover(idle);
             setMarqueeText(nowPlayingTitle, title);
             setMarqueeText(nowPlayingMeta, meta);
             hideNowPlayingSwipePreview();
             if (nowPlayingCurrentFrame != null) {
-                nowPlayingCurrentFrame.setTranslationX(previewX);
-                nowPlayingCurrentFrame.setAlpha(previewAlpha);
+                nowPlayingCurrentFrame.setTranslationX(0f);
+                nowPlayingCurrentFrame.setAlpha(0f);
                 nowPlayingCurrentFrame.animate()
-                        .translationX(0f)
                         .alpha(1f)
-                        .setDuration(130L)
+                        .setDuration(150L)
                         .start();
             } else {
                 resetNowPlayingInfoFrame();
@@ -5154,23 +5164,19 @@ public final class MainActivity extends Activity {
             return;
         }
         if (nowPlayingCurrentFrame != null) {
-            float exitX = direction == NOW_PLAYING_TRANSITION_PREVIOUS ? dp(58) : -dp(58);
-            float enterX = -exitX;
             nowPlayingCurrentFrame.animate()
-                    .translationX(exitX)
                     .alpha(0f)
-                    .setDuration(120L)
+                    .setDuration(110L)
                     .withEndAction(() -> {
                         setNowPlayingCover(idle);
                         setMarqueeText(nowPlayingTitle, title);
                         setMarqueeText(nowPlayingMeta, meta);
                         setNowPlayingContentAlpha(1f);
-                        nowPlayingCurrentFrame.setTranslationX(enterX);
+                        nowPlayingCurrentFrame.setTranslationX(0f);
                         nowPlayingCurrentFrame.setAlpha(0f);
                         nowPlayingCurrentFrame.animate()
-                                .translationX(0f)
                                 .alpha(1f)
-                                .setDuration(180L)
+                                .setDuration(170L)
                                 .start();
                     })
                     .start();
@@ -6359,12 +6365,13 @@ public final class MainActivity extends Activity {
     }
 
     private View queueRow(DeviceAudioTrack track, int index) {
-        return queueTrackRow(track, index, false, true, null);
+        return queueTrackRow(track, index, index, false, true, null);
     }
 
     private View queueTrackRow(
             DeviceAudioTrack track,
             int index,
+            int sourceIndex,
             boolean currentOverride,
             boolean clickable,
             QueueRecyclerViewHolder dragHolder
@@ -6373,9 +6380,7 @@ public final class MainActivity extends Activity {
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(12), dp(10), dp(12), dp(10));
-        boolean current = currentOverride
-                || track.id() == playbackTrackId
-                || (playbackTrackId < 0L && index == playbackQueueIndex);
+        boolean current = currentOverride || isCurrentQueueItem(track, index, sourceIndex);
         row.setBackground(rounded(current ? selectedTrackBackgroundColor() : color(R.color.ytet_panel), 10));
 
         LinearLayout.LayoutParams coverParams = new LinearLayout.LayoutParams(dp(48), dp(48));
@@ -6422,6 +6427,13 @@ public final class MainActivity extends Activity {
             });
         }
         return row;
+    }
+
+    private boolean isCurrentQueueItem(DeviceAudioTrack track, int queueIndex, int sourceIndex) {
+        if (playbackQueueIndex >= 0) {
+            return sourceIndex == playbackQueueIndex || (sourceIndex < 0 && queueIndex == playbackQueueIndex);
+        }
+        return track != null && track.id() == playbackTrackId;
     }
 
     private String queuePositionText() {
@@ -6489,12 +6501,15 @@ public final class MainActivity extends Activity {
         minutes.setOnTimerChangeListener((value, committed) -> setSleepTimerDraft(sleepTimerHours(), value));
         panel.addView(minutes, new LinearLayout.LayoutParams(dp(64), LinearLayout.LayoutParams.MATCH_PARENT));
 
-        View spacer = new View(this);
-        panel.addView(spacer, new LinearLayout.LayoutParams(0, 1, 1f));
+        View leftSpacer = new View(this);
+        panel.addView(leftSpacer, new LinearLayout.LayoutParams(0, 1, 1f));
 
         TimerConfirmButton confirm = new TimerConfirmButton(this);
         confirm.setOnClickListener(view -> confirmSleepTimerSelection());
-        panel.addView(confirm, new LinearLayout.LayoutParams(dp(48), dp(58)));
+        panel.addView(confirm, new LinearLayout.LayoutParams(dp(58), dp(42)));
+
+        View rightSpacer = new View(this);
+        panel.addView(rightSpacer, new LinearLayout.LayoutParams(0, 1, 1f));
         return panel;
     }
 
@@ -6586,6 +6601,8 @@ public final class MainActivity extends Activity {
         if (queueDialog == null) {
             queueDialog = new Dialog(this);
             queueDialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+            queueDialog.setCancelable(false);
+            queueDialog.setCanceledOnTouchOutside(false);
             queueDialog.setOnKeyListener((dialog, keyCode, event) -> {
                 if (keyCode != KeyEvent.KEYCODE_BACK) {
                     return false;
@@ -6600,6 +6617,16 @@ public final class MainActivity extends Activity {
                 queueRecyclerAdapter = null;
                 queueRecyclerView = null;
                 queueItemTouchHelper = null;
+                queuePlayerCover = null;
+                queuePlayerTitle = null;
+                queuePlayerMeta = null;
+                queuePlayerShuffleButton = null;
+                queuePlayerPreviousButton = null;
+                queuePlayerPlayButton = null;
+                queuePlayerNextButton = null;
+                queuePlayerRepeatButton = null;
+                queuePlayerRenderedTrackId = Long.MIN_VALUE;
+                queuePlayerRenderedAlbumArtUri = "";
                 queueDialogRenderedIndex = Integer.MIN_VALUE;
                 queueDialogRenderedQueueSize = Integer.MIN_VALUE;
                 queueDialogRenderedTrackId = Long.MIN_VALUE;
@@ -6646,6 +6673,7 @@ public final class MainActivity extends Activity {
 
     private void updateQueueDialog() {
         if (queueDialog != null && queueDialog.isShowing()) {
+            updateQueuePlayerControls();
             bindQueueDialogState(false);
         }
     }
@@ -6675,12 +6703,18 @@ public final class MainActivity extends Activity {
         ));
         queueSheetLayout.setDragHandle(handleArea);
 
+        sheet.addView(queuePlayerControlPanel(), marginBottom(10));
         sheet.addView(queueHeaderRow(), marginBottom(12));
 
         RecyclerView list = new RecyclerView(this);
         queueRecyclerView = list;
         list.setClipToPadding(false);
-        list.setItemAnimator(null);
+        DefaultItemAnimator queueAnimator = new DefaultItemAnimator();
+        queueAnimator.setSupportsChangeAnimations(false);
+        queueAnimator.setMoveDuration(180L);
+        queueAnimator.setAddDuration(120L);
+        queueAnimator.setRemoveDuration(120L);
+        list.setItemAnimator(queueAnimator);
         list.setOverScrollMode(View.OVER_SCROLL_NEVER);
         list.setLayoutManager(new QueueLinearLayoutManager(this));
         queueRecyclerAdapter = new QueueRecyclerAdapter();
@@ -6705,6 +6739,148 @@ public final class MainActivity extends Activity {
     private int queueSheetBackgroundColor() {
         int base = playbackThemeColor == 0 ? color(R.color.ytet_background) : playbackThemeColor;
         return blendColors(base, color(R.color.ytet_background), 0.58f);
+    }
+
+    private View queuePlayerControlPanel() {
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setPadding(0, dp(2), 0, dp(2));
+
+        LinearLayout current = new LinearLayout(this);
+        current.setOrientation(LinearLayout.HORIZONTAL);
+        current.setGravity(Gravity.CENTER_VERTICAL);
+
+        queuePlayerCover = new FrameLayout(this);
+        current.addView(queuePlayerCover, marginRight(12, dp(46), dp(46)));
+
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        copy.setGravity(Gravity.CENTER_VERTICAL);
+        queuePlayerTitle = text("", 15, R.color.ytet_text, true);
+        queuePlayerTitle.setSingleLine(true);
+        queuePlayerTitle.setEllipsize(TextUtils.TruncateAt.END);
+        queuePlayerMeta = muted("", 12);
+        queuePlayerMeta.setSingleLine(true);
+        queuePlayerMeta.setEllipsize(TextUtils.TruncateAt.END);
+        copy.addView(queuePlayerTitle, marginBottom(2));
+        copy.addView(queuePlayerMeta, matchWrap());
+        current.addView(copy, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        panel.addView(current, marginBottom(6));
+
+        LinearLayout controls = new LinearLayout(this);
+        controls.setOrientation(LinearLayout.HORIZONTAL);
+        controls.setGravity(Gravity.CENTER_VERTICAL);
+        queuePlayerShuffleButton = playerIconButton(R.drawable.ic_shuffle, "셔플", playbackShuffleEnabled, canShuffleQueue());
+        queuePlayerShuffleButton.setOnClickListener(view -> toggleShuffle());
+        queuePlayerPreviousButton = playerIconButton(R.drawable.ic_skip_previous, "이전 곡", false, hasPreviousTrack());
+        queuePlayerPreviousButton.setOnClickListener(view -> previousTrack());
+        queuePlayerPlayButton = playerIconButton(
+                playbackPlaying || playbackWillPlay ? R.drawable.ic_pause : R.drawable.ic_play_arrow,
+                playbackPlaying || playbackWillPlay ? "일시정지" : "재생",
+                true,
+                true
+        );
+        queuePlayerPlayButton.setOnClickListener(view -> toggleStreamPlayback());
+        queuePlayerNextButton = playerIconButton(R.drawable.ic_skip_next, "다음 곡", false, hasNextTrack());
+        queuePlayerNextButton.setOnClickListener(view -> nextTrack());
+        queuePlayerRepeatButton = playerIconButton(
+                playbackRepeatMode == PlaybackService.REPEAT_ONE ? R.drawable.ic_repeat_one : R.drawable.ic_repeat,
+                repeatDescription(),
+                playbackRepeatMode != PlaybackService.REPEAT_OFF,
+                playbackHasQueue
+        );
+        queuePlayerRepeatButton.setOnClickListener(view -> toggleRepeat());
+        controls.addView(queuePlayerShuffleButton, playerControlParams(5, dp(44)));
+        controls.addView(queuePlayerPreviousButton, playerControlParams(5, dp(44)));
+        controls.addView(queuePlayerPlayButton, playerControlParams(5, dp(44)));
+        controls.addView(queuePlayerNextButton, playerControlParams(5, dp(44)));
+        controls.addView(queuePlayerRepeatButton, playerControlParams(0, dp(44)));
+        panel.addView(controls, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(46)
+        ));
+        updateQueuePlayerControls();
+        return panel;
+    }
+
+    private void updateQueuePlayerControls() {
+        if (queuePlayerTitle == null || queuePlayerMeta == null) {
+            return;
+        }
+        String title = valueOrDefault(playbackTitle, "로컬 재생 대기");
+        String meta = playbackPreparing || playbackError
+                ? streamStatus
+                : valueOrDefault(playbackArtist, miniPlaybackMeta());
+        queuePlayerTitle.setText(title);
+        queuePlayerMeta.setText(meta);
+
+        String albumArtUri = valueOrDefault(playbackAlbumArtUri, "");
+        if (queuePlayerCover != null
+                && (queuePlayerRenderedTrackId != playbackTrackId
+                || !TextUtils.equals(queuePlayerRenderedAlbumArtUri, albumArtUri))) {
+            queuePlayerCover.removeAllViews();
+            DeviceAudioTrack current = currentQueueTrack();
+            View cover = current == null ? coverArtView() : trackCoverView(current);
+            queuePlayerCover.addView(cover, new FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.MATCH_PARENT
+            ));
+            queuePlayerRenderedTrackId = playbackTrackId;
+            queuePlayerRenderedAlbumArtUri = albumArtUri;
+        }
+
+        updatePlayerIconButton(queuePlayerShuffleButton, R.drawable.ic_shuffle, "셔플", playbackShuffleEnabled, canShuffleQueue());
+        updatePlayerIconButton(queuePlayerPreviousButton, R.drawable.ic_skip_previous, "이전 곡", false, hasPreviousTrack());
+        updatePlayerIconButton(
+                queuePlayerPlayButton,
+                playbackPlaying || playbackWillPlay ? R.drawable.ic_pause : R.drawable.ic_play_arrow,
+                playbackPlaying || playbackWillPlay ? "일시정지" : "재생",
+                true,
+                true
+        );
+        updatePlayerIconButton(queuePlayerNextButton, R.drawable.ic_skip_next, "다음 곡", false, hasNextTrack());
+        updatePlayerIconButton(
+                queuePlayerRepeatButton,
+                playbackRepeatMode == PlaybackService.REPEAT_ONE ? R.drawable.ic_repeat_one : R.drawable.ic_repeat,
+                repeatDescription(),
+                playbackRepeatMode != PlaybackService.REPEAT_OFF,
+                playbackHasQueue
+        );
+    }
+
+    private DeviceAudioTrack currentQueueTrack() {
+        if (activeQueuePreview.isEmpty()) {
+            return null;
+        }
+        int currentIndex = safeQueueIndex(activeQueuePreview);
+        if (currentIndex >= 0 && currentIndex < activeQueuePreview.size()) {
+            return activeQueuePreview.get(currentIndex);
+        }
+        for (DeviceAudioTrack track : activeQueuePreview) {
+            if (track != null && track.id() == playbackTrackId) {
+                return track;
+            }
+        }
+        return null;
+    }
+
+    private void updatePlayerIconButton(
+            ImageButton button,
+            int iconRes,
+            String description,
+            boolean active,
+            boolean enabled
+    ) {
+        if (button == null) {
+            return;
+        }
+        button.setImageResource(iconRes);
+        button.setContentDescription(description);
+        button.setColorFilter(enabled
+                ? (active ? color(R.color.ytet_accent) : color(R.color.ytet_text))
+                : color(R.color.ytet_muted));
+        button.setEnabled(enabled);
+        button.setAlpha(enabled ? 1f : 0.62f);
     }
 
     private View queueHeaderRow() {
@@ -6820,7 +6996,7 @@ public final class MainActivity extends Activity {
             return items;
         }
         for (int index = 0; index < queue.size(); index++) {
-            items.add(QueueListItem.track(queue.get(index)));
+            items.add(QueueListItem.track(queue.get(index), index));
         }
         return items;
     }
@@ -6837,33 +7013,22 @@ public final class MainActivity extends Activity {
             return;
         }
         List<DeviceAudioTrack> reordered = queueRecyclerAdapter.orderedQueue();
-        if (reordered.size() != activeQueuePreview.size() || sameTrackOrder(reordered, activeQueuePreview)) {
+        int[] orderedSourceIndices = queueRecyclerAdapter.orderedSourceIndices();
+        if (reordered.size() != activeQueuePreview.size()
+                || orderedSourceIndices.length != activeQueuePreview.size()
+                || !queueRecyclerAdapter.hasSourceOrderChanged()) {
             return;
         }
+        int nextCurrentIndex = queueRecyclerAdapter.queueIndexForSourceIndex(currentIndex);
         activeQueuePreview = new ArrayList<>(reordered);
-        playbackQueueIndex = indexOfTrack(activeQueuePreview, current);
+        playbackQueueIndex = nextCurrentIndex >= 0 ? nextCurrentIndex : indexOfTrack(activeQueuePreview, current);
         playbackQueueSize = activeQueuePreview.size();
+        queueRecyclerAdapter.submitItems(buildQueueRecyclerItems(activeQueuePreview));
         queueDialogRenderedIndex = playbackQueueIndex;
         queueDialogRenderedQueueSize = activeQueuePreview.size();
         queueDialogRenderedTrackId = current.id();
         queueDialogRenderedFingerprint = queueFingerprint(activeQueuePreview);
-        startPlayback(PlaybackService.reorderQueueIntent(this, activeQueuePreview));
-    }
-
-    private boolean sameTrackOrder(List<DeviceAudioTrack> first, List<DeviceAudioTrack> second) {
-        if (first == null || second == null || first.size() != second.size()) {
-            return false;
-        }
-        for (int index = 0; index < first.size(); index++) {
-            DeviceAudioTrack firstTrack = first.get(index);
-            DeviceAudioTrack secondTrack = second.get(index);
-            long firstId = firstTrack == null ? Long.MIN_VALUE : firstTrack.id();
-            long secondId = secondTrack == null ? Long.MIN_VALUE : secondTrack.id();
-            if (firstId != secondId) {
-                return false;
-            }
-        }
-        return true;
+        startPlayback(PlaybackService.reorderQueueIntent(this, activeQueuePreview, orderedSourceIndices, currentIndex));
     }
 
     private void updateQueuePreviewFromIds(long[] ids) {
@@ -8251,6 +8416,10 @@ public final class MainActivity extends Activity {
     private final class QueueRecyclerAdapter extends RecyclerView.Adapter<QueueRecyclerViewHolder> {
         private final List<QueueListItem> items = new ArrayList<>();
 
+        QueueRecyclerAdapter() {
+            setHasStableIds(true);
+        }
+
         void submitItems(List<QueueListItem> nextItems) {
             items.clear();
             if (nextItems != null) {
@@ -8299,12 +8468,74 @@ public final class MainActivity extends Activity {
             return ordered;
         }
 
+        int[] orderedSourceIndices() {
+            int[] ordered = new int[trackItemCount()];
+            int outputIndex = 0;
+            for (QueueListItem item : items) {
+                if (item.type == QueueListItem.TYPE_TRACK && item.track != null) {
+                    ordered[outputIndex++] = item.sourceIndex;
+                }
+            }
+            return ordered;
+        }
+
+        int queueIndexForSourceIndex(int sourceIndex) {
+            int queueIndex = -1;
+            for (QueueListItem item : items) {
+                if (item.type != QueueListItem.TYPE_TRACK || item.track == null) {
+                    continue;
+                }
+                queueIndex++;
+                if (item.sourceIndex == sourceIndex) {
+                    return queueIndex;
+                }
+            }
+            return -1;
+        }
+
+        boolean hasSourceOrderChanged() {
+            int expectedSourceIndex = 0;
+            for (QueueListItem item : items) {
+                if (item.type != QueueListItem.TYPE_TRACK || item.track == null) {
+                    continue;
+                }
+                if (item.sourceIndex != expectedSourceIndex) {
+                    return true;
+                }
+                expectedSourceIndex++;
+            }
+            return false;
+        }
+
+        private int trackItemCount() {
+            int count = 0;
+            for (QueueListItem item : items) {
+                if (item.type == QueueListItem.TYPE_TRACK && item.track != null) {
+                    count++;
+                }
+            }
+            return count;
+        }
+
         @Override
         public int getItemViewType(int position) {
             if (position < 0 || position >= items.size()) {
                 return QueueListItem.TYPE_STATIC;
             }
             return items.get(position).type;
+        }
+
+        @Override
+        public long getItemId(int position) {
+            if (position < 0 || position >= items.size()) {
+                return RecyclerView.NO_ID;
+            }
+            QueueListItem item = items.get(position);
+            if (item.type != QueueListItem.TYPE_TRACK || item.track == null) {
+                return Long.MIN_VALUE + position;
+            }
+            long trackPart = item.track.id() & 0x00000000FFFFFFFFL;
+            return (((long) item.sourceIndex) << 32) ^ trackPart;
         }
 
         @Override
@@ -8524,7 +8755,7 @@ public final class MainActivity extends Activity {
                 return;
             }
             expanded = nextExpanded;
-            float target = nextExpanded ? 0f : collapsedTranslationY();
+            float target = nextExpanded ? expandedTranslationY() : collapsedTranslationY();
             long duration = nextExpanded ? 250L : 220L;
             if (animate) {
                 animateSheetTo(target, duration, null);
@@ -8596,6 +8827,12 @@ public final class MainActivity extends Activity {
             return Math.max(0f, height - queueSheetCollapsedHeight());
         }
 
+        private float expandedTranslationY() {
+            int height = getHeight() > 0 ? getHeight() : getResources().getDisplayMetrics().heightPixels;
+            int topOffset = expandedPlayerStatusInset() + dp(72);
+            return Math.min(collapsedTranslationY(), Math.max(dp(64), Math.min(topOffset, height - dp(260))));
+        }
+
         private float dismissedTranslationY() {
             int height = getHeight() > 0 ? getHeight() : getResources().getDisplayMetrics().heightPixels;
             return Math.max(collapsedTranslationY() + dp(96), height);
@@ -8631,9 +8868,10 @@ public final class MainActivity extends Activity {
                 return;
             }
             float collapsed = collapsedTranslationY();
+            float expandedTop = expandedTranslationY();
             float current = sheet.getTranslationY();
             if (startedExpanded) {
-                if (current > dp(72)) {
+                if (current > expandedTop + dp(72)) {
                     setExpanded(false, true);
                 } else {
                     setExpanded(true, true);
@@ -8705,7 +8943,8 @@ public final class MainActivity extends Activity {
                 if (dragging) {
                     float dy = event.getRawY() - downY;
                     float maxTranslation = startedExpanded ? collapsedTranslationY() : dismissedTranslationY();
-                    float next = Math.max(0f, Math.min(maxTranslation, startTranslationY + dy));
+                    float minTranslation = expandedTranslationY();
+                    float next = Math.max(minTranslation, Math.min(maxTranslation, startTranslationY + dy));
                     sheet.setTranslationY(next);
                 }
                 return true;
@@ -8737,7 +8976,7 @@ public final class MainActivity extends Activity {
             clear();
             applyQueueItemMargins(item);
             View view = item.type == QueueListItem.TYPE_TRACK
-                    ? queueTrackRow(item.track, queueIndex, false, true, this)
+                    ? queueTrackRow(item.track, queueIndex, item.sourceIndex, false, true, this)
                     : item.view == null ? new View(MainActivity.this) : item.view;
             if (view.getParent() instanceof ViewGroup) {
                 ((ViewGroup) view.getParent()).removeView(view);
@@ -8772,19 +9011,21 @@ public final class MainActivity extends Activity {
         final int type;
         final View view;
         final DeviceAudioTrack track;
+        final int sourceIndex;
 
-        private QueueListItem(int type, View view, DeviceAudioTrack track) {
+        private QueueListItem(int type, View view, DeviceAudioTrack track, int sourceIndex) {
             this.type = type;
             this.view = view;
             this.track = track;
+            this.sourceIndex = sourceIndex;
         }
 
         static QueueListItem staticView(View view) {
-            return new QueueListItem(TYPE_STATIC, view, null);
+            return new QueueListItem(TYPE_STATIC, view, null, -1);
         }
 
-        static QueueListItem track(DeviceAudioTrack track) {
-            return new QueueListItem(TYPE_TRACK, null, track);
+        static QueueListItem track(DeviceAudioTrack track, int sourceIndex) {
+            return new QueueListItem(TYPE_TRACK, null, track, sourceIndex);
         }
     }
 
@@ -9503,7 +9744,7 @@ public final class MainActivity extends Activity {
 
     private final class TimerConfirmButton extends View {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Path checkPath = new Path();
+        private final RectF buttonBounds = new RectF();
 
         TimerConfirmButton(Context context) {
             super(context);
@@ -9516,31 +9757,20 @@ public final class MainActivity extends Activity {
         @Override
         protected void onDraw(Canvas canvas) {
             super.onDraw(canvas);
-            float cx = getWidth() / 2f;
-            float cy = getHeight() / 2f;
-            float outerRadius = Math.min(getWidth(), getHeight()) * 0.31f;
-            float innerRadius = outerRadius * 0.58f;
-            int alpha = isPressed() ? 190 : 235;
-
-            paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeWidth(dp(2));
-            paint.setColor(Color.argb(alpha, 255, 255, 255));
-            canvas.drawCircle(cx, cy, outerRadius, paint);
-
+            buttonBounds.set(dp(2), dp(4), getWidth() - dp(2), getHeight() - dp(4));
             paint.setStyle(Paint.Style.FILL);
-            paint.setColor(Color.argb(alpha, 255, 255, 255));
-            canvas.drawCircle(cx, cy, innerRadius, paint);
+            paint.setColor(isPressed()
+                    ? blendColors(color(R.color.ytet_accent), Color.BLACK, 0.18f)
+                    : color(R.color.ytet_accent));
+            canvas.drawRoundRect(buttonBounds, dp(14), dp(14), paint);
 
-            checkPath.reset();
-            checkPath.moveTo(cx - innerRadius * 0.46f, cy);
-            checkPath.lineTo(cx - innerRadius * 0.12f, cy + innerRadius * 0.34f);
-            checkPath.lineTo(cx + innerRadius * 0.52f, cy - innerRadius * 0.38f);
-            paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeCap(Paint.Cap.ROUND);
-            paint.setStrokeJoin(Paint.Join.ROUND);
-            paint.setStrokeWidth(dp(2));
-            paint.setColor(color(R.color.ytet_accent));
-            canvas.drawPath(checkPath, paint);
+            paint.setColor(Color.WHITE);
+            paint.setTextAlign(Paint.Align.CENTER);
+            paint.setTypeface(Typeface.DEFAULT_BOLD);
+            paint.setTextSize(13f * getResources().getDisplayMetrics().scaledDensity);
+            Paint.FontMetrics metrics = paint.getFontMetrics();
+            float textY = buttonBounds.centerY() - (metrics.ascent + metrics.descent) / 2f;
+            canvas.drawText("설정", buttonBounds.centerX(), textY, paint);
         }
 
         @Override
@@ -9558,11 +9788,22 @@ public final class MainActivity extends Activity {
         private int stepValue = 5;
         private int selectedValue = 30;
         private int dragStartValue = 30;
+        private float dialCenterIndex = 30f / 5f;
         private float dragStepOffset;
         private float dragStartY;
+        private VelocityTracker velocityTracker;
+        private boolean flinging;
+        private float flingVelocityStepsPerSecond;
+        private long lastFlingFrameMs;
         private boolean timerActive;
         private boolean dragging;
         private boolean twoDigit;
+        private final Runnable flingRunnable = new Runnable() {
+            @Override
+            public void run() {
+                continueDialFling();
+            }
+        };
 
         SleepTimerDialView(Context context) {
             super(context);
@@ -9574,13 +9815,17 @@ public final class MainActivity extends Activity {
             stepValue = Math.max(1, step);
             twoDigit = showTwoDigit;
             selectedValue = clampTimerValue(selectedValue);
+            if (!dragging && !flinging) {
+                dialCenterIndex = selectedValue / (float) stepValue;
+            }
             invalidate();
         }
 
         void setSelectedValue(int value) {
             selectedValue = clampTimerValue(value);
-            if (!dragging) {
+            if (!dragging && !flinging) {
                 dragStepOffset = 0f;
+                dialCenterIndex = selectedValue / (float) stepValue;
             }
             invalidate();
         }
@@ -9613,52 +9858,66 @@ public final class MainActivity extends Activity {
 
             float centerIndex = visibleCenterIndex();
             int anchor = Math.round(centerIndex);
-            int minIndex = Math.max(0, anchor - 2);
-            int maxIndex = Math.min(maxTimerIndex(), anchor + 2);
-            for (int index = minIndex; index <= maxIndex; index++) {
-                float distance = index - centerIndex;
+            for (int slot = -2; slot <= 2; slot++) {
+                int visualIndex = anchor + slot;
+                float distance = visualIndex - centerIndex;
                 if (Math.abs(distance) > 1.65f) {
                     continue;
                 }
-                drawDialValue(canvas, timerText(index * stepValue), width / 2f, dialValueY(height, distance),
+                drawDialValue(canvas, timerTextForIndex(visualIndex), width / 2f, dialValueY(height, distance),
                         dialTextSize(distance), dialTextColor(distance));
             }
         }
 
         @Override
         public boolean onTouchEvent(MotionEvent event) {
-            if (event.getAction() == MotionEvent.ACTION_DOWN) {
+            int action = event.getActionMasked();
+            if (action == MotionEvent.ACTION_DOWN) {
+                stopDialFling();
+                recycleTimerVelocityTracker();
+                velocityTracker = VelocityTracker.obtain();
+                velocityTracker.addMovement(event);
                 suppressPlayerDragDismiss = true;
                 dragging = true;
                 dragStepOffset = 0f;
                 dragStartY = event.getRawY();
                 dragStartValue = selectedValue;
-                getParent().requestDisallowInterceptTouchEvent(true);
-                invalidate();
-                return true;
-            }
-            if (event.getAction() == MotionEvent.ACTION_MOVE) {
-                float startIndex = dragStartValue / (float) stepValue;
-                float rawCenterIndex = startIndex + (dragStartY - event.getRawY()) / dp(20);
-                float nextCenterIndex = Math.max(0f, Math.min(maxTimerIndex(), rawCenterIndex));
-                dragStepOffset = nextCenterIndex - startIndex;
-                int nextValue = clampTimerValue(Math.round(nextCenterIndex) * stepValue);
-                if (nextValue != selectedValue) {
-                    selectedValue = nextValue;
-                    if (listener != null) {
-                        listener.onChanged(selectedValue, false);
-                    }
+                dialCenterIndex = selectedValue / (float) stepValue;
+                if (getParent() != null) {
+                    getParent().requestDisallowInterceptTouchEvent(true);
                 }
                 invalidate();
                 return true;
             }
-            if (event.getAction() == MotionEvent.ACTION_UP || event.getAction() == MotionEvent.ACTION_CANCEL) {
+            if (action == MotionEvent.ACTION_MOVE) {
+                if (velocityTracker != null) {
+                    velocityTracker.addMovement(event);
+                }
+                float startIndex = dragStartValue / (float) stepValue;
+                dialCenterIndex = startIndex + (dragStartY - event.getRawY()) / dp(20);
+                dragStepOffset = dialCenterIndex - startIndex;
+                updateSelectedValueFromCenter(false);
+                invalidate();
+                return true;
+            }
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                float velocityStepsPerSecond = 0f;
+                if (velocityTracker != null) {
+                    velocityTracker.addMovement(event);
+                    velocityTracker.computeCurrentVelocity(1000);
+                    velocityStepsPerSecond = -velocityTracker.getYVelocity() / Math.max(1f, dp(20));
+                }
+                recycleTimerVelocityTracker();
                 dragging = false;
                 dragStepOffset = 0f;
                 suppressPlayerDragDismiss = false;
-                getParent().requestDisallowInterceptTouchEvent(false);
-                if (listener != null && event.getAction() == MotionEvent.ACTION_UP) {
-                    listener.onChanged(selectedValue, true);
+                if (getParent() != null) {
+                    getParent().requestDisallowInterceptTouchEvent(false);
+                }
+                if (action == MotionEvent.ACTION_UP && Math.abs(velocityStepsPerSecond) >= 3.2f) {
+                    startDialFling(velocityStepsPerSecond);
+                } else {
+                    settleDial(action == MotionEvent.ACTION_UP);
                 }
                 invalidate();
                 return true;
@@ -9667,10 +9926,7 @@ public final class MainActivity extends Activity {
         }
 
         private float visibleCenterIndex() {
-            if (dragging) {
-                return dragStartValue / (float) stepValue + dragStepOffset;
-            }
-            return selectedValue / (float) stepValue;
+            return dialCenterIndex;
         }
 
         private float dialValueY(int height, float distance) {
@@ -9702,13 +9958,87 @@ public final class MainActivity extends Activity {
             return twoDigit ? String.format(Locale.US, "%02d", value) : Integer.toString(value);
         }
 
+        private String timerTextForIndex(int index) {
+            return timerText(timerValueForIndex(index));
+        }
+
         private int maxTimerIndex() {
             return maxValue / stepValue;
+        }
+
+        private int timerValueCount() {
+            return maxTimerIndex() + 1;
+        }
+
+        private int timerValueForIndex(int index) {
+            int normalizedIndex = Math.floorMod(index, timerValueCount());
+            return clampTimerValue(normalizedIndex * stepValue);
         }
 
         private int clampTimerValue(int value) {
             int stepped = Math.round(value / (float) stepValue) * stepValue;
             return Math.max(0, Math.min(maxValue, stepped));
+        }
+
+        private void updateSelectedValueFromCenter(boolean committed) {
+            int nextValue = timerValueForIndex(Math.round(dialCenterIndex));
+            if (nextValue != selectedValue || committed) {
+                selectedValue = nextValue;
+                if (listener != null) {
+                    listener.onChanged(selectedValue, committed);
+                }
+            }
+        }
+
+        private void startDialFling(float velocityStepsPerSecond) {
+            flinging = true;
+            flingVelocityStepsPerSecond = Math.max(-54f, Math.min(54f, velocityStepsPerSecond));
+            lastFlingFrameMs = System.currentTimeMillis();
+            postOnAnimation(flingRunnable);
+        }
+
+        private void continueDialFling() {
+            if (!flinging) {
+                return;
+            }
+            long nowMs = System.currentTimeMillis();
+            float deltaSeconds = Math.min(0.034f, Math.max(0.001f, (nowMs - lastFlingFrameMs) / 1000f));
+            lastFlingFrameMs = nowMs;
+            dialCenterIndex += flingVelocityStepsPerSecond * deltaSeconds;
+            updateSelectedValueFromCenter(false);
+            float friction = (float) Math.pow(0.90f, deltaSeconds * 60f);
+            flingVelocityStepsPerSecond *= friction;
+            invalidate();
+            if (Math.abs(flingVelocityStepsPerSecond) <= 0.42f) {
+                settleDial(true);
+                return;
+            }
+            postOnAnimation(flingRunnable);
+        }
+
+        private void settleDial(boolean committed) {
+            flinging = false;
+            removeCallbacks(flingRunnable);
+            int targetIndex = Math.round(dialCenterIndex);
+            selectedValue = timerValueForIndex(targetIndex);
+            dialCenterIndex = selectedValue / (float) stepValue;
+            dragStepOffset = 0f;
+            if (listener != null && committed) {
+                listener.onChanged(selectedValue, true);
+            }
+            invalidate();
+        }
+
+        private void stopDialFling() {
+            flinging = false;
+            removeCallbacks(flingRunnable);
+        }
+
+        private void recycleTimerVelocityTracker() {
+            if (velocityTracker != null) {
+                velocityTracker.recycle();
+                velocityTracker = null;
+            }
         }
     }
 

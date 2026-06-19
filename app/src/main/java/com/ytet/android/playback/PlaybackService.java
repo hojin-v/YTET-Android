@@ -110,6 +110,8 @@ public final class PlaybackService extends Service {
     private static final String EXTRA_ONLINE_THUMBNAILS = "com.ytet.android.extra.ONLINE_THUMBNAILS";
     private static final String EXTRA_ONLINE_DURATIONS = "com.ytet.android.extra.ONLINE_DURATIONS";
     private static final String EXTRA_START_INDEX = "com.ytet.android.extra.START_INDEX";
+    private static final String EXTRA_QUEUE_SOURCE_INDICES = "com.ytet.android.extra.QUEUE_SOURCE_INDICES";
+    private static final String EXTRA_CURRENT_QUEUE_SOURCE_INDEX = "com.ytet.android.extra.CURRENT_QUEUE_SOURCE_INDEX";
     private static final String CHANNEL_ID = "ytet_playback";
     private static final int NOTIFICATION_ID = 4211;
     private static final String PREFS = "ytet_android";
@@ -278,6 +280,18 @@ public final class PlaybackService extends Service {
         return queueEditIntent(context, ACTION_REORDER_QUEUE, tracks);
     }
 
+    public static Intent reorderQueueIntent(
+            Context context,
+            List<DeviceAudioTrack> tracks,
+            int[] sourceIndices,
+            int currentSourceIndex
+    ) {
+        Intent intent = reorderQueueIntent(context, tracks);
+        intent.putExtra(EXTRA_QUEUE_SOURCE_INDICES, sourceIndices);
+        intent.putExtra(EXTRA_CURRENT_QUEUE_SOURCE_INDEX, currentSourceIndex);
+        return intent;
+    }
+
     public static Intent sleepTimerIntent(Context context, int minutes) {
         Intent intent = new Intent(context, PlaybackService.class);
         intent.setAction(minutes <= 0 ? ACTION_CANCEL_SLEEP_TIMER : ACTION_SET_SLEEP_TIMER);
@@ -380,7 +394,11 @@ public final class PlaybackService extends Service {
         } else if (ACTION_ADD_TO_QUEUE.equals(action)) {
             editQueueAsync(intent, false);
         } else if (ACTION_REORDER_QUEUE.equals(action)) {
-            reorderQueue(intent.getLongArrayExtra(EXTRA_TRACK_IDS));
+            reorderQueue(
+                    intent.getLongArrayExtra(EXTRA_TRACK_IDS),
+                    intent.getIntArrayExtra(EXTRA_QUEUE_SOURCE_INDICES),
+                    intent.getIntExtra(EXTRA_CURRENT_QUEUE_SOURCE_INDEX, -1)
+            );
         } else if (ACTION_SET_SLEEP_TIMER.equals(action)) {
             setSleepTimer(intent.getIntExtra(EXTRA_SLEEP_TIMER_MINUTES, 0));
         } else if (ACTION_CANCEL_SLEEP_TIMER.equals(action)) {
@@ -595,7 +613,7 @@ public final class PlaybackService extends Service {
         broadcastState();
     }
 
-    private void reorderQueue(long[] orderedIds) {
+    private void reorderQueue(long[] orderedIds, int[] sourceIndices, int currentSourceIndex) {
         if (orderedIds == null || orderedIds.length != queue.size() || queue.isEmpty()) {
             broadcastState();
             return;
@@ -604,7 +622,30 @@ public final class PlaybackService extends Service {
         long currentId = current == null ? -1L : current.id();
         ArrayList<DeviceAudioTrack> reordered = new ArrayList<>();
         boolean[] used = new boolean[queue.size()];
+        int nextQueueIndex = -1;
+        if (sourceIndices != null && sourceIndices.length == queue.size()) {
+            for (int outputIndex = 0; outputIndex < sourceIndices.length; outputIndex++) {
+                int sourceIndex = sourceIndices[outputIndex];
+                if (sourceIndex < 0
+                        || sourceIndex >= queue.size()
+                        || used[sourceIndex]
+                        || queue.get(sourceIndex).id() != orderedIds[outputIndex]) {
+                    reordered.clear();
+                    Arrays.fill(used, false);
+                    nextQueueIndex = -1;
+                    break;
+                }
+                used[sourceIndex] = true;
+                if (sourceIndex == currentSourceIndex) {
+                    nextQueueIndex = outputIndex;
+                }
+                reordered.add(queue.get(sourceIndex));
+            }
+        }
         for (long id : orderedIds) {
+            if (reordered.size() == orderedIds.length) {
+                break;
+            }
             int found = -1;
             for (int index = 0; index < queue.size(); index++) {
                 if (!used[index] && queue.get(index).id() == id) {
@@ -617,11 +658,14 @@ public final class PlaybackService extends Service {
                 return;
             }
             used[found] = true;
+            if (found == queueIndex) {
+                nextQueueIndex = reordered.size();
+            }
             reordered.add(queue.get(found));
         }
         queue.clear();
         queue.addAll(reordered);
-        queueIndex = restoredQueueIndex(queueIndex, currentId);
+        queueIndex = nextQueueIndex >= 0 ? nextQueueIndex : restoredQueueIndex(queueIndex, currentId);
         persistPlaybackSnapshot();
         showNotification();
         broadcastState();
