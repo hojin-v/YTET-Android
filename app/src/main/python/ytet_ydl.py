@@ -57,7 +57,7 @@ class YtetLogger:
 
 def stream_channels(channels_json, per_channel=3):
     channels = json.loads(channels_json or "[]")
-    per_channel = max(1, min(as_int(per_channel) or 3, 8))
+    per_channel = max(1, min(as_int(per_channel) or 3, 40))
     logger = YtetLogger()
     sections = []
     options = {
@@ -122,7 +122,7 @@ def stream_channel_videos(info, channel, per_channel):
         return []
     entries = info.get("entries") if isinstance(info.get("entries"), list) else []
     candidates = []
-    for entry in entries:
+    for source_index, entry in enumerate(entries):
         if not isinstance(entry, dict):
             continue
         title = str(entry.get("title") or "").strip()
@@ -139,9 +139,22 @@ def stream_channel_videos(info, channel, per_channel):
             "url": watch_url,
             "thumbnail": best_thumbnail(entry) or best_thumbnail(info),
             "duration": as_int(entry.get("duration")) or 0,
+            "view_count": as_int(entry.get("view_count")) or 0,
+            "published": stream_video_published_rank(entry),
+            "source_index": source_index,
         })
     random.shuffle(candidates)
     return candidates[:per_channel]
+
+
+def stream_video_published_rank(entry):
+    upload_date = str(entry.get("upload_date") or "").strip()
+    if re.fullmatch(r"\d{8}", upload_date):
+        return as_int(upload_date) or 0
+    timestamp = as_int(entry.get("timestamp") or entry.get("release_timestamp"))
+    if timestamp:
+        return as_int(time.strftime("%Y%m%d", time.gmtime(timestamp))) or 0
+    return 0
 
 
 def stream_watch_url(entry):

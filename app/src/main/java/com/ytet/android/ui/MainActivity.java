@@ -298,6 +298,8 @@ public final class MainActivity extends Activity {
     private List<DeviceAudioTrack> libraryTracks = new ArrayList<>();
     private List<DeviceAudioTrack> homeTracks = new ArrayList<>();
     private List<OnlineStreamSection> streamSections = new ArrayList<>();
+    private OnlineStreamSection focusedStreamSection;
+    private StreamVideoSort streamVideoSort = StreamVideoSort.POPULAR;
     private boolean libraryLoaded;
     private boolean libraryLoading;
     private String libraryStatus = "기기 음악 권한을 허용하면 앨범과 아티스트를 정리합니다.";
@@ -594,6 +596,9 @@ public final class MainActivity extends Activity {
         if (closeOpenDialogFromBack()) {
             return;
         }
+        if (handleStreamBackNavigation()) {
+            return;
+        }
         if (handleLibraryBackNavigation()) {
             return;
         }
@@ -606,6 +611,9 @@ public final class MainActivity extends Activity {
         }
         backInvokedCallback = () -> {
             if (closeOpenDialogFromBack()) {
+                return;
+            }
+            if (handleStreamBackNavigation()) {
                 return;
             }
             if (handleLibraryBackNavigation()) {
@@ -641,6 +649,16 @@ public final class MainActivity extends Activity {
             return true;
         }
         return false;
+    }
+
+    private boolean handleStreamBackNavigation() {
+        if (currentTab != Tab.HOME || focusedStreamSection == null) {
+            return false;
+        }
+        focusedStreamSection = null;
+        renderCurrentTab();
+        scrollHomeToTop();
+        return true;
     }
 
     @Override
@@ -926,6 +944,11 @@ public final class MainActivity extends Activity {
 
     private void showTab(Tab tab) {
         if (currentTab == tab) {
+            if (tab == Tab.HOME && focusedStreamSection != null) {
+                focusedStreamSection = null;
+                renderCurrentTab();
+                scrollHomeToTop();
+            }
             if (tab == Tab.LIBRARY && focusedLibraryGroup != null) {
                 focusedLibraryGroup = null;
                 focusedLibraryGroupFilter = null;
@@ -1239,6 +1262,14 @@ public final class MainActivity extends Activity {
         if (!streamLoaded && !streamLoading) {
             startStreamRefresh(false);
         }
+        if (focusedStreamSection != null) {
+            OnlineStreamSection section = currentFocusedStreamSection();
+            if (section != null) {
+                buildStreamSectionDetail(root, section);
+                return root;
+            }
+            focusedStreamSection = null;
+        }
 
         if (streamLoading && streamSections.isEmpty()) {
             LinearLayout loading = panel();
@@ -1270,6 +1301,10 @@ public final class MainActivity extends Activity {
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setPadding(dp(4), dp(4), dp(4), dp(4));
+        header.setBackground(rounded(Color.TRANSPARENT, 8));
+        header.setClickable(true);
+        header.setOnClickListener(view -> showStreamSectionDetail(section));
         header.addView(onlineImageView(section.avatarUrl(), section.channelTitle(), 44, 22), marginRight(12, dp(44), dp(44)));
 
         LinearLayout copy = new LinearLayout(this);
@@ -1283,10 +1318,161 @@ public final class MainActivity extends Activity {
         panel.addView(header, marginBottom(12));
 
         List<OnlineStreamVideo> videos = section.videos();
-        for (int index = 0; index < videos.size(); index++) {
-            panel.addView(streamVideoRow(section, videos.get(index), index), marginBottom(index == videos.size() - 1 ? 0 : 8));
+        int previewCount = Math.min(3, videos.size());
+        for (int index = 0; index < previewCount; index++) {
+            panel.addView(streamVideoRow(section, videos.get(index), index), marginBottom(index == previewCount - 1 ? 0 : 8));
         }
         return panel;
+    }
+
+    private void showStreamSectionDetail(OnlineStreamSection section) {
+        focusedStreamSection = section;
+        streamVideoSort = StreamVideoSort.POPULAR;
+        renderCurrentTab();
+        scrollHomeToTop();
+    }
+
+    private void scrollHomeToTop() {
+        if (contentScrollView != null) {
+            contentScrollView.post(() -> contentScrollView.scrollTo(0, 0));
+        }
+    }
+
+    private OnlineStreamSection currentFocusedStreamSection() {
+        if (focusedStreamSection == null) {
+            return null;
+        }
+        for (OnlineStreamSection section : streamSections) {
+            if (TextUtils.equals(section.channelId(), focusedStreamSection.channelId())) {
+                return section;
+            }
+        }
+        return focusedStreamSection;
+    }
+
+    private void buildStreamSectionDetail(LinearLayout root, OnlineStreamSection section) {
+        LinearLayout top = new LinearLayout(this);
+        top.setOrientation(LinearLayout.HORIZONTAL);
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        ImageButton back = toolbarIconButton(R.drawable.ic_arrow_back, "스트림 목록", false);
+        back.setOnClickListener(view -> handleStreamBackNavigation());
+        top.addView(back, new LinearLayout.LayoutParams(dp(44), dp(44)));
+        View spacer = new View(this);
+        top.addView(spacer, new LinearLayout.LayoutParams(0, dp(44), 1f));
+        root.addView(top, marginBottom(16));
+
+        LinearLayout hero = panel();
+        hero.setOrientation(LinearLayout.HORIZONTAL);
+        hero.setGravity(Gravity.CENTER_VERTICAL);
+        hero.setPadding(dp(12), dp(12), dp(12), dp(12));
+        hero.addView(onlineImageView(section.avatarUrl(), section.channelTitle(), 58, 29), marginRight(12, dp(58), dp(58)));
+
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        TextView title = text(section.channelTitle(), 22, R.color.ytet_text, true);
+        title.setSingleLine(true);
+        title.setEllipsize(TextUtils.TruncateAt.END);
+        copy.addView(title, marginBottom(4));
+        copy.addView(muted(section.videos().size() + "개 비디오", 12), matchWrap());
+        hero.addView(copy, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        root.addView(hero, marginBottom(12));
+
+        root.addView(streamSortBar(), marginBottom(12));
+
+        List<OnlineStreamVideo> videos = sortedStreamVideos(section);
+        if (videos.isEmpty()) {
+            LinearLayout empty = panel();
+            empty.addView(label("표시할 비디오가 없습니다."), matchWrap());
+            root.addView(empty, marginBottom(18));
+            return;
+        }
+        for (int index = 0; index < videos.size(); index++) {
+            OnlineStreamVideo video = videos.get(index);
+            int sourceIndex = streamVideoIndex(section, video);
+            root.addView(streamVideoRow(section, video, sourceIndex), marginBottom(index == videos.size() - 1 ? 0 : 8));
+        }
+    }
+
+    private View streamSortBar() {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.addView(streamSortButton(StreamVideoSort.POPULAR), weightedButtonParams(8));
+        row.addView(streamSortButton(StreamVideoSort.LATEST), weightedButtonParams(8));
+        row.addView(streamSortButton(StreamVideoSort.OLDEST), weightedButtonParams(0));
+        return row;
+    }
+
+    private Button streamSortButton(StreamVideoSort sort) {
+        Button button = sort == streamVideoSort ? primaryButton(sort.label) : secondaryButton(sort.label);
+        button.setTextSize(13);
+        button.setOnClickListener(view -> {
+            if (streamVideoSort == sort) {
+                return;
+            }
+            streamVideoSort = sort;
+            renderCurrentTab();
+        });
+        return button;
+    }
+
+    private List<OnlineStreamVideo> sortedStreamVideos(OnlineStreamSection section) {
+        List<OnlineStreamVideo> videos = section == null ? new ArrayList<>() : section.videos();
+        videos.sort((first, second) -> compareStreamVideos(first, second));
+        return videos;
+    }
+
+    private int compareStreamVideos(OnlineStreamVideo first, OnlineStreamVideo second) {
+        if (streamVideoSort == StreamVideoSort.POPULAR) {
+            int viewCompare = Long.compare(second.viewCount(), first.viewCount());
+            if (viewCompare != 0) {
+                return viewCompare;
+            }
+            return compareStreamVideosByLatest(first, second);
+        }
+        if (streamVideoSort == StreamVideoSort.OLDEST) {
+            return compareStreamVideosByOldest(first, second);
+        }
+        return compareStreamVideosByLatest(first, second);
+    }
+
+    private int compareStreamVideosByLatest(OnlineStreamVideo first, OnlineStreamVideo second) {
+        if (first.publishedRank() > 0L || second.publishedRank() > 0L) {
+            int publishedCompare = Long.compare(second.publishedRank(), first.publishedRank());
+            if (publishedCompare != 0) {
+                return publishedCompare;
+            }
+        }
+        return Integer.compare(first.sourceIndex(), second.sourceIndex());
+    }
+
+    private int compareStreamVideosByOldest(OnlineStreamVideo first, OnlineStreamVideo second) {
+        if (first.publishedRank() > 0L && second.publishedRank() > 0L) {
+            int publishedCompare = Long.compare(first.publishedRank(), second.publishedRank());
+            if (publishedCompare != 0) {
+                return publishedCompare;
+            }
+        } else if (first.publishedRank() > 0L) {
+            return -1;
+        } else if (second.publishedRank() > 0L) {
+            return 1;
+        }
+        return Integer.compare(second.sourceIndex(), first.sourceIndex());
+    }
+
+    private int streamVideoIndex(OnlineStreamSection section, OnlineStreamVideo target) {
+        if (section == null || target == null) {
+            return 0;
+        }
+        List<OnlineStreamVideo> videos = section.videos();
+        for (int index = 0; index < videos.size(); index++) {
+            OnlineStreamVideo video = videos.get(index);
+            if (TextUtils.equals(video.id(), target.id())
+                    || TextUtils.equals(video.watchUrl(), target.watchUrl())) {
+                return index;
+            }
+        }
+        return Math.max(0, Math.min(videos.size() - 1, target.sourceIndex()));
     }
 
     private View streamVideoRow(OnlineStreamSection section, OnlineStreamVideo video, int index) {
@@ -7168,10 +7354,11 @@ public final class MainActivity extends Activity {
                 List<OnlineStreamSection> sections = OnlineStreamClient.loadSections(
                         this,
                         OnlineStreamCatalog.defaultChannels(),
-                        3
+                        40
                 );
                 runOnUiThread(() -> {
                     streamSections = sections;
+                    focusedStreamSection = updatedFocusedStreamSection(sections);
                     streamLoaded = true;
                     streamLoading = false;
                     streamLoadStatus = sections.isEmpty()
@@ -7192,6 +7379,18 @@ public final class MainActivity extends Activity {
                 });
             }
         });
+    }
+
+    private OnlineStreamSection updatedFocusedStreamSection(List<OnlineStreamSection> sections) {
+        if (focusedStreamSection == null || sections == null) {
+            return focusedStreamSection;
+        }
+        for (OnlineStreamSection section : sections) {
+            if (TextUtils.equals(section.channelId(), focusedStreamSection.channelId())) {
+                return section;
+            }
+        }
+        return null;
     }
 
     private void startLibraryRefresh(boolean renderImmediately) {
@@ -10269,6 +10468,18 @@ public final class MainActivity extends Activity {
     private enum ArtistDetailMode {
         ALL,
         ALBUMS
+    }
+
+    private enum StreamVideoSort {
+        POPULAR("인기순"),
+        LATEST("최신순"),
+        OLDEST("오래된순");
+
+        private final String label;
+
+        StreamVideoSort(String label) {
+            this.label = label;
+        }
     }
 
     private enum Tab {

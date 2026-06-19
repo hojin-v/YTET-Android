@@ -58,7 +58,10 @@ public final class OnlineStreamClient {
                             video.optString("channel_title", section.optString("title", "")),
                             url,
                             video.optString("thumbnail", ""),
-                            Math.max(0L, video.optLong("duration", 0L)) * 1000L
+                            Math.max(0L, video.optLong("duration", 0L)) * 1000L,
+                            Math.max(0L, video.optLong("view_count", 0L)),
+                            Math.max(0L, video.optLong("published", 0L)),
+                            Math.max(0, video.optInt("source_index", videoIndex))
                     ));
                 }
             }

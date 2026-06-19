@@ -9,6 +9,9 @@ public final class OnlineStreamVideo {
     private final String watchUrl;
     private final String thumbnailUrl;
     private final long durationMs;
+    private final long viewCount;
+    private final long publishedRank;
+    private final int sourceIndex;
 
     public OnlineStreamVideo(
             String id,
@@ -16,7 +19,10 @@ public final class OnlineStreamVideo {
             String channelTitle,
             String watchUrl,
             String thumbnailUrl,
-            long durationMs
+            long durationMs,
+            long viewCount,
+            long publishedRank,
+            int sourceIndex
     ) {
         this.id = clean(id, stableId(watchUrl));
         this.title = clean(title, "제목 없음");
@@ -24,6 +30,9 @@ public final class OnlineStreamVideo {
         this.watchUrl = clean(watchUrl, "");
         this.thumbnailUrl = clean(thumbnailUrl, "");
         this.durationMs = Math.max(0L, durationMs);
+        this.viewCount = Math.max(0L, viewCount);
+        this.publishedRank = Math.max(0L, publishedRank);
+        this.sourceIndex = Math.max(0, sourceIndex);
     }
 
     public String id() {
@@ -48,6 +57,18 @@ public final class OnlineStreamVideo {
 
     public long durationMs() {
         return durationMs;
+    }
+
+    public long viewCount() {
+        return viewCount;
+    }
+
+    public long publishedRank() {
+        return publishedRank;
+    }
+
+    public int sourceIndex() {
+        return sourceIndex;
     }
 
     public long playbackId() {
