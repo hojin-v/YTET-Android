@@ -5,8 +5,10 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.ServiceInfo;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -102,6 +104,14 @@ public final class PlaybackService extends Service {
     private final ExecutorService queueExecutor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final AudioManager.OnAudioFocusChangeListener focusChangeListener = this::onAudioFocusChanged;
+    private final BroadcastReceiver noisyAudioReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (intent != null && AudioManager.ACTION_AUDIO_BECOMING_NOISY.equals(intent.getAction())) {
+                pauseForOutputDisconnect();
+            }
+        }
+    };
     private final Runnable stateTick = new Runnable() {
         @Override
         public void run() {
@@ -137,6 +147,7 @@ public final class PlaybackService extends Service {
     private boolean playing;
     private boolean startWhenPrepared;
     private boolean resumeOnAudioFocusGain;
+    private boolean noisyAudioReceiverRegistered;
     private boolean shuffleEnabled;
     private int repeatMode = REPEAT_OFF;
     private long sleepTimerEndAtMs;
@@ -266,6 +277,7 @@ public final class PlaybackService extends Service {
             }
         });
         mediaSession.setActive(true);
+        registerNoisyAudioReceiver();
     }
 
     @Override
@@ -320,6 +332,7 @@ public final class PlaybackService extends Service {
         queueExecutor.shutdownNow();
         mainHandler.removeCallbacks(stateTick);
         mainHandler.removeCallbacks(sleepTimerRunnable);
+        unregisterNoisyAudioReceiver();
         releasePlayer();
         abandonAudioFocus();
         if (mediaSession != null) {
@@ -862,6 +875,39 @@ public final class PlaybackService extends Service {
                 play();
             }
         }
+    }
+
+    private void pauseForOutputDisconnect() {
+        if (!playing && !(preparing && startWhenPrepared)) {
+            return;
+        }
+        pause(false);
+        abandonAudioFocus();
+    }
+
+    private void registerNoisyAudioReceiver() {
+        if (noisyAudioReceiverRegistered) {
+            return;
+        }
+        IntentFilter filter = new IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(noisyAudioReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(noisyAudioReceiver, filter);
+        }
+        noisyAudioReceiverRegistered = true;
+    }
+
+    private void unregisterNoisyAudioReceiver() {
+        if (!noisyAudioReceiverRegistered) {
+            return;
+        }
+        try {
+            unregisterReceiver(noisyAudioReceiver);
+        } catch (IllegalArgumentException ignored) {
+            // The service can be torn down during rapid playback transitions; treat it as unregistered.
+        }
+        noisyAudioReceiverRegistered = false;
     }
 
     private boolean requestAudioFocus() {

@@ -90,6 +90,8 @@ grep -q 'ACTION_TOGGLE_SHUFFLE' "$root/app/src/main/java/com/ytet/android/playba
 grep -q 'ACTION_TOGGLE_REPEAT' "$root/app/src/main/java/com/ytet/android/playback/PlaybackService.java"
 grep -q 'ACTION_SET_SLEEP_TIMER' "$root/app/src/main/java/com/ytet/android/playback/PlaybackService.java"
 grep -q 'ACTION_SLEEP_TIMER_FINISHED' "$root/app/src/main/java/com/ytet/android/playback/PlaybackService.java"
+grep -q 'ACTION_AUDIO_BECOMING_NOISY' "$root/app/src/main/java/com/ytet/android/playback/PlaybackService.java"
+grep -q 'pauseForOutputDisconnect' "$root/app/src/main/java/com/ytet/android/playback/PlaybackService.java"
 grep -q 'EXTRA_ALBUM_ART_URI' "$root/app/src/main/java/com/ytet/android/playback/PlaybackService.java"
 grep -q 'EXTRA_QUEUE_TRACK_IDS' "$root/app/src/main/java/com/ytet/android/playback/PlaybackService.java"
 grep -q 'GitHub releases request' "$root/app/src/main/java/com/ytet/android/update/UpdateChecker.java"
