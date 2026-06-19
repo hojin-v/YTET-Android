@@ -926,6 +926,14 @@ public final class MainActivity extends Activity {
 
     private void showTab(Tab tab) {
         if (currentTab == tab) {
+            if (tab == Tab.LIBRARY && focusedLibraryGroup != null) {
+                focusedLibraryGroup = null;
+                focusedLibraryGroupFilter = null;
+                focusedParentArtistGroup = null;
+                artistDetailMode = ArtistDetailMode.ALL;
+                selectedTrack = null;
+                renderCurrentTab();
+            }
             return;
         }
         saveCurrentTabInputs();
