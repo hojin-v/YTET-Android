@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import random
 import time
 import unicodedata
 from difflib import SequenceMatcher
@@ -52,6 +53,192 @@ class YtetLogger:
 
     def tail(self):
         return "\n".join(self.messages)
+
+
+def stream_channels(channels_json, per_channel=3):
+    channels = json.loads(channels_json or "[]")
+    per_channel = max(1, min(as_int(per_channel) or 3, 8))
+    logger = YtetLogger()
+    sections = []
+    options = {
+        "cachedir": False,
+        "extract_flat": "in_playlist",
+        "ignoreerrors": True,
+        "logger": logger,
+        "no_warnings": False,
+        "noplaylist": False,
+        "playlistend": 40,
+        "quiet": True,
+    }
+    with YoutubeDL(options) as ydl:
+        for channel in channels:
+            if not isinstance(channel, dict):
+                continue
+            channel_url = str(channel.get("url") or "").strip()
+            if not channel_url:
+                continue
+            info = None
+            last_error = None
+            for candidate_url in stream_channel_candidate_urls(channel_url):
+                try:
+                    info = ydl.extract_info(candidate_url, download=False)
+                    break
+                except Exception as error:
+                    last_error = error
+                    continue
+            if info is None:
+                logger.warning(f"스트림 채널 조회 실패: {channel_url} / {last_error}")
+                continue
+            try:
+                videos = stream_channel_videos(info, channel, per_channel)
+            except Exception as error:
+                logger.warning(f"스트림 채널 조회 실패: {channel_url} / {error}")
+                continue
+            if not videos:
+                continue
+            sections.append({
+                "id": str(channel.get("id") or info.get("id") or stable_text_id(channel_url)),
+                "title": stream_channel_title(info, channel),
+                "url": channel_url,
+                "avatar": best_thumbnail(info),
+                "videos": videos,
+            })
+    return json.dumps(sections, ensure_ascii=False)
+
+
+def stream_channel_candidate_urls(channel_url):
+    url = str(channel_url or "").strip().rstrip("/")
+    if not url:
+        return []
+    candidates = []
+    if "/videos" not in url:
+        candidates.append(url + "/videos")
+    candidates.append(url)
+    return list(dict.fromkeys(candidates))
+
+
+def stream_channel_videos(info, channel, per_channel):
+    if not isinstance(info, dict):
+        return []
+    entries = info.get("entries") if isinstance(info.get("entries"), list) else []
+    candidates = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        title = str(entry.get("title") or "").strip()
+        video_id = str(entry.get("id") or entry.get("url") or "").strip()
+        if not title or title.lower() in {"[private video]", "[deleted video]"}:
+            continue
+        watch_url = stream_watch_url(entry)
+        if not watch_url:
+            continue
+        candidates.append({
+            "id": video_id or stable_text_id(watch_url),
+            "title": title,
+            "channel_title": stream_channel_title(info, channel),
+            "url": watch_url,
+            "thumbnail": best_thumbnail(entry) or best_thumbnail(info),
+            "duration": as_int(entry.get("duration")) or 0,
+        })
+    random.shuffle(candidates)
+    return candidates[:per_channel]
+
+
+def stream_watch_url(entry):
+    webpage_url = str(entry.get("webpage_url") or "").strip()
+    if webpage_url.startswith("http"):
+        return webpage_url
+    url = str(entry.get("url") or "").strip()
+    if url.startswith("http"):
+        return url
+    video_id = str(entry.get("id") or url).strip()
+    if video_id:
+        return "https://www.youtube.com/watch?v=" + video_id
+    return ""
+
+
+def stream_channel_title(info, channel):
+    configured = str(channel.get("title") or "").strip() if isinstance(channel, dict) else ""
+    if isinstance(info, dict):
+        title = str(info.get("uploader") or info.get("channel") or info.get("title") or "").strip()
+        if title:
+            return strip_video_suffix(title)
+    return configured or "YouTube 채널"
+
+
+def strip_video_suffix(title):
+    return re.sub(r"\s*-\s*Videos\s*$", "", title or "", flags=re.IGNORECASE).strip()
+
+
+def resolve_stream(url):
+    url = str(url or "").strip()
+    if not url:
+        raise YtetExtractionError("재생할 YouTube URL이 없습니다.")
+    logger = YtetLogger()
+    options = {
+        "cachedir": False,
+        "format": "ba[ext=m4a]/bestaudio[ext=m4a]/ba/best",
+        "logger": logger,
+        "no_warnings": False,
+        "noplaylist": True,
+        "quiet": True,
+    }
+    with YoutubeDL(options) as ydl:
+        info = ydl.extract_info(url, download=False)
+    stream_url = str(info.get("url") or "").strip() if isinstance(info, dict) else ""
+    if not stream_url and isinstance(info, dict):
+        stream_url = best_stream_format_url(info)
+    if not stream_url:
+        raise YtetExtractionError("온라인 스트림 URL을 찾을 수 없습니다.")
+    return json.dumps({
+        "stream_url": stream_url,
+        "title": info.get("title") or "",
+        "channel_title": info.get("uploader") or info.get("channel") or "",
+        "thumbnail": best_thumbnail(info),
+        "duration": as_int(info.get("duration")) or 0,
+    }, ensure_ascii=False)
+
+
+def best_stream_format_url(info):
+    formats = info.get("formats") if isinstance(info.get("formats"), list) else []
+    audio_formats = []
+    for item in formats:
+        if not isinstance(item, dict):
+            continue
+        stream_url = str(item.get("url") or "").strip()
+        if not stream_url:
+            continue
+        has_audio = item.get("acodec") not in (None, "none")
+        has_video = item.get("vcodec") not in (None, "none")
+        if has_audio and not has_video:
+            audio_formats.append(item)
+    if not audio_formats:
+        return ""
+    audio_formats.sort(key=lambda item: (
+        0 if item.get("ext") == "m4a" else 1,
+        -(as_int(item.get("abr")) or 0),
+    ))
+    return str(audio_formats[0].get("url") or "").strip()
+
+
+def best_thumbnail(info):
+    if not isinstance(info, dict):
+        return ""
+    thumbnails = info.get("thumbnails")
+    if isinstance(thumbnails, list) and thumbnails:
+        best = sorted(
+            [thumb for thumb in thumbnails if isinstance(thumb, dict) and thumb.get("url")],
+            key=lambda thumb: (as_int(thumb.get("width")) or 0) * (as_int(thumb.get("height")) or 0),
+            reverse=True,
+        )
+        if best:
+            return str(best[0].get("url") or "").strip()
+    return str(info.get("thumbnail") or "").strip()
+
+
+def stable_text_id(value):
+    text = str(value or "").strip()
+    return hex(abs(hash(text)))[2:] if text else "online"
 
 
 def extract(

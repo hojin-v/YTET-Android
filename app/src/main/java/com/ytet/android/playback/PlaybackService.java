@@ -31,6 +31,7 @@ import com.ytet.android.R;
 import com.ytet.android.library.DeviceAudioTrack;
 import com.ytet.android.library.DeviceMusicLibrary;
 import com.ytet.android.stream.MusicStation;
+import com.ytet.android.stream.OnlineStreamResolver;
 import com.ytet.android.ui.MainActivity;
 
 import java.util.ArrayList;
@@ -38,11 +39,14 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class PlaybackService extends Service {
     public static final String ACTION_PLAY_QUEUE = "com.ytet.android.action.PLAY_QUEUE";
+    public static final String ACTION_PLAY_ONLINE_QUEUE = "com.ytet.android.action.PLAY_ONLINE_QUEUE";
     public static final String ACTION_TOGGLE = "com.ytet.android.action.PLAYBACK_TOGGLE";
     public static final String ACTION_PLAY = "com.ytet.android.action.PLAYBACK_PLAY";
     public static final String ACTION_PAUSE = "com.ytet.android.action.PLAYBACK_PAUSE";
@@ -99,6 +103,12 @@ public final class PlaybackService extends Service {
     private static final String EXTRA_MIX_TITLE = "com.ytet.android.extra.MIX_TITLE";
     private static final String EXTRA_MIX_SUBTITLE = "com.ytet.android.extra.MIX_SUBTITLE";
     private static final String EXTRA_TRACK_IDS = "com.ytet.android.extra.TRACK_IDS";
+    private static final String EXTRA_ONLINE_TITLES = "com.ytet.android.extra.ONLINE_TITLES";
+    private static final String EXTRA_ONLINE_ARTISTS = "com.ytet.android.extra.ONLINE_ARTISTS";
+    private static final String EXTRA_ONLINE_ALBUMS = "com.ytet.android.extra.ONLINE_ALBUMS";
+    private static final String EXTRA_ONLINE_URLS = "com.ytet.android.extra.ONLINE_URLS";
+    private static final String EXTRA_ONLINE_THUMBNAILS = "com.ytet.android.extra.ONLINE_THUMBNAILS";
+    private static final String EXTRA_ONLINE_DURATIONS = "com.ytet.android.extra.ONLINE_DURATIONS";
     private static final String EXTRA_START_INDEX = "com.ytet.android.extra.START_INDEX";
     private static final String CHANNEL_ID = "ytet_playback";
     private static final int NOTIFICATION_ID = 4211;
@@ -114,6 +124,7 @@ public final class PlaybackService extends Service {
     private final ArrayList<DeviceAudioTrack> queue = new ArrayList<>();
     private final DeviceMusicLibrary musicLibrary = new DeviceMusicLibrary();
     private final ExecutorService queueExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService artworkExecutor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final AudioManager.OnAudioFocusChangeListener focusChangeListener = this::onAudioFocusChanged;
     private final BroadcastReceiver noisyAudioReceiver = new BroadcastReceiver() {
@@ -167,6 +178,7 @@ public final class PlaybackService extends Service {
     private boolean sleepTimerPaused;
     private String errorStatus;
     private String cachedArtworkUri = "";
+    private String loadingArtworkUri = "";
     private Bitmap cachedArtwork;
 
     public static Intent playQueueIntent(Context context, MusicStation station, List<DeviceAudioTrack> tracks) {
@@ -191,6 +203,41 @@ public final class PlaybackService extends Service {
         }
 
         intent.putExtra(EXTRA_TRACK_IDS, ids);
+        intent.putExtra(EXTRA_START_INDEX, Math.max(0, startIndex));
+        return intent;
+    }
+
+    public static Intent playOnlineQueueIntent(Context context, MusicStation station, List<DeviceAudioTrack> tracks, int startIndex) {
+        Intent intent = new Intent(context, PlaybackService.class);
+        intent.setAction(ACTION_PLAY_ONLINE_QUEUE);
+        intent.putExtra(EXTRA_MIX_TITLE, station == null ? "스트림" : station.title());
+        intent.putExtra(EXTRA_MIX_SUBTITLE, station == null ? "온라인 재생" : station.subtitle());
+        intent.putExtra(EXTRA_SHUFFLE_ENABLED, false);
+        int count = tracks == null ? 0 : tracks.size();
+        long[] ids = new long[count];
+        String[] titles = new String[count];
+        String[] artists = new String[count];
+        String[] albums = new String[count];
+        String[] urls = new String[count];
+        String[] thumbnails = new String[count];
+        long[] durations = new long[count];
+        for (int index = 0; index < count; index++) {
+            DeviceAudioTrack track = tracks.get(index);
+            ids[index] = track.id();
+            titles[index] = track.title();
+            artists[index] = track.artist();
+            albums[index] = track.album();
+            urls[index] = track.contentUri();
+            thumbnails[index] = track.albumArtUri();
+            durations[index] = track.durationMs();
+        }
+        intent.putExtra(EXTRA_TRACK_IDS, ids);
+        intent.putExtra(EXTRA_ONLINE_TITLES, titles);
+        intent.putExtra(EXTRA_ONLINE_ARTISTS, artists);
+        intent.putExtra(EXTRA_ONLINE_ALBUMS, albums);
+        intent.putExtra(EXTRA_ONLINE_URLS, urls);
+        intent.putExtra(EXTRA_ONLINE_THUMBNAILS, thumbnails);
+        intent.putExtra(EXTRA_ONLINE_DURATIONS, durations);
         intent.putExtra(EXTRA_START_INDEX, Math.max(0, startIndex));
         return intent;
     }
@@ -308,6 +355,8 @@ public final class PlaybackService extends Service {
         String action = intent == null ? ACTION_TOGGLE : intent.getAction();
         if (ACTION_PLAY_QUEUE.equals(action)) {
             loadQueueAsync(intent);
+        } else if (ACTION_PLAY_ONLINE_QUEUE.equals(action)) {
+            loadOnlineQueue(intent);
         } else if (ACTION_PLAY.equals(action)) {
             play();
         } else if (ACTION_PAUSE.equals(action)) {
@@ -360,6 +409,7 @@ public final class PlaybackService extends Service {
     @Override
     public void onDestroy() {
         queueExecutor.shutdownNow();
+        artworkExecutor.shutdownNow();
         mainHandler.removeCallbacks(stateTick);
         mainHandler.removeCallbacks(sleepTimerRunnable);
         unregisterNoisyAudioReceiver();
@@ -403,6 +453,65 @@ public final class PlaybackService extends Service {
             }
             mainHandler.post(() -> finishQueueLoad(version, loadedTracks, startIndex));
         });
+    }
+
+    private void loadOnlineQueue(Intent intent) {
+        int version = ++queueLoadVersion;
+        long[] ids = intent.getLongArrayExtra(EXTRA_TRACK_IDS);
+        String[] titles = intent.getStringArrayExtra(EXTRA_ONLINE_TITLES);
+        String[] artists = intent.getStringArrayExtra(EXTRA_ONLINE_ARTISTS);
+        String[] albums = intent.getStringArrayExtra(EXTRA_ONLINE_ALBUMS);
+        String[] urls = intent.getStringArrayExtra(EXTRA_ONLINE_URLS);
+        String[] thumbnails = intent.getStringArrayExtra(EXTRA_ONLINE_THUMBNAILS);
+        long[] durations = intent.getLongArrayExtra(EXTRA_ONLINE_DURATIONS);
+        int count = urls == null ? 0 : urls.length;
+        int startIndex = Math.max(0, intent.getIntExtra(EXTRA_START_INDEX, 0));
+
+        failedTrackSkips = 0;
+        errorStatus = null;
+        mixTitle = safeExtra(intent, EXTRA_MIX_TITLE, "스트림");
+        mixSubtitle = safeExtra(intent, EXTRA_MIX_SUBTITLE, "온라인 재생");
+        shuffleEnabled = intent.getBooleanExtra(EXTRA_SHUFFLE_ENABLED, false);
+        repeatMode = REPEAT_OFF;
+        preparing = true;
+        playing = false;
+        startWhenPrepared = true;
+        releasePlayer();
+        abandonAudioFocus();
+        updateTransportState();
+        showNotification();
+        broadcastState();
+
+        ArrayList<DeviceAudioTrack> loadedTracks = new ArrayList<>();
+        for (int index = 0; index < count; index++) {
+            String url = safeArrayValue(urls, index);
+            if (url.trim().isEmpty()) {
+                continue;
+            }
+            long id = ids != null && index < ids.length ? ids[index] : remoteId(url);
+            String title = safeArrayValue(titles, index);
+            String artist = safeArrayValue(artists, index);
+            String album = safeArrayValue(albums, index);
+            String thumbnail = safeArrayValue(thumbnails, index);
+            long duration = durations != null && index < durations.length ? Math.max(0L, durations[index]) : 0L;
+            loadedTracks.add(new DeviceAudioTrack(
+                    id,
+                    title.isEmpty() ? "온라인 스트림" : title,
+                    artist.isEmpty() ? mixTitle : artist,
+                    album.isEmpty() ? mixTitle : album,
+                    title.isEmpty() ? "온라인 스트림" : title,
+                    "온라인 스트림",
+                    url,
+                    thumbnail,
+                    0L,
+                    0,
+                    System.currentTimeMillis(),
+                    duration,
+                    0L,
+                    artist
+            ));
+        }
+        finishQueueLoad(version, loadedTracks, startIndex);
     }
 
     private void finishQueueLoad(int version, List<DeviceAudioTrack> loadedTracks, int startIndex) {
@@ -547,10 +656,46 @@ public final class PlaybackService extends Service {
 
         DeviceAudioTrack track = currentTrack();
         persistPlaybackSnapshot();
+        if (isYouTubeWatchSource(track.contentUri())) {
+            resolveOnlineAndPrepare(track, version);
+            return;
+        }
+        prepareResolvedSource(track, track.contentUri(), version);
+    }
+
+    private void resolveOnlineAndPrepare(DeviceAudioTrack track, int version) {
+        queueExecutor.execute(() -> {
+            OnlineStreamResolver.ResolvedStream resolved;
+            try {
+                resolved = OnlineStreamResolver.resolve(this, track.contentUri());
+                if (resolved.streamUrl().trim().isEmpty()) {
+                    throw new IllegalStateException("온라인 스트림 URL이 비어 있습니다.");
+                }
+            } catch (Exception exception) {
+                mainHandler.post(() -> {
+                    if (version == playbackVersion) {
+                        handlePlaybackError("온라인 스트림 준비 실패: " + track.title());
+                    }
+                });
+                return;
+            }
+            mainHandler.post(() -> {
+                if (version == playbackVersion) {
+                    prepareResolvedSource(track, resolved.streamUrl(), version);
+                }
+            });
+        });
+    }
+
+    private void prepareResolvedSource(DeviceAudioTrack track, String sourceUri, int version) {
         try {
             MediaPlayer player = new MediaPlayer();
             player.setAudioAttributes(audioAttributes());
-            player.setDataSource(this, Uri.parse(track.contentUri()));
+            if (isHttpUri(sourceUri)) {
+                player.setDataSource(sourceUri);
+            } else {
+                player.setDataSource(this, Uri.parse(sourceUri));
+            }
             player.setOnPreparedListener(prepared -> {
                 if (version != playbackVersion) {
                     prepared.release();
@@ -1448,6 +1593,13 @@ public final class PlaybackService extends Service {
         if (artworkUri.trim().isEmpty()) {
             return null;
         }
+        if (isHttpUri(artworkUri)) {
+            if (artworkUri.equals(cachedArtworkUri)) {
+                return cachedArtwork;
+            }
+            requestRemoteArtwork(artworkUri);
+            return null;
+        }
         if (artworkUri.equals(cachedArtworkUri)) {
             return cachedArtwork;
         }
@@ -1472,6 +1624,57 @@ public final class PlaybackService extends Service {
             return Bitmap.createScaledBitmap(bitmap, width, height, true);
         } catch (Exception exception) {
             return null;
+        }
+    }
+
+    private void requestRemoteArtwork(String artworkUri) {
+        if (artworkUri == null || artworkUri.trim().isEmpty() || artworkUri.equals(loadingArtworkUri)) {
+            return;
+        }
+        cachedArtworkUri = artworkUri;
+        cachedArtwork = null;
+        loadingArtworkUri = artworkUri;
+        artworkExecutor.execute(() -> {
+            Bitmap bitmap = loadRemoteArtworkBitmap(artworkUri);
+            mainHandler.post(() -> {
+                if (!artworkUri.equals(cachedArtworkUri)) {
+                    return;
+                }
+                cachedArtwork = bitmap;
+                loadingArtworkUri = "";
+                updateTransportState();
+                showNotification();
+            });
+        });
+    }
+
+    private Bitmap loadRemoteArtworkBitmap(String artworkUri) {
+        HttpURLConnection connection = null;
+        try {
+            connection = (HttpURLConnection) new URL(artworkUri).openConnection();
+            connection.setConnectTimeout(4500);
+            connection.setReadTimeout(6500);
+            connection.setInstanceFollowRedirects(true);
+            try (InputStream stream = connection.getInputStream()) {
+                Bitmap bitmap = BitmapFactory.decodeStream(stream);
+                if (bitmap == null) {
+                    return null;
+                }
+                int maxDimension = Math.max(bitmap.getWidth(), bitmap.getHeight());
+                if (maxDimension <= 768) {
+                    return bitmap;
+                }
+                float ratio = 768f / maxDimension;
+                int width = Math.max(1, Math.round(bitmap.getWidth() * ratio));
+                int height = Math.max(1, Math.round(bitmap.getHeight() * ratio));
+                return Bitmap.createScaledBitmap(bitmap, width, height, true);
+            }
+        } catch (Exception exception) {
+            return null;
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
         }
     }
 
@@ -1571,6 +1774,20 @@ public final class PlaybackService extends Service {
         return queue.get(queueIndex);
     }
 
+    private boolean isYouTubeWatchSource(String sourceUri) {
+        String value = sourceUri == null ? "" : sourceUri.trim().toLowerCase();
+        return value.startsWith("http")
+                && (value.contains("youtube.com/")
+                || value.contains("youtu.be/")
+                || value.contains("music.youtube.com/")
+                || value.contains("m.youtube.com/"));
+    }
+
+    private boolean isHttpUri(String sourceUri) {
+        String value = sourceUri == null ? "" : sourceUri.trim().toLowerCase();
+        return value.startsWith("http://") || value.startsWith("https://");
+    }
+
     private AudioAttributes audioAttributes() {
         return new AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -1596,6 +1813,22 @@ public final class PlaybackService extends Service {
     private static String safeExtra(Intent intent, String key, String fallback) {
         String value = intent.getStringExtra(key);
         return value == null || value.trim().isEmpty() ? fallback : value.trim();
+    }
+
+    private static String safeArrayValue(String[] values, int index) {
+        if (values == null || index < 0 || index >= values.length || values[index] == null) {
+            return "";
+        }
+        return values[index].trim();
+    }
+
+    private static long remoteId(String value) {
+        String key = value == null ? "" : value.trim();
+        long hash = 1125899906842597L;
+        for (int index = 0; index < key.length(); index++) {
+            hash = 31L * hash + key.charAt(index);
+        }
+        return hash == Long.MIN_VALUE ? -1L : -Math.abs(hash);
     }
 
     private static String valueOrDefault(String value, String fallback) {

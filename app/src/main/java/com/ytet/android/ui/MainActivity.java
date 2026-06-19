@@ -89,6 +89,10 @@ import com.ytet.android.library.UserPlaylists;
 import com.ytet.android.playback.PlaybackService;
 import com.ytet.android.playback.PlaybackStats;
 import com.ytet.android.stream.MusicStation;
+import com.ytet.android.stream.OnlineStreamCatalog;
+import com.ytet.android.stream.OnlineStreamClient;
+import com.ytet.android.stream.OnlineStreamSection;
+import com.ytet.android.stream.OnlineStreamVideo;
 import com.ytet.android.stream.StationCatalog;
 import com.ytet.android.update.UpdateChecker;
 import com.ytet.android.update.UpdateApkProvider;
@@ -104,6 +108,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.io.File;
 import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutorService;
 
@@ -147,6 +153,8 @@ public final class MainActivity extends Activity {
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService libraryExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService streamExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService imageExecutor = Executors.newFixedThreadPool(3);
     private final ExecutorService updateExecutor = Executors.newSingleThreadExecutor();
     private final DeviceMusicLibrary deviceMusicLibrary = new DeviceMusicLibrary();
     private final UpdateChecker updateChecker = new UpdateChecker(BuildConfig.UPDATE_CHANNEL);
@@ -275,12 +283,16 @@ public final class MainActivity extends Activity {
 
     private List<DeviceAudioTrack> libraryTracks = new ArrayList<>();
     private List<DeviceAudioTrack> homeTracks = new ArrayList<>();
+    private List<OnlineStreamSection> streamSections = new ArrayList<>();
     private boolean libraryLoaded;
     private boolean libraryLoading;
     private String libraryStatus = "기기 음악 권한을 허용하면 앨범과 아티스트를 정리합니다.";
     private boolean homeLoaded;
     private boolean homeLoading;
     private String homeStatus = "보관함 음악을 스캔하면 추천 믹스가 표시됩니다.";
+    private boolean streamLoaded;
+    private boolean streamLoading;
+    private String streamLoadStatus = "온라인 추천 채널을 불러옵니다.";
     private LibraryFilter libraryFilter = LibraryFilter.ALL;
     private LibrarySort librarySort = LibrarySort.NEWEST;
     private String librarySearchQuery = "";
@@ -549,6 +561,8 @@ public final class MainActivity extends Activity {
         unregisterBackNavigationCallback();
         mainHandler.removeCallbacks(librarySearchCommit);
         libraryExecutor.shutdownNow();
+        streamExecutor.shutdownNow();
+        imageExecutor.shutdownNow();
         updateExecutor.shutdownNow();
         super.onDestroy();
     }
@@ -669,10 +683,8 @@ public final class MainActivity extends Activity {
         }
         if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
             startLibraryRefresh(true);
-            startHomeRefresh(true);
         } else {
             libraryStatus = "기기 음악을 관리하려면 오디오 읽기 권한이 필요합니다.";
-            homeStatus = libraryStatus;
             renderLibraryDependentTabs();
         }
     }
@@ -855,7 +867,7 @@ public final class MainActivity extends Activity {
         tabs.setPadding(dp(10), dp(2), dp(10), dp(6));
         tabs.setBackgroundColor(Color.TRANSPARENT);
 
-        homeTabButton = tabButton("홈", Tab.HOME, R.drawable.ic_tab_home_outline, R.drawable.ic_tab_home_filled);
+        homeTabButton = tabButton("스트림", Tab.HOME, R.drawable.ic_tab_stream_outline, R.drawable.ic_tab_stream_filled);
         libraryTabButton = tabButton("내 음악", Tab.LIBRARY, R.drawable.ic_tab_library_outline, R.drawable.ic_tab_library_filled);
         extractorTabButton = tabButton("추출기", Tab.EXTRACTOR, R.drawable.ic_tab_extract_outline, R.drawable.ic_tab_extract_filled);
         tabs.addView(homeTabButton.root, tabParams());
@@ -1118,53 +1130,85 @@ public final class MainActivity extends Activity {
 
     private View buildHomeTab() {
         LinearLayout root = screenRoot();
-        if (!hasAudioPermission()) {
-            LinearLayout permission = topAlignedPanel();
-            permission.addView(label("오디오 권한 필요"), marginBottom(8));
-            permission.addView(muted("홈 추천 믹스는 YTET 보관함 음악 메타데이터와 폴더를 읽은 뒤 생성됩니다.", 14), marginBottom(14));
-            Button request = primaryButton("권한 허용");
-            request.setOnClickListener(view -> requestAudioPermission());
-            permission.addView(request, matchWrap());
-            root.addView(permission, marginBottom(18));
+        if (!streamLoaded && !streamLoading) {
+            startStreamRefresh(false);
+        }
+
+        root.addView(title("스트림"), marginBottom(6));
+        root.addView(muted("온라인 추천 채널에서 매번 다른 플레이리스트 영상을 불러옵니다.", 13), marginBottom(18));
+        if (streamLoading && streamSections.isEmpty()) {
+            LinearLayout loading = panel();
+            loading.addView(label("추천을 불러오는 중"), marginBottom(8));
+            loading.addView(muted("네트워크 상태에 따라 잠시 걸릴 수 있습니다.", 13), matchWrap());
+            root.addView(loading, marginBottom(18));
             return root;
         }
-
-        if (!homeLoaded && !homeLoading) {
-            startHomeRefresh(false);
+        if (!streamLoadStatus.trim().isEmpty()) {
+            root.addView(muted(streamLoadStatus, 13), marginBottom(14));
         }
-
-        LinearLayout hero = topAlignedPanel();
-        hero.addView(label("내 음악 바로 듣기"), marginBottom(8));
-        if (!homeStatus.trim().isEmpty()) {
-            hero.addView(text(homeStatus, 15, R.color.ytet_text, false), marginBottom(12));
-        }
-        hero.addView(muted(homeSummary(), 13), marginBottom(14));
-        Button primaryPlay = primaryButton("보관함 추천 재생");
-        primaryPlay.setEnabled(!homeTracks.isEmpty());
-        primaryPlay.setOnClickListener(view -> playStation(firstHomeStation(), homeTracks));
-        hero.addView(primaryPlay, matchWrap());
-        root.addView(hero, marginBottom(24));
-
-        root.addView(sectionTitle("추천 믹스"), marginBottom(10));
-        List<MusicStation> stations = StationCatalog.recommendedStations(homeTracks);
-        if (stations.isEmpty()) {
+        if (streamSections.isEmpty()) {
             LinearLayout empty = panel();
-            empty.addView(label("추천할 음악이 없습니다."), marginBottom(8));
-            empty.addView(muted("추출한 음원이 " + DefaultMediaPaths.displayPath(MediaType.AUDIO)
-                    + "에 저장되면 홈 추천 스테이션에 반영됩니다.", 13), matchWrap());
+            empty.addView(label("표시할 스트림이 없습니다."), marginBottom(8));
+            empty.addView(muted("온라인 상태에서 다시 열면 추천 채널을 불러옵니다.", 13), matchWrap());
             root.addView(empty, marginBottom(18));
             return root;
         }
-        HorizontalScrollView shelf = new HorizontalScrollView(this);
-        shelf.setHorizontalScrollBarEnabled(false);
+        for (OnlineStreamSection section : streamSections) {
+            root.addView(streamSectionView(section), marginBottom(18));
+        }
+        return root;
+    }
+
+    private View streamSectionView(OnlineStreamSection section) {
+        LinearLayout panel = panel();
+        panel.setPadding(dp(12), dp(12), dp(12), dp(12));
+
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.addView(onlineImageView(section.avatarUrl(), section.channelTitle(), 44, 22), marginRight(12, dp(44), dp(44)));
+
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        TextView title = text(section.channelTitle(), 17, R.color.ytet_text, true);
+        title.setSingleLine(true);
+        title.setEllipsize(TextUtils.TruncateAt.END);
+        copy.addView(title, marginBottom(2));
+        copy.addView(muted("YouTube 추천 플레이리스트", 12), matchWrap());
+        header.addView(copy, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        panel.addView(header, marginBottom(12));
+
+        List<OnlineStreamVideo> videos = section.videos();
+        for (int index = 0; index < videos.size(); index++) {
+            panel.addView(streamVideoRow(section, videos.get(index), index), marginBottom(index == videos.size() - 1 ? 0 : 8));
+        }
+        return panel;
+    }
+
+    private View streamVideoRow(OnlineStreamSection section, OnlineStreamVideo video, int index) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
-        for (MusicStation station : stations) {
-            row.addView(stationCard(station, homeTracks), marginRight(12, dp(184), LinearLayout.LayoutParams.WRAP_CONTENT));
-        }
-        shelf.addView(row, matchWrap());
-        root.addView(shelf, marginBottom(24));
-        return root;
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(8), dp(8), dp(8), dp(8));
+        row.setBackground(rounded(color(R.color.ytet_panel_alt), 8));
+        row.setOnClickListener(view -> playOnlineStream(section, index));
+
+        LinearLayout.LayoutParams thumbParams = new LinearLayout.LayoutParams(dp(102), dp(58));
+        thumbParams.setMargins(0, 0, dp(12), 0);
+        row.addView(onlineImageView(video.thumbnailUrl(), video.title(), 102, 8), thumbParams);
+
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        TextView title = text(video.title(), 14, R.color.ytet_text, true);
+        title.setMaxLines(2);
+        title.setEllipsize(TextUtils.TruncateAt.END);
+        copy.addView(title, marginBottom(4));
+        TextView meta = muted(video.channelTitle(), 12);
+        meta.setSingleLine(true);
+        meta.setEllipsize(TextUtils.TruncateAt.END);
+        copy.addView(meta, matchWrap());
+        row.addView(copy, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        return row;
     }
 
     private View stationCard(MusicStation station, List<DeviceAudioTrack> sourceTracks) {
@@ -3746,6 +3790,9 @@ public final class MainActivity extends Activity {
 
     private View trackCoverView(DeviceAudioTrack track) {
         if (track != null && track.albumArtUri() != null && !track.albumArtUri().trim().isEmpty()) {
+            if (isHttpUrl(track.albumArtUri())) {
+                return onlineImageView(track.albumArtUri(), track.title(), 58, 8);
+            }
             ImageView image = new ImageView(this);
             image.setBackground(rounded(color(R.color.ytet_panel_alt), 8));
             image.setScaleType(ImageView.ScaleType.CENTER_CROP);
@@ -3756,6 +3803,87 @@ public final class MainActivity extends Activity {
         placeholder.setGravity(Gravity.CENTER);
         placeholder.setBackground(rounded(color(R.color.ytet_accent_dark), 8));
         return placeholder;
+    }
+
+    private View onlineImageView(String imageUrl, String fallbackText, int sizeDp, int radiusDp) {
+        FrameLayout frame = new FrameLayout(this);
+        frame.setBackground(rounded(color(R.color.ytet_panel_alt), radiusDp));
+        TextView placeholder = text(initialsForText(fallbackText), Math.max(11, Math.min(22, sizeDp / 3)), android.R.color.white, true);
+        placeholder.setGravity(Gravity.CENTER);
+        placeholder.setBackground(rounded(color(R.color.ytet_accent_dark), radiusDp));
+        frame.addView(placeholder, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+        ));
+        if (!isHttpUrl(imageUrl)) {
+            return frame;
+        }
+        ImageView image = new ImageView(this);
+        image.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        image.setAlpha(0f);
+        image.setTag(imageUrl.trim());
+        frame.addView(image, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+        ));
+        loadRemoteImage(image, imageUrl.trim());
+        return frame;
+    }
+
+    private void loadRemoteImage(ImageView target, String imageUrl) {
+        imageExecutor.execute(() -> {
+            Bitmap bitmap = loadRemoteBitmap(imageUrl);
+            runOnUiThread(() -> {
+                if (bitmap == null || target == null || !TextUtils.equals(String.valueOf(target.getTag()), imageUrl)) {
+                    return;
+                }
+                target.setImageBitmap(bitmap);
+                target.animate().alpha(1f).setDuration(180L).start();
+            });
+        });
+    }
+
+    private Bitmap loadRemoteBitmap(String imageUrl) {
+        HttpURLConnection connection = null;
+        try {
+            connection = (HttpURLConnection) new URL(imageUrl).openConnection();
+            connection.setConnectTimeout(4500);
+            connection.setReadTimeout(6500);
+            connection.setInstanceFollowRedirects(true);
+            try (InputStream stream = connection.getInputStream()) {
+                Bitmap bitmap = BitmapFactory.decodeStream(stream);
+                if (bitmap == null) {
+                    return null;
+                }
+                int maxDimension = Math.max(bitmap.getWidth(), bitmap.getHeight());
+                if (maxDimension <= 640) {
+                    return bitmap;
+                }
+                float ratio = 640f / maxDimension;
+                int width = Math.max(1, Math.round(bitmap.getWidth() * ratio));
+                int height = Math.max(1, Math.round(bitmap.getHeight() * ratio));
+                return Bitmap.createScaledBitmap(bitmap, width, height, true);
+            }
+        } catch (Exception exception) {
+            return null;
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
+    }
+
+    private String initialsForText(String value) {
+        String clean = value == null ? "" : value.trim();
+        if (clean.isEmpty()) {
+            return "YT";
+        }
+        return clean.substring(0, Math.min(2, clean.length())).toUpperCase(Locale.ROOT);
+    }
+
+    private boolean isHttpUrl(String value) {
+        String clean = value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+        return clean.startsWith("http://") || clean.startsWith("https://");
     }
 
     private String trackInitials(DeviceAudioTrack track) {
@@ -4434,6 +4562,67 @@ public final class MainActivity extends Activity {
         startPlayback(PlaybackService.playQueueIntent(this, station, queue));
     }
 
+    private void playOnlineStream(OnlineStreamSection section, int startIndex) {
+        List<DeviceAudioTrack> queue = onlineTracks(section);
+        if (queue.isEmpty()) {
+            toast("재생할 온라인 영상이 없습니다.");
+            return;
+        }
+        int safeIndex = Math.max(0, Math.min(startIndex, queue.size() - 1));
+        MusicStation station = new MusicStation(
+                "stream-" + section.channelId(),
+                section.channelTitle(),
+                "스트림",
+                "온라인 추천",
+                queue.size() + "개 영상",
+                MusicStation.MixType.TRACK,
+                "",
+                color(R.color.ytet_accent)
+        );
+        activeStation = station;
+        activeQueuePreview = new ArrayList<>(queue);
+        applyPreviewTrackTheme(queue.get(safeIndex));
+        playbackHasQueue = true;
+        playbackPlaying = false;
+        playbackPreparing = true;
+        playbackWillPlay = true;
+        playbackError = false;
+        playbackTitle = queue.get(safeIndex).title();
+        playbackMeta = queue.get(safeIndex).artist() + " · " + station.title();
+        setStreamingStatus("온라인 스트림 준비 중: " + queue.get(safeIndex).title());
+        updateNowPlayingBar();
+        startPlayback(PlaybackService.playOnlineQueueIntent(this, station, queue, safeIndex));
+    }
+
+    private List<DeviceAudioTrack> onlineTracks(OnlineStreamSection section) {
+        List<DeviceAudioTrack> tracks = new ArrayList<>();
+        if (section == null) {
+            return tracks;
+        }
+        for (OnlineStreamVideo video : section.videos()) {
+            if (video.watchUrl().trim().isEmpty()) {
+                continue;
+            }
+            tracks.add(new DeviceAudioTrack(
+                    video.playbackId(),
+                    video.title(),
+                    video.channelTitle(),
+                    section.channelTitle(),
+                    video.title(),
+                    "온라인 스트림",
+                    video.watchUrl(),
+                    video.thumbnailUrl(),
+                    0L,
+                    0,
+                    System.currentTimeMillis(),
+                    video.durationMs(),
+                    0L,
+                    video.channelTitle()
+            ));
+        }
+        return tracks;
+    }
+
     private void playTrack(DeviceAudioTrack track) {
         if (track == null) {
             return;
@@ -4774,7 +4963,8 @@ public final class MainActivity extends Activity {
 
     private void startPlayback(Intent intent) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-                && PlaybackService.ACTION_PLAY_QUEUE.equals(intent.getAction())) {
+                && (PlaybackService.ACTION_PLAY_QUEUE.equals(intent.getAction())
+                || PlaybackService.ACTION_PLAY_ONLINE_QUEUE.equals(intent.getAction()))) {
             startForegroundService(intent);
         } else {
             startService(intent);
@@ -5014,6 +5204,9 @@ public final class MainActivity extends Activity {
 
     private View nowPlayingCoverView(boolean idle, String artworkUri, String initials, int placeholderColor) {
         if (!idle && artworkUri != null && !artworkUri.trim().isEmpty()) {
+            if (isHttpUrl(artworkUri)) {
+                return onlineImageView(artworkUri, initials, 44, 8);
+            }
             ImageView image = new ImageView(this);
             image.setBackground(rounded(color(R.color.ytet_panel_alt), 8));
             image.setScaleType(ImageView.ScaleType.CENTER_CROP);
@@ -6607,6 +6800,46 @@ public final class MainActivity extends Activity {
                     homeTracks = new ArrayList<>();
                     homeStatus = "보관함 스캔 실패: " + exception.getMessage();
                     renderLibraryDependentTabs();
+                });
+            }
+        });
+    }
+
+    private void startStreamRefresh(boolean renderImmediately) {
+        if (streamLoading) {
+            return;
+        }
+        streamLoading = true;
+        streamLoadStatus = "";
+        if (renderImmediately && currentTab == Tab.HOME) {
+            renderCurrentTab();
+        }
+        streamExecutor.execute(() -> {
+            try {
+                List<OnlineStreamSection> sections = OnlineStreamClient.loadSections(
+                        this,
+                        OnlineStreamCatalog.defaultChannels(),
+                        3
+                );
+                runOnUiThread(() -> {
+                    streamSections = sections;
+                    streamLoaded = true;
+                    streamLoading = false;
+                    streamLoadStatus = sections.isEmpty()
+                            ? "온라인 추천을 불러오지 못했습니다."
+                            : "";
+                    if (currentTab == Tab.HOME) {
+                        renderCurrentTab();
+                    }
+                });
+            } catch (Exception exception) {
+                runOnUiThread(() -> {
+                    streamLoaded = true;
+                    streamLoading = false;
+                    streamLoadStatus = "온라인 추천을 불러오지 못했습니다: " + safeMessage(exception);
+                    if (currentTab == Tab.HOME) {
+                        renderCurrentTab();
+                    }
                 });
             }
         });
