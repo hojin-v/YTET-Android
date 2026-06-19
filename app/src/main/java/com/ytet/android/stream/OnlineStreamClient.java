@@ -44,26 +44,14 @@ public final class OnlineStreamClient {
             List<OnlineStreamVideo> videos = new ArrayList<>();
             if (videosJson != null) {
                 for (int videoIndex = 0; videoIndex < videosJson.length(); videoIndex++) {
-                    JSONObject video = videosJson.optJSONObject(videoIndex);
-                    if (video == null) {
-                        continue;
+                    OnlineStreamVideo video = parseVideo(
+                            videosJson.optJSONObject(videoIndex),
+                            section.optString("title", ""),
+                            videoIndex
+                    );
+                    if (video != null) {
+                        videos.add(video);
                     }
-                    String url = video.optString("url", "");
-                    if (url.trim().isEmpty()) {
-                        continue;
-                    }
-                    videos.add(new OnlineStreamVideo(
-                            video.optString("id", ""),
-                            video.optString("title", ""),
-                            video.optString("channel_title", section.optString("title", "")),
-                            url,
-                            video.optString("thumbnail", ""),
-                            Math.max(0L, video.optLong("duration", 0L)) * 1000L,
-                            Math.max(0L, video.optLong("view_count", 0L)),
-                            Math.max(0L, video.optLong("published", 0L)),
-                            Math.max(0, video.optInt("source_index", videoIndex)),
-                            Math.max(0, video.optInt("popular_rank", 0))
-                    ));
                 }
             }
             if (videos.isEmpty()) {
@@ -78,6 +66,59 @@ public final class OnlineStreamClient {
             ));
         }
         return result;
+    }
+
+    public static List<OnlineStreamVideo> enrichVideos(Context context, List<OnlineStreamVideo> videos) throws Exception {
+        ensurePython(context);
+        JSONArray request = new JSONArray();
+        for (OnlineStreamVideo video : videos == null ? new ArrayList<OnlineStreamVideo>() : videos) {
+            JSONObject item = new JSONObject();
+            item.put("id", video.id());
+            item.put("title", video.title());
+            item.put("channel_title", video.channelTitle());
+            item.put("url", video.watchUrl());
+            item.put("thumbnail", video.thumbnailUrl());
+            item.put("duration", Math.max(0L, video.durationMs() / 1000L));
+            item.put("view_count", video.viewCount());
+            item.put("published", video.publishedRank());
+            item.put("source_index", video.sourceIndex());
+            item.put("popular_rank", video.popularRank());
+            request.put(item);
+        }
+
+        PyObject module = Python.getInstance().getModule("ytet_ydl");
+        String json = module.callAttr("enrich_stream_videos", request.toString()).toString();
+        JSONArray videosJson = new JSONArray(json);
+        List<OnlineStreamVideo> result = new ArrayList<>();
+        for (int videoIndex = 0; videoIndex < videosJson.length(); videoIndex++) {
+            OnlineStreamVideo video = parseVideo(videosJson.optJSONObject(videoIndex), "", videoIndex);
+            if (video != null) {
+                result.add(video);
+            }
+        }
+        return result;
+    }
+
+    private static OnlineStreamVideo parseVideo(JSONObject video, String fallbackChannelTitle, int fallbackIndex) {
+        if (video == null) {
+            return null;
+        }
+        String url = video.optString("url", "");
+        if (url.trim().isEmpty()) {
+            return null;
+        }
+        return new OnlineStreamVideo(
+                video.optString("id", ""),
+                video.optString("title", ""),
+                video.optString("channel_title", fallbackChannelTitle),
+                url,
+                video.optString("thumbnail", ""),
+                Math.max(0L, video.optLong("duration", 0L)) * 1000L,
+                Math.max(0L, video.optLong("view_count", 0L)),
+                Math.max(0L, video.optLong("published", 0L)),
+                Math.max(0, video.optInt("source_index", fallbackIndex)),
+                Math.max(0, video.optInt("popular_rank", 0))
+        );
     }
 
     private static void ensurePython(Context context) {

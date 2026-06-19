@@ -77,7 +77,6 @@ def stream_channels(channels_json, per_channel=3):
             if not channel_url:
                 continue
             latest_info = None
-            popular_info = None
             last_error = None
             for candidate_url in stream_channel_candidate_urls(channel_url):
                 try:
@@ -86,34 +85,39 @@ def stream_channels(channels_json, per_channel=3):
                 except Exception as error:
                     last_error = error
                     continue
-            for candidate_url in stream_channel_candidate_urls(channel_url, popular=True):
-                try:
-                    popular_info = ydl.extract_info(candidate_url, download=False)
-                    break
-                except Exception as error:
-                    last_error = error
-                    continue
-            if latest_info is None and popular_info is None:
+            if latest_info is None:
                 logger.warning(f"스트림 채널 조회 실패: {channel_url} / {last_error}")
                 continue
             try:
-                latest_videos = stream_channel_videos(latest_info, channel, per_channel, "latest")
-                popular_videos = stream_channel_videos(popular_info, channel, per_channel, "popular")
-                videos = merge_stream_channel_videos(latest_videos, popular_videos, per_channel)
+                videos = stream_channel_videos(latest_info, channel, per_channel, "latest")
             except Exception as error:
                 logger.warning(f"스트림 채널 조회 실패: {channel_url} / {error}")
                 continue
             if not videos:
                 continue
-            info = latest_info or popular_info
             sections.append({
-                "id": str(channel.get("id") or info.get("id") or stable_text_id(channel_url)),
-                "title": stream_channel_title(info, channel),
+                "id": str(channel.get("id") or latest_info.get("id") or stable_text_id(channel_url)),
+                "title": stream_channel_title(latest_info, channel),
                 "url": channel_url,
-                "avatar": best_thumbnail(info),
+                "avatar": best_thumbnail(latest_info),
                 "videos": videos,
             })
     return json.dumps(sections, ensure_ascii=False)
+
+
+def enrich_stream_videos(videos_json):
+    videos = json.loads(videos_json or "[]")
+    logger = YtetLogger()
+    options = {
+        "cachedir": False,
+        "ignoreerrors": True,
+        "logger": logger,
+        "no_warnings": False,
+        "noplaylist": True,
+        "quiet": True,
+    }
+    with YoutubeDL(options) as ydl:
+        return json.dumps(enrich_stream_video_metadata(ydl, videos), ensure_ascii=False)
 
 
 def stream_channel_candidate_urls(channel_url, popular=False):
@@ -194,6 +198,45 @@ def merge_stream_channel_videos(latest_videos, popular_videos, per_channel):
         remember(copy)
 
     return merged[:per_channel * 2]
+
+
+def enrich_stream_video_metadata(ydl, videos):
+    enriched = []
+    for video in videos or []:
+        item = dict(video)
+        if stream_video_needs_metadata(item):
+            try:
+                info = ydl.extract_info(item.get("url"), download=False)
+                if isinstance(info, dict):
+                    apply_stream_video_metadata(item, info)
+            except Exception:
+                pass
+        enriched.append(item)
+    return enriched
+
+
+def stream_video_needs_metadata(item):
+    if not isinstance(item, dict):
+        return False
+    return as_int(item.get("view_count")) <= 0 or as_int(item.get("published")) <= 0
+
+
+def apply_stream_video_metadata(item, info):
+    view_count = stream_video_view_count(info)
+    if view_count > 0:
+        item["view_count"] = view_count
+    published = stream_video_published_rank(info)
+    if published > 0:
+        item["published"] = published
+    duration = as_int(info.get("duration"))
+    if duration > 0:
+        item["duration"] = duration
+    thumbnail = best_thumbnail(info)
+    if thumbnail:
+        item["thumbnail"] = thumbnail
+    video_id = str(info.get("id") or "").strip()
+    if video_id:
+        item["id"] = video_id
 
 
 def stream_video_key(item):

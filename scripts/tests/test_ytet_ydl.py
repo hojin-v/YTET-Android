@@ -356,6 +356,35 @@ class YtetYdlStreamCatalogTest(unittest.TestCase):
         self.assertEqual(5000, merged[0]["view_count"])
         self.assertEqual(1, merged[0]["popular_rank"])
 
+    def test_enrich_stream_video_metadata_fills_flat_playlist_fields(self):
+        class DetailYdl:
+            def extract_info(self, url, download=False):
+                return {
+                    "id": "abc",
+                    "duration": 180,
+                    "upload_date": "20260619",
+                    "view_count": 34567,
+                    "thumbnail": "https://example.test/thumb.jpg",
+                }
+
+        videos = [{
+            "id": "abc",
+            "url": "https://www.youtube.com/watch?v=abc",
+            "thumbnail": "",
+            "duration": 0,
+            "view_count": 0,
+            "published": 0,
+            "source_index": 0,
+            "popular_rank": 0,
+        }]
+
+        enriched = ytet_ydl.enrich_stream_video_metadata(DetailYdl(), videos)
+
+        self.assertEqual(34_567, enriched[0]["view_count"])
+        self.assertEqual(20260619, enriched[0]["published"])
+        self.assertEqual(180, enriched[0]["duration"])
+        self.assertEqual("https://example.test/thumb.jpg", enriched[0]["thumbnail"])
+
 
 def fake_video_info():
     return {

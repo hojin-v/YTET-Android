@@ -68,6 +68,7 @@ import android.widget.ImageView;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
+import android.widget.PopupMenu;
 import android.widget.RadioButton;
 import android.widget.RadioGroup;
 import android.widget.ScrollView;
@@ -103,11 +104,13 @@ import com.ytet.android.update.UpdateInfo;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.io.File;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
@@ -274,6 +277,7 @@ public final class MainActivity extends Activity {
     private String playbackFolder = "알 수 없는 폴더";
     private String playbackAlbumArtUri = "";
     private String playbackThemeAlbumArtUri = "";
+    private String playbackThemeLoadingUri = "";
     private int playbackThemeColor = 0xFF17181D;
     private String playbackMix = "로컬 음악";
     private long playbackDurationMs;
@@ -308,6 +312,7 @@ public final class MainActivity extends Activity {
     private List<OnlineStreamSection> streamSections = new ArrayList<>();
     private OnlineStreamSection focusedStreamSection;
     private StreamVideoSort streamVideoSort = StreamVideoSort.POPULAR;
+    private final Set<String> streamMetadataLoadingChannelIds = new HashSet<>();
     private boolean libraryLoaded;
     private boolean libraryLoading;
     private String libraryStatus = "기기 음악 권한을 허용하면 앨범과 아티스트를 정리합니다.";
@@ -1359,6 +1364,8 @@ public final class MainActivity extends Activity {
     }
 
     private void buildStreamSectionDetail(LinearLayout root, OnlineStreamSection section) {
+        ensureStreamSectionMetadata(section);
+
         LinearLayout top = new LinearLayout(this);
         top.setOrientation(LinearLayout.HORIZONTAL);
         top.setGravity(Gravity.CENTER_VERTICAL);
@@ -1383,9 +1390,14 @@ public final class MainActivity extends Activity {
         copy.addView(title, marginBottom(4));
         copy.addView(muted(section.videos().size() + "개 비디오", 12), matchWrap());
         hero.addView(copy, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        LinearLayout.LayoutParams sortParams = new LinearLayout.LayoutParams(dp(104), dp(44));
+        sortParams.setMargins(dp(12), 0, 0, 0);
+        hero.addView(streamSortDropdownButton(), sortParams);
         root.addView(hero, marginBottom(12));
 
-        root.addView(streamSortBar(), marginBottom(12));
+        if (streamMetadataLoadingChannelIds.contains(section.channelId())) {
+            root.addView(muted("조회수 기준 정렬 정보를 불러오는 중", 12), marginBottom(10));
+        }
 
         List<OnlineStreamVideo> videos = sortedStreamVideos(section);
         if (videos.isEmpty()) {
@@ -1401,27 +1413,86 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private View streamSortBar() {
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.addView(streamSortButton(StreamVideoSort.POPULAR), weightedButtonParams(8));
-        row.addView(streamSortButton(StreamVideoSort.LATEST), weightedButtonParams(8));
-        row.addView(streamSortButton(StreamVideoSort.OLDEST), weightedButtonParams(0));
-        return row;
+    private void ensureStreamSectionMetadata(OnlineStreamSection section) {
+        if (section == null
+                || streamSectionHasMetadata(section)
+                || streamMetadataLoadingChannelIds.contains(section.channelId())) {
+            return;
+        }
+        streamMetadataLoadingChannelIds.add(section.channelId());
+        List<OnlineStreamVideo> videos = section.videos();
+        streamExecutor.execute(() -> {
+            try {
+                List<OnlineStreamVideo> enriched = OnlineStreamClient.enrichVideos(this, videos);
+                runOnUiThread(() -> finishStreamSectionMetadataLoad(section, enriched));
+            } catch (Exception exception) {
+                runOnUiThread(() -> {
+                    streamMetadataLoadingChannelIds.remove(section.channelId());
+                    if (focusedStreamSection != null
+                            && TextUtils.equals(focusedStreamSection.channelId(), section.channelId())) {
+                        renderCurrentTab();
+                    }
+                });
+            }
+        });
     }
 
-    private Button streamSortButton(StreamVideoSort sort) {
-        Button button = sort == streamVideoSort ? primaryButton(sort.label) : secondaryButton(sort.label);
-        button.setTextSize(13);
-        button.setOnClickListener(view -> {
-            if (streamVideoSort == sort) {
-                return;
-            }
-            streamVideoSort = sort;
+    private void finishStreamSectionMetadataLoad(OnlineStreamSection section, List<OnlineStreamVideo> enriched) {
+        streamMetadataLoadingChannelIds.remove(section.channelId());
+        if (enriched == null || enriched.isEmpty()) {
+            return;
+        }
+        OnlineStreamSection updated = new OnlineStreamSection(
+                section.channelId(),
+                section.channelTitle(),
+                section.channelUrl(),
+                section.avatarUrl(),
+                enriched
+        );
+        List<OnlineStreamSection> updatedSections = new ArrayList<>();
+        for (OnlineStreamSection existing : streamSections) {
+            updatedSections.add(TextUtils.equals(existing.channelId(), section.channelId()) ? updated : existing);
+        }
+        streamSections = updatedSections;
+        if (focusedStreamSection != null
+                && TextUtils.equals(focusedStreamSection.channelId(), section.channelId())) {
+            focusedStreamSection = updated;
             renderCurrentTab();
-        });
+        }
+    }
+
+    private boolean streamSectionHasMetadata(OnlineStreamSection section) {
+        for (OnlineStreamVideo video : section.videos()) {
+            if (video.viewCount() > 0L || video.publishedRank() > 0L) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private View streamSortDropdownButton() {
+        Button button = secondaryButton(streamVideoSort.label + " ▾");
+        button.setTextSize(13);
+        button.setOnClickListener(this::showStreamSortMenu);
         return button;
+    }
+
+    private void showStreamSortMenu(View anchor) {
+        PopupMenu menu = new PopupMenu(this, anchor);
+        for (StreamVideoSort sort : StreamVideoSort.values()) {
+            menu.getMenu().add(0, sort.ordinal(), sort.ordinal(), sort.label);
+        }
+        menu.setOnMenuItemClickListener(item -> {
+            StreamVideoSort[] sorts = StreamVideoSort.values();
+            int index = item.getItemId();
+            if (index < 0 || index >= sorts.length || streamVideoSort == sorts[index]) {
+                return true;
+            }
+            streamVideoSort = sorts[index];
+            renderCurrentTab();
+            return true;
+        });
+        menu.show();
     }
 
     private List<OnlineStreamVideo> sortedStreamVideos(OnlineStreamSection section) {
@@ -5604,9 +5675,51 @@ public final class MainActivity extends Activity {
             return;
         }
         playbackThemeAlbumArtUri = artworkUri;
-        playbackThemeColor = artworkUri.isEmpty()
-                ? fallbackPlayerThemeColor(idle)
-                : readArtworkThemeColor(artworkUri);
+        playbackThemeLoadingUri = "";
+        if (artworkUri.isEmpty()) {
+            playbackThemeColor = fallbackPlayerThemeColor(idle);
+        } else if (isHttpUrl(artworkUri)) {
+            playbackThemeColor = fallbackPlayerThemeColor(false);
+            loadRemoteArtworkThemeColor(artworkUri);
+        } else {
+            playbackThemeColor = readArtworkThemeColor(artworkUri);
+        }
+    }
+
+    private void loadRemoteArtworkThemeColor(String artworkUri) {
+        playbackThemeLoadingUri = artworkUri;
+        imageExecutor.execute(() -> {
+            Bitmap bitmap = loadRemoteBitmap(artworkUri, 160);
+            int themeColor = bitmap == null
+                    ? fallbackPlayerThemeColor(false)
+                    : normalizeArtworkThemeColor(sampleArtworkColor(bitmap));
+            if (bitmap != null) {
+                bitmap.recycle();
+            }
+            runOnUiThread(() -> finishRemoteArtworkThemeColor(artworkUri, themeColor));
+        });
+    }
+
+    private void finishRemoteArtworkThemeColor(String artworkUri, int themeColor) {
+        if (!TextUtils.equals(playbackThemeLoadingUri, artworkUri)) {
+            return;
+        }
+        playbackThemeLoadingUri = "";
+        if (!TextUtils.equals(playbackThemeAlbumArtUri, artworkUri)
+                || !TextUtils.equals(valueOrDefault(playbackAlbumArtUri, ""), artworkUri)) {
+            return;
+        }
+        if (playbackThemeColor == themeColor) {
+            return;
+        }
+        playbackThemeColor = themeColor;
+        refreshPlaybackThemeSurfaces();
+    }
+
+    private void refreshPlaybackThemeSurfaces() {
+        updateNowPlayingBar();
+        updateExpandedPlayer();
+        updateQueueDialog();
     }
 
     private GradientDrawable nowPlayingBarBackground(boolean idle) {
@@ -6255,6 +6368,7 @@ public final class MainActivity extends Activity {
                 + "|" + playbackArtist
                 + "|" + playbackAlbum
                 + "|" + playbackAlbumArtUri
+                + "|" + playbackThemeColor
                 + "|" + playbackQueueIndex
                 + "|" + playbackQueueSize
                 + "|" + playbackPlaying
