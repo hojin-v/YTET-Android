@@ -8470,14 +8470,32 @@ public final class MainActivity extends Activity {
     }
 
     private final class PullRefreshRecyclerView extends RecyclerView {
+        private boolean pullCanceledChildGesture;
+
         PullRefreshRecyclerView(Context context) {
             super(context);
         }
 
         @Override
         public boolean dispatchTouchEvent(MotionEvent event) {
+            int action = event.getActionMasked();
             if (handleLibraryPullToRefresh(event)) {
+                if (!pullCanceledChildGesture && action != MotionEvent.ACTION_DOWN) {
+                    MotionEvent cancel = MotionEvent.obtain(event);
+                    cancel.setAction(MotionEvent.ACTION_CANCEL);
+                    super.dispatchTouchEvent(cancel);
+                    cancel.recycle();
+                    pullCanceledChildGesture = true;
+                }
+                if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                    pullCanceledChildGesture = false;
+                }
                 return true;
+            }
+            if (action == MotionEvent.ACTION_DOWN
+                    || action == MotionEvent.ACTION_UP
+                    || action == MotionEvent.ACTION_CANCEL) {
+                pullCanceledChildGesture = false;
             }
             return super.dispatchTouchEvent(event);
         }
