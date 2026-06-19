@@ -50,6 +50,7 @@ import android.view.VelocityTracker;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
+import android.view.ViewTreeObserver;
 import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowManager;
@@ -206,11 +207,12 @@ public final class MainActivity extends Activity {
     private QueueRecyclerAdapter queueRecyclerAdapter;
     private RecyclerView queueRecyclerView;
     private ItemTouchHelper queueItemTouchHelper;
-    private FrameLayout queueCurrentTrackContainer;
     private int queueDialogRenderedIndex = Integer.MIN_VALUE;
     private int queueDialogRenderedQueueSize = Integer.MIN_VALUE;
     private long queueDialogRenderedTrackId = Long.MIN_VALUE;
     private long queueDialogRenderedFingerprint = Long.MIN_VALUE;
+    private float playerQueueDragStartY;
+    private boolean playerQueueDragTriggered;
     private AlertDialog updateDialog;
     private OnBackInvokedCallback backInvokedCallback;
     private PlaybackSeekBarView expandedPlaybackSeekBar;
@@ -607,7 +609,7 @@ public final class MainActivity extends Activity {
 
     private boolean closeOpenDialogFromBack() {
         if (queueDialog != null && queueDialog.isShowing()) {
-            queueDialog.dismiss();
+            collapseOrDismissQueueDialog();
             return true;
         }
         if (playerDialog != null && playerDialog.isShowing()) {
@@ -5451,12 +5453,12 @@ public final class MainActivity extends Activity {
             window.setDecorFitsSystemWindows(false);
         }
         window.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS
-                | WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION);
-        window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS
-                | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                | WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION
                 | WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+        window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS
+                | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN);
         WindowManager.LayoutParams attributes = window.getAttributes();
-        attributes.dimAmount = 0.42f;
+        attributes.dimAmount = 0f;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             attributes.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
         }
@@ -6131,7 +6133,59 @@ public final class MainActivity extends Activity {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 layout.toolsHeight
         ));
+        content.addView(playerQueuePullHandle(), new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(58)
+        ));
         return frame;
+    }
+
+    private View playerQueuePullHandle() {
+        LinearLayout handleArea = new LinearLayout(this);
+        handleArea.setOrientation(LinearLayout.VERTICAL);
+        handleArea.setGravity(Gravity.CENTER);
+        handleArea.setPadding(0, dp(4), 0, dp(4));
+        handleArea.setClickable(true);
+        handleArea.setFocusable(true);
+
+        View handle = new View(this);
+        handle.setBackground(rounded(0x66FFFFFF, 3));
+        LinearLayout.LayoutParams handleParams = new LinearLayout.LayoutParams(dp(42), dp(4));
+        handleParams.setMargins(0, 0, 0, dp(12));
+        handleArea.addView(handle, handleParams);
+
+        TextView label = text("노래", 13, R.color.ytet_text, true);
+        label.setGravity(Gravity.CENTER);
+        handleArea.addView(label, matchWrap());
+
+        handleArea.setOnTouchListener((view, event) -> {
+            int action = event.getActionMasked();
+            if (action == MotionEvent.ACTION_DOWN) {
+                playerQueueDragStartY = event.getRawY();
+                playerQueueDragTriggered = false;
+                return true;
+            }
+            if (action == MotionEvent.ACTION_MOVE) {
+                if (!playerQueueDragTriggered && playerQueueDragStartY - event.getRawY() > dp(24)) {
+                    playerQueueDragTriggered = true;
+                    showQueueDialog();
+                }
+                return true;
+            }
+            if (action == MotionEvent.ACTION_UP) {
+                if (!playerQueueDragTriggered) {
+                    showQueueDialog();
+                }
+                playerQueueDragTriggered = false;
+                return true;
+            }
+            if (action == MotionEvent.ACTION_CANCEL) {
+                playerQueueDragTriggered = false;
+                return true;
+            }
+            return true;
+        });
+        return handleArea;
     }
 
     private View coverArtView() {
@@ -6271,17 +6325,6 @@ public final class MainActivity extends Activity {
         return queueTrackRow(track, index, false, true, null);
     }
 
-    private View queueCurrentTrackRow(DeviceAudioTrack track, int index) {
-        LinearLayout wrapper = new LinearLayout(this);
-        wrapper.setOrientation(LinearLayout.VERTICAL);
-        wrapper.setPadding(0, 0, 0, 0);
-        TextView label = muted("현재 곡", 12);
-        label.setGravity(Gravity.START);
-        wrapper.addView(label, marginBottom(6));
-        wrapper.addView(queueTrackRow(track, index, true, false, null), matchWrap());
-        return wrapper;
-    }
-
     private View queueTrackRow(
             DeviceAudioTrack track,
             int index,
@@ -6319,20 +6362,13 @@ public final class MainActivity extends Activity {
             drag.setPadding(dp(10), dp(10), dp(10), dp(10));
             drag.setOnTouchListener((button, event) -> {
                 int action = event.getActionMasked();
-                if (action == MotionEvent.ACTION_DOWN && queueItemTouchHelper != null) {
-                    if (queueSheetLayout != null) {
-                        queueSheetLayout.setQueueReordering(true);
-                        queueSheetLayout.requestDisallowInterceptTouchEvent(true);
-                    }
-                    if (queueRecyclerView != null) {
-                        queueRecyclerView.requestDisallowInterceptTouchEvent(true);
-                    }
+                if (action == MotionEvent.ACTION_DOWN
+                        && queueItemTouchHelper != null
+                        && dragHolder.getBindingAdapterPosition() != RecyclerView.NO_POSITION) {
+                    button.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
                     queueItemTouchHelper.startDrag(dragHolder);
-                    return true;
                 }
-                return action == MotionEvent.ACTION_MOVE
-                        || action == MotionEvent.ACTION_UP
-                        || action == MotionEvent.ACTION_CANCEL;
+                return false;
             });
             row.addView(drag, new LinearLayout.LayoutParams(dp(44), dp(48)));
         }
@@ -6504,6 +6540,12 @@ public final class MainActivity extends Activity {
     }
 
     private void showQueueDialog() {
+        if (queueDialog != null && queueDialog.isShowing()) {
+            if (queueSheetLayout != null) {
+                queueSheetLayout.setExpanded(false, true);
+            }
+            return;
+        }
         if (queueDialog == null) {
             queueDialog = new Dialog(this);
             queueDialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
@@ -6512,7 +6554,6 @@ public final class MainActivity extends Activity {
                 queueRecyclerAdapter = null;
                 queueRecyclerView = null;
                 queueItemTouchHelper = null;
-                queueCurrentTrackContainer = null;
                 queueDialogRenderedIndex = Integer.MIN_VALUE;
                 queueDialogRenderedQueueSize = Integer.MIN_VALUE;
                 queueDialogRenderedTrackId = Long.MIN_VALUE;
@@ -6523,8 +6564,38 @@ public final class MainActivity extends Activity {
         queueDialog.show();
         applyQueueWindow(queueDialog.getWindow());
         if (queueSheetLayout != null) {
-            queueSheetLayout.prepareCollapsed();
+            queueSheetLayout.showCollapsed();
         }
+    }
+
+    private void dismissQueueDialogAnimated() {
+        if (queueDialog == null || !queueDialog.isShowing()) {
+            return;
+        }
+        if (queueSheetLayout == null) {
+            queueDialog.dismiss();
+            return;
+        }
+        queueSheetLayout.dismissAnimated(() -> {
+            if (queueDialog != null && queueDialog.isShowing()) {
+                queueDialog.dismiss();
+            }
+        });
+    }
+
+    private void collapseOrDismissQueueDialog() {
+        if (queueDialog == null || !queueDialog.isShowing()) {
+            return;
+        }
+        if (queueSheetLayout == null) {
+            queueDialog.dismiss();
+            return;
+        }
+        queueSheetLayout.collapseOrDismissAnimated(() -> {
+            if (queueDialog != null && queueDialog.isShowing()) {
+                queueDialog.dismiss();
+            }
+        });
     }
 
     private void updateQueueDialog() {
@@ -6539,36 +6610,26 @@ public final class MainActivity extends Activity {
 
         LinearLayout sheet = new LinearLayout(this);
         sheet.setOrientation(LinearLayout.VERTICAL);
-        sheet.setPadding(dp(20), dp(12), dp(20), dp(18));
-        sheet.setBackground(roundedTop(color(R.color.ytet_background), 22));
+        sheet.setPadding(dp(20), dp(8), dp(20), dp(18));
+        sheet.setBackground(roundedTop(queueSheetBackgroundColor(), 20));
+        sheet.setTranslationY(getResources().getDisplayMetrics().heightPixels);
         queueSheetLayout.setSheet(sheet);
 
+        LinearLayout handleArea = new LinearLayout(this);
+        handleArea.setGravity(Gravity.CENTER);
+        handleArea.setPadding(0, dp(4), 0, dp(12));
+        handleArea.setClickable(true);
         View handle = new View(this);
         handle.setBackground(rounded(0x55FFFFFF, 3));
         LinearLayout.LayoutParams handleParams = new LinearLayout.LayoutParams(dp(42), dp(4));
-        handleParams.gravity = Gravity.CENTER_HORIZONTAL;
-        handleParams.setMargins(0, 0, 0, dp(12));
-        sheet.addView(handle, handleParams);
+        handleArea.addView(handle, handleParams);
+        sheet.addView(handleArea, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(28)
+        ));
+        queueSheetLayout.setDragHandle(handleArea);
 
-        LinearLayout top = new LinearLayout(this);
-        top.setOrientation(LinearLayout.HORIZONTAL);
-        top.setGravity(Gravity.CENTER_VERTICAL);
-        ImageButton close = playerIconButton(R.drawable.ic_keyboard_arrow_down, "재생목록 닫기", false, true);
-        close.setOnClickListener(view -> {
-            if (queueDialog != null) {
-                queueDialog.dismiss();
-            }
-        });
-        top.addView(close, new LinearLayout.LayoutParams(dp(44), dp(42)));
-        TextView title = text("재생목록", 17, R.color.ytet_text, true);
-        title.setGravity(Gravity.CENTER);
-        top.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        View spacer = new View(this);
-        top.addView(spacer, new LinearLayout.LayoutParams(dp(44), dp(42)));
-        sheet.addView(top, marginBottom(10));
-
-        queueCurrentTrackContainer = new FrameLayout(this);
-        sheet.addView(queueCurrentTrackContainer, marginBottom(10));
+        sheet.addView(queueHeaderRow(), marginBottom(12));
 
         RecyclerView list = new RecyclerView(this);
         queueRecyclerView = list;
@@ -6595,8 +6656,71 @@ public final class MainActivity extends Activity {
         return queueSheetLayout;
     }
 
+    private int queueSheetBackgroundColor() {
+        int base = playbackThemeColor == 0 ? color(R.color.ytet_background) : playbackThemeColor;
+        return blendColors(base, color(R.color.ytet_background), 0.58f);
+    }
+
+    private View queueHeaderRow() {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        TextView sourceLabel = muted("재생 중인 트랙 출처", 14);
+        sourceLabel.setSingleLine(true);
+        sourceLabel.setEllipsize(TextUtils.TruncateAt.END);
+        copy.addView(sourceLabel, marginBottom(4));
+        TextView source = text("노래", 16, R.color.ytet_text, true);
+        source.setSingleLine(true);
+        source.setEllipsize(TextUtils.TruncateAt.END);
+        copy.addView(source, matchWrap());
+        row.addView(copy, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        View save = queueSaveButton();
+        row.addView(save, new LinearLayout.LayoutParams(dp(112), dp(48)));
+        return row;
+    }
+
+    private View queueSaveButton() {
+        LinearLayout button = new LinearLayout(this);
+        button.setOrientation(LinearLayout.HORIZONTAL);
+        button.setGravity(Gravity.CENTER);
+        button.setPadding(dp(10), 0, dp(12), 0);
+        button.setClickable(true);
+        button.setFocusable(true);
+        button.setContentDescription("현재 재생목록 저장");
+        button.setBackground(rounded(0x33FFFFFF, 10));
+        boolean enabled = !activeQueuePreview.isEmpty();
+        button.setEnabled(enabled);
+        button.setAlpha(enabled ? 1f : 0.52f);
+
+        ImageView icon = new ImageView(this);
+        Drawable drawable = getDrawable(R.drawable.ic_playlist_save);
+        if (drawable != null) {
+            drawable = drawable.mutate();
+            drawable.setTint(color(R.color.ytet_text));
+            icon.setImageDrawable(drawable);
+        }
+        button.addView(icon, marginRight(8, dp(28), dp(28)));
+
+        TextView label = text("저장", 15, R.color.ytet_text, true);
+        label.setSingleLine(true);
+        button.addView(label, matchWrap());
+        button.setOnClickListener(view -> {
+            List<DeviceAudioTrack> tracks = cleanTrackList(activeQueuePreview);
+            if (tracks.isEmpty()) {
+                toast("저장할 재생목록이 없습니다.");
+                return;
+            }
+            showCreatePlaylistDialog(tracks);
+        });
+        return button;
+    }
+
     private void bindQueueDialogState(boolean forceScrollToCurrent) {
-        if (queueRecyclerAdapter == null || queueCurrentTrackContainer == null) {
+        if (queueRecyclerAdapter == null) {
             return;
         }
         List<DeviceAudioTrack> queueSnapshot = new ArrayList<>(activeQueuePreview);
@@ -6613,26 +6737,23 @@ public final class MainActivity extends Activity {
         if (!forceScrollToCurrent && !indexChanged) {
             return;
         }
-        queueCurrentTrackContainer.removeAllViews();
-        queueCurrentTrackContainer.addView(current == null
-                ? muted("현재 재생 중인 곡이 없습니다.", 14)
-                : queueCurrentTrackRow(current, currentIndex), new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT
-        ));
-        queueRecyclerAdapter.submitItems(buildQueueRecyclerItems(queueSnapshot, currentIndex), currentIndex);
+        queueRecyclerAdapter.submitItems(buildQueueRecyclerItems(queueSnapshot));
         queueDialogRenderedIndex = currentIndex;
         queueDialogRenderedQueueSize = queueSnapshot.size();
         queueDialogRenderedTrackId = currentId;
         queueDialogRenderedFingerprint = queueFingerprint;
         if ((forceScrollToCurrent || indexChanged) && queueRecyclerView != null) {
             int target = queueInitialScrollPosition(queueSnapshot, currentIndex);
-            queueRecyclerView.post(() -> {
-                RecyclerView.LayoutManager manager = queueRecyclerView.getLayoutManager();
+            RecyclerView list = queueRecyclerView;
+            list.post(() -> {
+                if (queueRecyclerView != list) {
+                    return;
+                }
+                RecyclerView.LayoutManager manager = list.getLayoutManager();
                 if (manager instanceof LinearLayoutManager) {
                     ((LinearLayoutManager) manager).scrollToPositionWithOffset(target, dp(2));
                 } else {
-                    queueRecyclerView.scrollToPosition(target);
+                    list.scrollToPosition(target);
                 }
             });
         }
@@ -6668,26 +6789,17 @@ public final class MainActivity extends Activity {
         if (queue == null || queue.size() <= 1 || currentIndex < 0) {
             return 0;
         }
-        if (currentIndex < queue.size() - 1) {
-            return currentIndex;
-        }
-        return Math.max(0, currentIndex - 1);
+        return currentIndex;
     }
 
-    private List<QueueListItem> buildQueueRecyclerItems(List<DeviceAudioTrack> queue, int currentIndex) {
+    private List<QueueListItem> buildQueueRecyclerItems(List<DeviceAudioTrack> queue) {
         List<QueueListItem> items = new ArrayList<>();
         if (queue == null || queue.isEmpty()) {
             items.add(QueueListItem.staticView(muted("재생목록을 불러오는 중입니다.", 14)));
             return items;
         }
         for (int index = 0; index < queue.size(); index++) {
-            if (index == currentIndex) {
-                continue;
-            }
-            items.add(QueueListItem.track(queue.get(index), index));
-        }
-        if (items.isEmpty()) {
-            items.add(QueueListItem.staticView(muted("다른 곡이 없습니다.", 14)));
+            items.add(QueueListItem.track(queue.get(index)));
         }
         return items;
     }
@@ -6703,7 +6815,7 @@ public final class MainActivity extends Activity {
         if (current == null) {
             return;
         }
-        List<DeviceAudioTrack> reordered = queueRecyclerAdapter.orderedQueueWithCurrent(current);
+        List<DeviceAudioTrack> reordered = queueRecyclerAdapter.orderedQueue();
         if (reordered.size() != activeQueuePreview.size() || sameTrackOrder(reordered, activeQueuePreview)) {
             return;
         }
@@ -8114,10 +8226,8 @@ public final class MainActivity extends Activity {
 
     private final class QueueRecyclerAdapter extends RecyclerView.Adapter<QueueRecyclerViewHolder> {
         private final List<QueueListItem> items = new ArrayList<>();
-        private int currentIndex = -1;
 
-        void submitItems(List<QueueListItem> nextItems, int nextCurrentIndex) {
-            currentIndex = nextCurrentIndex;
+        void submitItems(List<QueueListItem> nextItems) {
             items.clear();
             if (nextItems != null) {
                 items.addAll(nextItems);
@@ -8146,27 +8256,21 @@ public final class MainActivity extends Activity {
             if (adapterPosition < 0) {
                 return -1;
             }
-            if (currentIndex < 0) {
-                return adapterPosition;
-            }
-            int trackOffset = 0;
-            for (int position = 0; position < Math.min(adapterPosition, items.size()); position++) {
+            int trackOffset = -1;
+            for (int position = 0; position <= Math.min(adapterPosition, items.size() - 1); position++) {
                 if (items.get(position).type == QueueListItem.TYPE_TRACK) {
                     trackOffset++;
                 }
             }
-            return trackOffset >= currentIndex ? trackOffset + 1 : trackOffset;
+            return trackOffset;
         }
 
-        List<DeviceAudioTrack> orderedQueueWithCurrent(DeviceAudioTrack current) {
+        List<DeviceAudioTrack> orderedQueue() {
             List<DeviceAudioTrack> ordered = new ArrayList<>();
             for (QueueListItem item : items) {
                 if (item.type == QueueListItem.TYPE_TRACK && item.track != null) {
                     ordered.add(item.track);
                 }
-            }
-            if (current != null) {
-                ordered.add(Math.max(0, Math.min(currentIndex, ordered.size())), current);
             }
             return ordered;
         }
@@ -8213,7 +8317,8 @@ public final class MainActivity extends Activity {
 
         @Override
         public boolean canScrollVertically() {
-            return queueSheetLayout != null && queueSheetLayout.isExpanded() && super.canScrollVertically();
+            return (queueSheetLayout == null || !queueSheetLayout.isDraggingSheet())
+                    && super.canScrollVertically();
         }
     }
 
@@ -8317,12 +8422,17 @@ public final class MainActivity extends Activity {
 
     private final class QueueSheetLayout extends FrameLayout {
         private View sheet;
+        private View dragHandle;
         private float downY;
         private float downX;
         private float startTranslationY;
         private boolean dragging;
         private boolean expanded;
         private boolean queueReordering;
+        private boolean downOutsideSheet;
+        private boolean downInDragHandle;
+        private boolean startedExpanded;
+        private boolean dismissing;
         private final int touchSlop;
 
         QueueSheetLayout(Context context) {
@@ -8335,8 +8445,12 @@ public final class MainActivity extends Activity {
             this.sheet = sheet;
         }
 
-        boolean isExpanded() {
-            return expanded;
+        void setDragHandle(View dragHandle) {
+            this.dragHandle = dragHandle;
+        }
+
+        boolean isDraggingSheet() {
+            return dragging || dismissing;
         }
 
         void setQueueReordering(boolean reordering) {
@@ -8346,8 +8460,35 @@ public final class MainActivity extends Activity {
             }
         }
 
-        void prepareCollapsed() {
-            post(() -> setExpanded(false, false));
+        void showCollapsed() {
+            dismissing = false;
+            expanded = false;
+            if (sheet == null) {
+                return;
+            }
+            sheet.animate().cancel();
+            if (getHeight() > 0) {
+                sheet.setTranslationY(dismissedTranslationY());
+                animateSheetTo(collapsedTranslationY(), 240L, null);
+                updateQueueScrollState();
+                return;
+            }
+            ViewTreeObserver observer = getViewTreeObserver();
+            observer.addOnPreDrawListener(new ViewTreeObserver.OnPreDrawListener() {
+                @Override
+                public boolean onPreDraw() {
+                    ViewTreeObserver currentObserver = getViewTreeObserver();
+                    if (currentObserver.isAlive()) {
+                        currentObserver.removeOnPreDrawListener(this);
+                    }
+                    if (sheet != null) {
+                        sheet.setTranslationY(dismissedTranslationY());
+                        animateSheetTo(collapsedTranslationY(), 240L, null);
+                    }
+                    updateQueueScrollState();
+                    return true;
+                }
+            });
         }
 
         void setExpanded(boolean nextExpanded, boolean animate) {
@@ -8355,54 +8496,166 @@ public final class MainActivity extends Activity {
                 expanded = nextExpanded;
                 return;
             }
+            if (dismissing) {
+                return;
+            }
             expanded = nextExpanded;
             float target = nextExpanded ? 0f : collapsedTranslationY();
+            long duration = nextExpanded ? 250L : 220L;
             if (animate) {
-                sheet.animate()
-                        .translationY(target)
-                        .setDuration(220L)
-                        .start();
+                animateSheetTo(target, duration, null);
             } else {
                 sheet.animate().cancel();
                 sheet.setTranslationY(target);
             }
-            if (queueRecyclerView != null) {
-                queueRecyclerView.setNestedScrollingEnabled(nextExpanded);
-            }
+            updateQueueScrollState();
             if (queueRecyclerAdapter != null) {
                 queueRecyclerAdapter.notifyDataSetChanged();
             }
         }
 
+        void dismissAnimated(Runnable endAction) {
+            if (dismissing) {
+                return;
+            }
+            dismissing = true;
+            dragging = false;
+            expanded = false;
+            if (sheet == null) {
+                if (endAction != null) {
+                    endAction.run();
+                }
+                return;
+            }
+            updateQueueScrollState();
+            animateSheetTo(dismissedTranslationY(), 230L, endAction);
+        }
+
+        void collapseOrDismissAnimated(Runnable dismissAction) {
+            if (dismissing) {
+                return;
+            }
+            if (expanded) {
+                setExpanded(false, true);
+            } else {
+                dismissAnimated(dismissAction);
+            }
+        }
+
+        private void animateSheetTo(float target, long durationMs, Runnable endAction) {
+            if (sheet == null) {
+                if (endAction != null) {
+                    endAction.run();
+                }
+                return;
+            }
+            sheet.animate().cancel();
+            sheet.animate()
+                    .translationY(target)
+                    .setDuration(durationMs)
+                    .withEndAction(() -> {
+                        if (endAction != null) {
+                            endAction.run();
+                        }
+                    })
+                    .start();
+        }
+
+        private void updateQueueScrollState() {
+            if (queueRecyclerView != null) {
+                queueRecyclerView.setNestedScrollingEnabled(!dismissing);
+            }
+        }
+
         private float collapsedTranslationY() {
-            return Math.max(0f, getHeight() - queueSheetCollapsedHeight());
+            int height = getHeight() > 0 ? getHeight() : getResources().getDisplayMetrics().heightPixels;
+            return Math.max(0f, height - queueSheetCollapsedHeight());
+        }
+
+        private float dismissedTranslationY() {
+            int height = getHeight() > 0 ? getHeight() : getResources().getDisplayMetrics().heightPixels;
+            return Math.max(collapsedTranslationY() + dp(96), height);
+        }
+
+        private void captureDown(MotionEvent event) {
+            downY = event.getRawY();
+            downX = event.getRawX();
+            startTranslationY = sheet == null ? 0f : sheet.getTranslationY();
+            dragging = false;
+            downOutsideSheet = sheet != null && !isRawPointInsideView(sheet, downX, downY);
+            downInDragHandle = dragHandle != null && isRawPointInsideView(dragHandle, downX, downY);
+            startedExpanded = expanded;
+        }
+
+        private boolean shouldStartSheetDrag(MotionEvent event) {
+            if (!downInDragHandle) {
+                return false;
+            }
+            float dy = event.getRawY() - downY;
+            float dx = event.getRawX() - downX;
+            if (Math.abs(dy) <= touchSlop || Math.abs(dy) <= Math.abs(dx) * 1.2f) {
+                return false;
+            }
+            if (startedExpanded) {
+                return dy > 0f;
+            }
+            return dy != 0f;
+        }
+
+        private void settleAfterDrag() {
+            if (sheet == null) {
+                return;
+            }
+            float collapsed = collapsedTranslationY();
+            float current = sheet.getTranslationY();
+            if (startedExpanded) {
+                if (current > dp(72)) {
+                    setExpanded(false, true);
+                } else {
+                    setExpanded(true, true);
+                }
+                return;
+            }
+            if (current < collapsed - dp(72)) {
+                setExpanded(true, true);
+                return;
+            }
+            if (current > collapsed + dp(44)) {
+                dismissQueueDialogAnimated();
+                return;
+            }
+            setExpanded(false, true);
+        }
+
+        private boolean isRawPointInsideView(View view, float rawX, float rawY) {
+            if (view == null) {
+                return false;
+            }
+            int[] location = new int[2];
+            view.getLocationOnScreen(location);
+            return rawX >= location[0]
+                    && rawX <= location[0] + view.getWidth()
+                    && rawY >= location[1]
+                    && rawY <= location[1] + view.getHeight();
         }
 
         @Override
         public boolean onInterceptTouchEvent(MotionEvent event) {
-            if (sheet == null || queueReordering) {
+            if (sheet == null || queueReordering || dismissing) {
                 return super.onInterceptTouchEvent(event);
             }
             int action = event.getActionMasked();
             if (action == MotionEvent.ACTION_DOWN) {
-                downY = event.getRawY();
-                downX = event.getRawX();
-                startTranslationY = sheet.getTranslationY();
-                dragging = false;
-                return false;
+                captureDown(event);
+                return downOutsideSheet;
             }
             if (action == MotionEvent.ACTION_MOVE) {
-                float dy = event.getRawY() - downY;
-                float dx = event.getRawX() - downX;
-                if (Math.abs(dy) > touchSlop && Math.abs(dy) > Math.abs(dx) * 1.2f) {
-                    if (!expanded && dy < 0f) {
-                        dragging = true;
-                        return true;
-                    }
-                    if (expanded && dy > 0f && queueRecyclerView != null && !queueRecyclerView.canScrollVertically(-1)) {
-                        dragging = true;
-                        return true;
-                    }
+                if (downOutsideSheet) {
+                    return true;
+                }
+                if (shouldStartSheetDrag(event)) {
+                    dragging = true;
+                    return true;
                 }
             }
             return super.onInterceptTouchEvent(event);
@@ -8410,32 +8663,36 @@ public final class MainActivity extends Activity {
 
         @Override
         public boolean onTouchEvent(MotionEvent event) {
-            if (sheet == null || queueReordering) {
+            if (sheet == null || queueReordering || dismissing) {
                 return super.onTouchEvent(event);
             }
             int action = event.getActionMasked();
             if (action == MotionEvent.ACTION_DOWN) {
-                downY = event.getRawY();
-                downX = event.getRawX();
-                startTranslationY = sheet.getTranslationY();
-                dragging = false;
+                captureDown(event);
                 return true;
             }
             if (action == MotionEvent.ACTION_MOVE) {
-                float dy = event.getRawY() - downY;
-                if (!dragging && Math.abs(dy) > touchSlop) {
+                if (downOutsideSheet) {
+                    return true;
+                }
+                if (!dragging && shouldStartSheetDrag(event)) {
                     dragging = true;
                 }
                 if (dragging) {
-                    float next = Math.max(0f, Math.min(collapsedTranslationY(), startTranslationY + dy));
+                    float dy = event.getRawY() - downY;
+                    float maxTranslation = startedExpanded ? collapsedTranslationY() : dismissedTranslationY();
+                    float next = Math.max(0f, Math.min(maxTranslation, startTranslationY + dy));
                     sheet.setTranslationY(next);
                 }
                 return true;
             }
             if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                if (downOutsideSheet && action == MotionEvent.ACTION_UP) {
+                    collapseOrDismissQueueDialog();
+                    return true;
+                }
                 if (dragging) {
-                    float midpoint = collapsedTranslationY() * 0.58f;
-                    setExpanded(sheet.getTranslationY() < midpoint, true);
+                    settleAfterDrag();
                 }
                 dragging = false;
                 return true;
@@ -8491,21 +8748,19 @@ public final class MainActivity extends Activity {
         final int type;
         final View view;
         final DeviceAudioTrack track;
-        final int index;
 
-        private QueueListItem(int type, View view, DeviceAudioTrack track, int index) {
+        private QueueListItem(int type, View view, DeviceAudioTrack track) {
             this.type = type;
             this.view = view;
             this.track = track;
-            this.index = index;
         }
 
         static QueueListItem staticView(View view) {
-            return new QueueListItem(TYPE_STATIC, view, null, -1);
+            return new QueueListItem(TYPE_STATIC, view, null);
         }
 
-        static QueueListItem track(DeviceAudioTrack track, int index) {
-            return new QueueListItem(TYPE_TRACK, null, track, index);
+        static QueueListItem track(DeviceAudioTrack track) {
+            return new QueueListItem(TYPE_TRACK, null, track);
         }
     }
 
@@ -9167,7 +9422,7 @@ public final class MainActivity extends Activity {
 
         private void dismissTopPlayerSurface() {
             if (queueDialog != null && queueDialog.isShowing()) {
-                queueDialog.dismiss();
+                collapseOrDismissQueueDialog();
             } else if (playerDialog != null && playerDialog.isShowing()) {
                 playerDialog.dismiss();
             }
