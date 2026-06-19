@@ -22,8 +22,9 @@ public final class UpdateChecker {
     private static final Pattern STABLE_TAG_PATTERN = Pattern.compile("^v(\\d+)\\.(\\d+)\\.(\\d+)$");
     private static final Pattern CURRENT_VERSION_PATTERN = Pattern.compile("^(\\d+)\\.(\\d+)\\.(\\d+)");
     private static final Pattern STABLE_APK_ASSET_PATTERN = Pattern.compile("^ytet-android-v\\d+\\.\\d+\\.\\d+\\.apk$");
-    private static final Pattern NIGHTLY_APK_ASSET_PATTERN = Pattern.compile("^ytet-beta-nightly-(\\d+)\\.apk$");
-    private static final Pattern NIGHTLY_VERSION_PATTERN = Pattern.compile("(?:^|[-.])nightly[-.](\\d+)$");
+    private static final Pattern NIGHTLY_APK_ASSET_PATTERN = Pattern.compile("^ytet-beta(?:-nightly-(\\d+))?\\.apk$");
+    private static final Pattern NIGHTLY_VERSION_PATTERN = Pattern.compile("(?:^|[-.])(nightly|beta)[-.](\\d+)(?:$|[^0-9])");
+    private static final Pattern BETA_VERSION_NAME_PATTERN = Pattern.compile("\\b\\d+\\.\\d+\\.\\d+-beta\\.\\d+\\b");
     private static final Pattern UNSTABLE_MARKER_PATTERN = Pattern.compile(
             "(^|[^a-z0-9])(nightly|alpha|beta|rc|dev|preview)([^a-z0-9]|$)",
             Pattern.CASE_INSENSITIVE
@@ -115,18 +116,22 @@ public final class UpdateChecker {
             if (asset == null) {
                 continue;
             }
-            int build = nightlyBuildFromApkAssetName(asset.optString("name", ""));
+            int assetBuild = nightlyBuildFromApkAssetName(asset.optString("name", ""));
+            String releaseBody = release.optString("body", "");
+            int releaseBuild = nightlyBuildFromReleaseText(releaseName + " " + releaseBody);
+            int build = Math.max(assetBuild, releaseBuild);
             if (build <= latestBuild) {
                 continue;
             }
             latestBuild = build;
             String nightlyTag = "nightly-" + build;
+            String versionName = betaVersionNameFromReleaseText(releaseName + " " + releaseBody, build);
             latestUpdate = new UpdateInfo(
                     nightlyTag,
-                    "nightly." + build,
-                    releaseName.isEmpty() ? "YTET Beta Nightly " + build : releaseName,
+                    versionName,
+                    releaseName.isEmpty() ? "Nightly" : releaseName,
                     release.optString("html_url", ""),
-                    asset.optString("name", "YTET-Beta-nightly-" + build + ".apk"),
+                    asset.optString("name", "YTET-Beta.apk"),
                     asset.optString("browser_download_url", "")
             );
         }
@@ -215,6 +220,10 @@ public final class UpdateChecker {
             JSONObject asset = assets.getJSONObject(index);
             String name = asset.optString("name", "");
             String url = asset.optString("browser_download_url", "");
+            String lower = name.toLowerCase();
+            if ("ytet-beta.apk".equals(lower) && url.startsWith("https://")) {
+                return asset;
+            }
             int build = nightlyBuildFromApkAssetName(name);
             if (build > bestBuild && isNightlyApkAssetName(name) && url.startsWith("https://")) {
                 bestBuild = build;
@@ -257,7 +266,8 @@ public final class UpdateChecker {
         if (!matcher.matches()) {
             return -1;
         }
-        return Integer.parseInt(matcher.group(1));
+        String build = matcher.group(1);
+        return build == null ? -1 : Integer.parseInt(build);
     }
 
     private static int parseNightlyBuild(String value) {
@@ -265,7 +275,19 @@ public final class UpdateChecker {
         if (!matcher.find()) {
             return -1;
         }
-        return Integer.parseInt(matcher.group(1));
+        return Integer.parseInt(matcher.group(2));
+    }
+
+    static int nightlyBuildFromReleaseText(String value) {
+        return parseNightlyBuild(value);
+    }
+
+    static String betaVersionNameFromReleaseText(String value, int build) {
+        Matcher matcher = BETA_VERSION_NAME_PATTERN.matcher(value == null ? "" : value.trim().toLowerCase());
+        if (matcher.find()) {
+            return matcher.group();
+        }
+        return "beta." + build;
     }
 
     private static String readBody(InputStream stream) throws IOException {

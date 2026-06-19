@@ -104,13 +104,23 @@ jobs:
             apk_asset="YTET-Android-${version}.apk"
             zip_asset="YTET-Android-${version}-android.zip"
           else
-            version_name="0.1.3-nightly.${GITHUB_RUN_NUMBER}"
+            latest_tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)"
+            if [[ "$latest_tag" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+              major="${BASH_REMATCH[1]}"
+              minor="${BASH_REMATCH[2]}"
+              patch=$((10#${BASH_REMATCH[3]} + 1))
+            else
+              major=0
+              minor=1
+              patch=0
+            fi
+            version_name="${major}.${minor}.${patch}-beta.${GITHUB_RUN_NUMBER}"
             version_code=$((900000000 + GITHUB_RUN_NUMBER))
             gradle_test_task=":app:testNightlyDebugUnitTest"
             gradle_build_task=":app:assembleNightlyRelease"
             apk_path="app/build/outputs/apk/nightly/release/app-nightly-release.apk"
-            apk_asset="YTET-Beta-nightly-${GITHUB_RUN_NUMBER}.apk"
-            zip_asset="YTET-Beta-nightly-${GITHUB_RUN_NUMBER}-android.zip"
+            apk_asset="YTET-Beta.apk"
+            zip_asset="YTET-Beta-android.zip"
           fi
           {
             echo "YTET_VERSION_NAME=$version_name"
@@ -234,6 +244,7 @@ jobs:
             dist/*.apk
             dist/*.zip
           if-no-files-found: error
+          retention-days: ${{ steps.version.outputs.version == 'nightly' && 7 || 30 }}
 
       - name: Publish GitHub Release
         if: steps.signing.outputs.configured == 'true'
@@ -266,11 +277,13 @@ jobs:
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git tag -f nightly "$GITHUB_SHA"
             git push origin refs/tags/nightly --force
-            title="YTET Beta Nightly $GITHUB_RUN_NUMBER"
+            title="Nightly"
             {
-              echo "YTET Beta Nightly $GITHUB_RUN_NUMBER"
+              echo "Nightly"
               echo
               echo "패치노트"
+              echo "- 베타 버전: $YTET_VERSION_NAME"
+              echo "- 빌드: beta.$GITHUB_RUN_NUMBER"
               echo "- main 브랜치 최신 커밋을 기반으로 한 개발자 검증용 Beta 빌드입니다."
               echo "- 정식 YTET 앱과 별도 앱으로 설치됩니다."
               echo "- 커밋: $GITHUB_SHA"
@@ -279,6 +292,12 @@ jobs:
           fi
 
           if gh release view "$tag" >/dev/null 2>&1; then
+            if [[ "$tag" == "nightly" ]]; then
+              while IFS= read -r asset_name; do
+                [[ -z "$asset_name" ]] && continue
+                gh release delete-asset "$tag" "$asset_name" -y || true
+              done < <(gh release view "$tag" --json assets -q '.assets[].name')
+            fi
             gh release upload "$tag" "$apk" "$zip" --clobber
             if [[ -n "$prerelease_flag" ]]; then
               gh release edit "$tag" --title "$title" --notes-file "$notes_file" "$prerelease_flag"

@@ -37,10 +37,11 @@ public final class UpdateCheckerTest {
 
     @Test
     public void acceptsOnlyBetaNightlyApkAssets() {
+        assertTrue(UpdateChecker.isNightlyApkAssetName("YTET-Beta.apk"));
         assertTrue(UpdateChecker.isNightlyApkAssetName("YTET-Beta-nightly-128.apk"));
         assertFalse(UpdateChecker.isNightlyApkAssetName("YTET-Android-nightly-128.apk"));
         assertFalse(UpdateChecker.isNightlyApkAssetName("YTET-Beta-nightly-debug.apk"));
-        assertFalse(UpdateChecker.isNightlyApkAssetName("YTET-Beta-nightly.apk"));
+        assertFalse(UpdateChecker.isNightlyApkAssetName("YTET-Beta-debug.apk"));
     }
 
     @Test
@@ -52,16 +53,25 @@ public final class UpdateCheckerTest {
 
     @Test
     public void comparesNightlyAssetBuildsAgainstCurrentVersion() {
-        assertTrue(UpdateChecker.isNightlyApkNewerThan("YTET-Beta-nightly-42.apk", "0.1.3-nightly.41"));
-        assertFalse(UpdateChecker.isNightlyApkNewerThan("YTET-Beta-nightly-42.apk", "0.1.3-nightly.42"));
-        assertFalse(UpdateChecker.isNightlyApkNewerThan("YTET-Beta-nightly-debug.apk", "0.1.3-nightly.41"));
+        assertTrue(UpdateChecker.isNightlyApkNewerThan("YTET-Beta-nightly-42.apk", "1.3.8-beta.41"));
+        assertFalse(UpdateChecker.isNightlyApkNewerThan("YTET-Beta-nightly-42.apk", "1.3.8-beta.42"));
+        assertFalse(UpdateChecker.isNightlyApkNewerThan("YTET-Beta.apk", "1.3.8-beta.41"));
+        assertFalse(UpdateChecker.isNightlyApkNewerThan("YTET-Beta-nightly-debug.apk", "1.3.8-beta.41"));
+    }
+
+    @Test
+    public void readsBetaVersionFromNightlyReleaseNotes() {
+        String notes = "패치노트\n- 베타 버전: 1.3.8-beta.87\n- 빌드: beta.87";
+
+        assertEquals(87, UpdateChecker.nightlyBuildFromReleaseText(notes));
+        assertEquals("1.3.8-beta.87", UpdateChecker.betaVersionNameFromReleaseText(notes, 87));
     }
 
     @Test
     public void detectsInstalledStableAndNightlyUpdates() {
         assertTrue(UpdateChecker.isDownloadedUpdateInstalled("v1.3.3", "1.3.3-android"));
         assertFalse(UpdateChecker.isDownloadedUpdateInstalled("v1.3.4", "1.3.3-android"));
-        assertTrue(UpdateChecker.isDownloadedUpdateInstalled("nightly-42", "0.1.3-nightly.42"));
-        assertFalse(UpdateChecker.isDownloadedUpdateInstalled("nightly-43", "0.1.3-nightly.42"));
+        assertTrue(UpdateChecker.isDownloadedUpdateInstalled("nightly-42", "1.3.8-beta.42"));
+        assertFalse(UpdateChecker.isDownloadedUpdateInstalled("nightly-43", "1.3.8-beta.42"));
     }
 }
