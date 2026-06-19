@@ -5608,6 +5608,7 @@ public final class MainActivity extends Activity {
         int progressHeight = tiny ? dp(34) : compact ? dp(38) : dp(42);
         int controlButtonHeight = tiny ? dp(44) : compact ? dp(47) : dp(50);
         int toolsHeight = tiny ? dp(76) : tight ? dp(84) : compact ? dp(90) : dp(98);
+        int queueHandleHeight = tiny ? dp(46) : dp(52);
         int toolIconSize = tiny ? dp(50) : tight ? dp(54) : dp(58);
         int queueIconSize = Math.max(dp(46), toolIconSize - dp(4));
         int titleTextSp = tiny ? 20 : compact ? 22 : 23;
@@ -5622,7 +5623,7 @@ public final class MainActivity extends Activity {
         fixedWithoutCover += estimatedTextLineHeight(12) + progressTextBottom;
         fixedWithoutCover += controlButtonHeight + controlsBottom;
         fixedWithoutCover += toolsHeight;
-        fixedWithoutCover += dp(6);
+        fixedWithoutCover += queueHandleHeight;
 
         int coverTarget = Math.min(dp(284), Math.max(dp(168), Math.round(availableHeight * 0.38f)));
         int coverMax = availableHeight - fixedWithoutCover - coverBottom;
@@ -5650,6 +5651,7 @@ public final class MainActivity extends Activity {
                 controlButtonHeight,
                 controlsBottom,
                 toolsHeight,
+                queueHandleHeight,
                 toolIconSize,
                 queueIconSize
         );
@@ -5681,6 +5683,7 @@ public final class MainActivity extends Activity {
         final int controlButtonHeight;
         final int controlsBottom;
         final int toolsHeight;
+        final int queueHandleHeight;
         final int toolIconSize;
         final int queueIconSize;
 
@@ -5701,6 +5704,7 @@ public final class MainActivity extends Activity {
                 int controlButtonHeight,
                 int controlsBottom,
                 int toolsHeight,
+                int queueHandleHeight,
                 int toolIconSize,
                 int queueIconSize
         ) {
@@ -5720,6 +5724,7 @@ public final class MainActivity extends Activity {
             this.controlButtonHeight = controlButtonHeight;
             this.controlsBottom = controlsBottom;
             this.toolsHeight = toolsHeight;
+            this.queueHandleHeight = queueHandleHeight;
             this.toolIconSize = toolIconSize;
             this.queueIconSize = queueIconSize;
         }
@@ -5972,15 +5977,6 @@ public final class MainActivity extends Activity {
 
         ExpandedPlayerLayout layout = expandedPlayerLayout(statusInset, navigationInset);
 
-        ScrollView playerScroll = new ScrollView(this);
-        playerScroll.setFillViewport(true);
-        playerScroll.setClipToPadding(false);
-        playerScroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
-        root.addView(playerScroll, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.MATCH_PARENT
-        ));
-
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL);
         content.setPadding(
@@ -5989,9 +5985,9 @@ public final class MainActivity extends Activity {
                 layout.horizontalPadding,
                 layout.bottomPadding + navigationInset
         );
-        playerScroll.addView(content, new ScrollView.LayoutParams(
+        root.addView(content, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
+                LinearLayout.LayoutParams.MATCH_PARENT
         ));
         applyExpandedPlayerInsets(root, statusScrim, content, layout);
 
@@ -6135,7 +6131,7 @@ public final class MainActivity extends Activity {
         ));
         content.addView(playerQueuePullHandle(), new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(58)
+                layout.queueHandleHeight
         ));
         return frame;
     }
@@ -6154,7 +6150,7 @@ public final class MainActivity extends Activity {
         handleParams.setMargins(0, 0, 0, dp(12));
         handleArea.addView(handle, handleParams);
 
-        TextView label = text("노래", 13, R.color.ytet_text, true);
+        TextView label = text("재생목록", 13, R.color.ytet_text, true);
         label.setGravity(Gravity.CENTER);
         handleArea.addView(label, matchWrap());
 
@@ -6549,6 +6545,15 @@ public final class MainActivity extends Activity {
         if (queueDialog == null) {
             queueDialog = new Dialog(this);
             queueDialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+            queueDialog.setOnKeyListener((dialog, keyCode, event) -> {
+                if (keyCode != KeyEvent.KEYCODE_BACK) {
+                    return false;
+                }
+                if (event.getAction() == KeyEvent.ACTION_UP) {
+                    collapseOrDismissQueueDialog();
+                }
+                return true;
+            });
             queueDialog.setOnDismissListener(dialog -> {
                 queueSheetLayout = null;
                 queueRecyclerAdapter = null;
@@ -6665,49 +6670,24 @@ public final class MainActivity extends Activity {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, 0, dp(12), 0);
 
-        LinearLayout copy = new LinearLayout(this);
-        copy.setOrientation(LinearLayout.VERTICAL);
-        TextView sourceLabel = muted("재생 중인 트랙 출처", 14);
-        sourceLabel.setSingleLine(true);
-        sourceLabel.setEllipsize(TextUtils.TruncateAt.END);
-        copy.addView(sourceLabel, marginBottom(4));
-        TextView source = text("노래", 16, R.color.ytet_text, true);
-        source.setSingleLine(true);
-        source.setEllipsize(TextUtils.TruncateAt.END);
-        copy.addView(source, matchWrap());
-        row.addView(copy, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        TextView title = text("재생목록", 17, R.color.ytet_text, true);
+        title.setSingleLine(true);
+        title.setEllipsize(TextUtils.TruncateAt.END);
+        row.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
         View save = queueSaveButton();
-        row.addView(save, new LinearLayout.LayoutParams(dp(112), dp(48)));
+        row.addView(save, new LinearLayout.LayoutParams(dp(44), dp(48)));
         return row;
     }
 
     private View queueSaveButton() {
-        LinearLayout button = new LinearLayout(this);
-        button.setOrientation(LinearLayout.HORIZONTAL);
-        button.setGravity(Gravity.CENTER);
-        button.setPadding(dp(10), 0, dp(12), 0);
-        button.setClickable(true);
-        button.setFocusable(true);
+        ImageButton button = playerIconButton(R.drawable.ic_playlist_save, "현재 재생목록 저장", false, true);
         button.setContentDescription("현재 재생목록 저장");
-        button.setBackground(rounded(0x33FFFFFF, 10));
         boolean enabled = !activeQueuePreview.isEmpty();
         button.setEnabled(enabled);
         button.setAlpha(enabled ? 1f : 0.52f);
-
-        ImageView icon = new ImageView(this);
-        Drawable drawable = getDrawable(R.drawable.ic_playlist_save);
-        if (drawable != null) {
-            drawable = drawable.mutate();
-            drawable.setTint(color(R.color.ytet_text));
-            icon.setImageDrawable(drawable);
-        }
-        button.addView(icon, marginRight(8, dp(28), dp(28)));
-
-        TextView label = text("저장", 15, R.color.ytet_text, true);
-        label.setSingleLine(true);
-        button.addView(label, matchWrap());
         button.setOnClickListener(view -> {
             List<DeviceAudioTrack> tracks = cleanTrackList(activeQueuePreview);
             if (tracks.isEmpty()) {
@@ -9198,6 +9178,7 @@ public final class MainActivity extends Activity {
         private VelocityTracker velocityTracker;
         private boolean dragCanStart;
         private boolean draggingDown;
+        private boolean draggingQueueUp;
         private boolean playerSurfaceStyle;
 
         DragDismissLayout(Context context) {
@@ -9220,14 +9201,18 @@ public final class MainActivity extends Activity {
             }
             if (action == MotionEvent.ACTION_MOVE) {
                 trackDragMovement(event);
-                if (!draggingDown && shouldStartDrag(event)) {
+                if (!draggingDown && !draggingQueueUp && shouldStartDrag(event)) {
                     startDragging(event);
                     return true;
                 }
-                return draggingDown;
+                if (!draggingDown && !draggingQueueUp && shouldStartQueueDrag(event)) {
+                    startQueueDragging();
+                    return true;
+                }
+                return draggingDown || draggingQueueUp;
             }
             if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
-                if (!draggingDown) {
+                if (!draggingDown && !draggingQueueUp) {
                     releaseDragTracker();
                 }
                 return false;
@@ -9244,18 +9229,28 @@ public final class MainActivity extends Activity {
             }
             trackDragMovement(event);
             if (action == MotionEvent.ACTION_MOVE) {
-                if (!draggingDown && shouldStartDrag(event)) {
+                if (!draggingDown && !draggingQueueUp && shouldStartDrag(event)) {
                     startDragging(event);
+                }
+                if (!draggingDown && !draggingQueueUp && shouldStartQueueDrag(event)) {
+                    startQueueDragging();
                 }
                 if (draggingDown) {
                     updateDragPosition(event);
                     return true;
                 }
+                if (draggingQueueUp) {
+                    return true;
+                }
             } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
-                finishDragging(event, action == MotionEvent.ACTION_CANCEL);
+                if (draggingQueueUp) {
+                    finishQueueDragging();
+                } else {
+                    finishDragging(event, action == MotionEvent.ACTION_CANCEL);
+                }
                 return true;
             }
-            return draggingDown || super.onTouchEvent(event);
+            return draggingDown || draggingQueueUp || super.onTouchEvent(event);
         }
 
         private void beginDragTracking(MotionEvent event) {
@@ -9266,6 +9261,7 @@ public final class MainActivity extends Activity {
             startY = event.getRawY();
             dragCanStart = canStartDragFrom(event);
             draggingDown = false;
+            draggingQueueUp = false;
             playerDragDismissActive = false;
             animate().cancel();
             setAlpha(1f);
@@ -9289,6 +9285,16 @@ public final class MainActivity extends Activity {
             return dy > threshold && dy > Math.abs(dx) * 0.85f;
         }
 
+        private boolean shouldStartQueueDrag(MotionEvent event) {
+            if (!dragCanStart || suppressPlayerDragDismiss) {
+                return false;
+            }
+            float dx = event.getRawX() - startX;
+            float dy = event.getRawY() - startY;
+            float threshold = Math.max(touchSlop, dp(12));
+            return dy < -threshold && -dy > Math.abs(dx) * 0.85f;
+        }
+
         private void startDragging(MotionEvent event) {
             draggingDown = true;
             playerDragDismissActive = true;
@@ -9298,6 +9304,15 @@ public final class MainActivity extends Activity {
             }
             setDragRounded(true);
             updateDragPosition(event);
+        }
+
+        private void startQueueDragging() {
+            draggingQueueUp = true;
+            suppressPlayerDragDismiss = true;
+            if (getParent() != null) {
+                getParent().requestDisallowInterceptTouchEvent(true);
+            }
+            showQueueDialog();
         }
 
         private void updateDragPosition(MotionEvent event) {
@@ -9330,6 +9345,16 @@ public final class MainActivity extends Activity {
             } else {
                 snapBackTopPlayerSurface();
             }
+        }
+
+        private void finishQueueDragging() {
+            draggingQueueUp = false;
+            dragCanStart = false;
+            suppressPlayerDragDismiss = false;
+            if (getParent() != null) {
+                getParent().requestDisallowInterceptTouchEvent(false);
+            }
+            releaseDragTracker();
         }
 
         private void snapBackTopPlayerSurface() {
