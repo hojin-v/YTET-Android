@@ -4811,12 +4811,10 @@ public final class MainActivity extends Activity {
             nowPlayingSwipeTracking = false;
             view.getParent().requestDisallowInterceptTouchEvent(false);
             if (nowPlayingSwipeConsumed && action == MotionEvent.ACTION_UP) {
-                if (dx > dp(56) && hasPreviousTrack()) {
-                    triggerNowPlayingSwipe(NOW_PLAYING_TRANSITION_PREVIOUS);
-                    return true;
-                }
-                if (dx < -dp(56) && hasNextTrack()) {
-                    triggerNowPlayingSwipe(NOW_PLAYING_TRANSITION_NEXT);
+                int direction = dx < 0f ? NOW_PLAYING_TRANSITION_NEXT : NOW_PLAYING_TRANSITION_PREVIOUS;
+                boolean canMove = direction == NOW_PLAYING_TRANSITION_PREVIOUS ? hasPreviousTrack() : hasNextTrack();
+                if (canMove && nowPlayingSwipeVisualProgress(view, dx, canMove) >= 0.72f) {
+                    triggerNowPlayingSwipe(direction);
                     return true;
                 }
             }
@@ -4836,11 +4834,21 @@ public final class MainActivity extends Activity {
         return Math.max(dp(72), width * 0.34f);
     }
 
+    private float nowPlayingSwipeVisualProgress(View view, float dx, boolean canMove) {
+        float resistance = canMove ? 0.42f : 0.16f;
+        float maxOffset = nowPlayingSwipeMaxOffset(view);
+        float offset = Math.max(-maxOffset, Math.min(maxOffset, dx * resistance));
+        return Math.min(1f, Math.abs(offset) / Math.max(1f, maxOffset));
+    }
+
     private void applyNowPlayingSwipeOffset(int direction, boolean canMove, float offset, float maxOffset) {
         float progress = Math.min(1f, Math.abs(offset) / Math.max(1f, maxOffset));
         if (nowPlayingCurrentFrame != null) {
+            float currentFade = canMove
+                    ? Math.max(0f, (progress - 0.22f) / 0.78f)
+                    : progress;
             nowPlayingCurrentFrame.setTranslationX(offset);
-            nowPlayingCurrentFrame.setAlpha(1f - progress * (canMove ? 0.78f : 0.28f));
+            nowPlayingCurrentFrame.setAlpha(1f - currentFade * (canMove ? 0.88f : 0.28f));
         }
         if (!canMove) {
             hideNowPlayingSwipePreview();
@@ -4855,9 +4863,10 @@ public final class MainActivity extends Activity {
         setNowPlayingSwipePreviewTrack(previewTrack, direction);
         if (nowPlayingPreviewFrame != null) {
             float previewStart = direction == NOW_PLAYING_TRANSITION_NEXT ? maxOffset : -maxOffset;
+            float previewProgress = Math.max(0f, (progress - 0.34f) / 0.66f);
             nowPlayingPreviewFrame.setVisibility(View.VISIBLE);
             nowPlayingPreviewFrame.setTranslationX(previewStart + offset);
-            nowPlayingPreviewFrame.setAlpha(Math.min(0.94f, progress * 1.08f));
+            nowPlayingPreviewFrame.setAlpha(Math.min(0.96f, previewProgress * 1.12f));
         }
     }
 
