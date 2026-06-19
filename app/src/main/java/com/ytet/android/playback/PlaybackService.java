@@ -116,6 +116,7 @@ public final class PlaybackService extends Service {
     private static final int NOTIFICATION_ID = 4211;
     private static final String PREFS = "ytet_android";
     private static final String PREF_PLAYBACK_QUEUE_IDS = "playback_queue_ids";
+    private static final String PREF_PLAYBACK_ORIGINAL_QUEUE_IDS = "playback_original_queue_ids";
     private static final String PREF_PLAYBACK_QUEUE_INDEX = "playback_queue_index";
     private static final String PREF_PLAYBACK_TRACK_ID = "playback_track_id";
     private static final String PREF_PLAYBACK_MIX_TITLE = "playback_mix_title";
@@ -124,6 +125,7 @@ public final class PlaybackService extends Service {
     private static final String PREF_PLAYBACK_REPEAT = "playback_repeat";
 
     private final ArrayList<DeviceAudioTrack> queue = new ArrayList<>();
+    private final ArrayList<DeviceAudioTrack> originalQueue = new ArrayList<>();
     private final DeviceMusicLibrary musicLibrary = new DeviceMusicLibrary();
     private final ExecutorService queueExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService artworkExecutor = Executors.newSingleThreadExecutor();
@@ -537,8 +539,10 @@ public final class PlaybackService extends Service {
             return;
         }
         boolean shouldStartWhenPrepared = startWhenPrepared;
+        originalQueue.clear();
+        originalQueue.addAll(loadedTracks);
         queue.clear();
-        queue.addAll(loadedTracks);
+        queue.addAll(originalQueue);
         queueIndex = queue.isEmpty() ? 0 : Math.min(Math.max(0, startIndex), queue.size() - 1);
         shuffleEnabled = shuffleEnabled && queue.size() > 1;
         if (shuffleEnabled) {
@@ -554,6 +558,7 @@ public final class PlaybackService extends Service {
             return;
         }
         queue.clear();
+        originalQueue.clear();
         queueIndex = 0;
         preparing = false;
         playing = false;
@@ -598,6 +603,8 @@ public final class PlaybackService extends Service {
             repeatMode = REPEAT_OFF;
             queue.clear();
             queue.addAll(loadedTracks);
+            originalQueue.clear();
+            originalQueue.addAll(loadedTracks);
             queueIndex = 0;
             failedTrackSkips = 0;
             persistPlaybackSnapshot();
@@ -605,7 +612,9 @@ public final class PlaybackService extends Service {
             return;
         }
         int insertIndex = playNext ? Math.min(queueIndex + 1, queue.size()) : queue.size();
+        int originalInsertIndex = originalQueueInsertIndex(playNext, insertIndex);
         queue.addAll(insertIndex, loadedTracks);
+        originalQueue.addAll(originalInsertIndex, loadedTracks);
         shuffleEnabled = shuffleEnabled && queue.size() > 1;
         persistPlaybackSnapshot();
         updateTransportState();
@@ -665,6 +674,8 @@ public final class PlaybackService extends Service {
         }
         queue.clear();
         queue.addAll(reordered);
+        originalQueue.clear();
+        originalQueue.addAll(reordered);
         queueIndex = nextQueueIndex >= 0 ? nextQueueIndex : restoredQueueIndex(queueIndex, currentId);
         persistPlaybackSnapshot();
         showNotification();
@@ -997,6 +1008,7 @@ public final class PlaybackService extends Service {
         queueLoadVersion++;
         playbackVersion++;
         queue.clear();
+        originalQueue.clear();
         queueIndex = 0;
         failedTrackSkips = 0;
         preparing = false;
@@ -1076,7 +1088,10 @@ public final class PlaybackService extends Service {
     private void toggleShuffle() {
         shuffleEnabled = !shuffleEnabled && queue.size() > 1;
         if (shuffleEnabled) {
+            ensureOriginalQueue();
             shuffleQueueFromCurrentTrack();
+        } else {
+            restoreOriginalQueueFromCurrentTrack();
         }
         persistPlaybackSnapshot();
         updateTransportState();
@@ -1096,6 +1111,77 @@ public final class PlaybackService extends Service {
         queue.add(track);
         queue.addAll(remaining);
         queueIndex = 0;
+    }
+
+    private void restoreOriginalQueueFromCurrentTrack() {
+        if (queue.isEmpty()) {
+            originalQueue.clear();
+            return;
+        }
+        if (originalQueue.size() != queue.size()) {
+            originalQueue.clear();
+            originalQueue.addAll(queue);
+            return;
+        }
+        DeviceAudioTrack current = currentTrack();
+        long currentId = current == null ? -1L : current.id();
+        ArrayList<DeviceAudioTrack> restored = new ArrayList<>(originalQueue);
+        int restoredIndex = indexOfTrack(restored, current);
+        queue.clear();
+        queue.addAll(restored);
+        queueIndex = restoredIndex >= 0 ? restoredIndex : restoredQueueIndex(queueIndex, currentId);
+    }
+
+    private void ensureOriginalQueue() {
+        if (originalQueue.size() == queue.size() && !originalQueue.isEmpty()) {
+            return;
+        }
+        originalQueue.clear();
+        originalQueue.addAll(queue);
+    }
+
+    private int originalQueueInsertIndex(boolean playNext, int queueInsertIndex) {
+        ensureOriginalQueue();
+        if (originalQueue.isEmpty()) {
+            return 0;
+        }
+        if (!shuffleEnabled) {
+            return Math.max(0, Math.min(queueInsertIndex, originalQueue.size()));
+        }
+        if (!playNext) {
+            return originalQueue.size();
+        }
+        int currentIndex = indexOfTrack(originalQueue, currentTrack());
+        if (currentIndex < 0) {
+            return originalQueue.size();
+        }
+        return Math.min(currentIndex + 1, originalQueue.size());
+    }
+
+    private int indexOfTrack(List<DeviceAudioTrack> tracks, DeviceAudioTrack target) {
+        if (tracks == null || target == null) {
+            return -1;
+        }
+        for (int index = 0; index < tracks.size(); index++) {
+            if (tracks.get(index) == target) {
+                return index;
+            }
+        }
+        String targetUri = target.contentUri();
+        if (targetUri != null && !targetUri.trim().isEmpty()) {
+            for (int index = 0; index < tracks.size(); index++) {
+                String uri = tracks.get(index).contentUri();
+                if (targetUri.equals(uri)) {
+                    return index;
+                }
+            }
+        }
+        for (int index = 0; index < tracks.size(); index++) {
+            if (tracks.get(index).id() == target.id()) {
+                return index;
+            }
+        }
+        return -1;
     }
 
     private void toggleRepeat() {
@@ -1191,6 +1277,7 @@ public final class PlaybackService extends Service {
         if (ids.length == 0) {
             return false;
         }
+        long[] originalIds = persistedQueueIds(prefs, PREF_PLAYBACK_ORIGINAL_QUEUE_IDS);
 
         int version = ++queueLoadVersion;
         int restoredIndex = Math.max(0, prefs.getInt(PREF_PLAYBACK_QUEUE_INDEX, 0));
@@ -1211,11 +1298,16 @@ public final class PlaybackService extends Service {
 
         queueExecutor.execute(() -> {
             List<DeviceAudioTrack> loadedTracks;
+            List<DeviceAudioTrack> originalTracks;
             try {
                 loadedTracks = musicLibrary.loadTracksByIds(this, ids);
+                originalTracks = originalIds.length == 0
+                        ? new ArrayList<>(loadedTracks)
+                        : musicLibrary.loadTracksByIds(this, originalIds);
             } catch (Exception exception) {
                 mainHandler.post(() -> finishRestoredQueueLoad(
                         version,
+                        new ArrayList<>(),
                         new ArrayList<>(),
                         restoredIndex,
                         restoredTrackId,
@@ -1230,6 +1322,7 @@ public final class PlaybackService extends Service {
             mainHandler.post(() -> finishRestoredQueueLoad(
                     version,
                     loadedTracks,
+                    originalTracks,
                     restoredIndex,
                     restoredTrackId,
                     restoredMixTitle,
@@ -1245,6 +1338,7 @@ public final class PlaybackService extends Service {
     private void finishRestoredQueueLoad(
             int version,
             List<DeviceAudioTrack> loadedTracks,
+            List<DeviceAudioTrack> restoredOriginalTracks,
             int restoredIndex,
             long restoredTrackId,
             String restoredMixTitle,
@@ -1260,8 +1354,16 @@ public final class PlaybackService extends Service {
         if (loadedTracks != null) {
             queue.addAll(loadedTracks);
         }
+        originalQueue.clear();
+        if (restoredOriginalTracks != null
+                && restoredOriginalTracks.size() == queue.size()) {
+            originalQueue.addAll(restoredOriginalTracks);
+        } else {
+            originalQueue.addAll(queue);
+        }
         if (queue.isEmpty()) {
             queueIndex = 0;
+            originalQueue.clear();
             clearPlaybackSnapshot();
             broadcastState();
             stopSelf(startId);
@@ -1311,6 +1413,7 @@ public final class PlaybackService extends Service {
         DeviceAudioTrack track = currentTrack();
         playbackPreferences().edit()
                 .putString(PREF_PLAYBACK_QUEUE_IDS, serializedQueueIds())
+                .putString(PREF_PLAYBACK_ORIGINAL_QUEUE_IDS, serializedOriginalQueueIds())
                 .putInt(PREF_PLAYBACK_QUEUE_INDEX, queueIndex)
                 .putLong(PREF_PLAYBACK_TRACK_ID, track == null ? -1L : track.id())
                 .putString(PREF_PLAYBACK_MIX_TITLE, mixTitle)
@@ -1323,6 +1426,7 @@ public final class PlaybackService extends Service {
     private void clearPlaybackSnapshot() {
         playbackPreferences().edit()
                 .remove(PREF_PLAYBACK_QUEUE_IDS)
+                .remove(PREF_PLAYBACK_ORIGINAL_QUEUE_IDS)
                 .remove(PREF_PLAYBACK_QUEUE_INDEX)
                 .remove(PREF_PLAYBACK_TRACK_ID)
                 .remove(PREF_PLAYBACK_MIX_TITLE)
@@ -1333,18 +1437,31 @@ public final class PlaybackService extends Service {
     }
 
     private String serializedQueueIds() {
+        return serializedTrackIds(queue);
+    }
+
+    private String serializedOriginalQueueIds() {
+        ensureOriginalQueue();
+        return serializedTrackIds(originalQueue);
+    }
+
+    private String serializedTrackIds(List<DeviceAudioTrack> tracks) {
         StringBuilder builder = new StringBuilder();
-        for (int index = 0; index < queue.size(); index++) {
+        for (int index = 0; index < tracks.size(); index++) {
             if (index > 0) {
                 builder.append(',');
             }
-            builder.append(queue.get(index).id());
+            builder.append(tracks.get(index).id());
         }
         return builder.toString();
     }
 
     private long[] persistedQueueIds(SharedPreferences prefs) {
-        String serialized = prefs.getString(PREF_PLAYBACK_QUEUE_IDS, "");
+        return persistedQueueIds(prefs, PREF_PLAYBACK_QUEUE_IDS);
+    }
+
+    private long[] persistedQueueIds(SharedPreferences prefs, String key) {
+        String serialized = prefs.getString(key, "");
         if (serialized == null || serialized.trim().isEmpty()) {
             return new long[0];
         }

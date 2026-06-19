@@ -61,7 +61,8 @@ public final class OnlineStreamClient {
                             Math.max(0L, video.optLong("duration", 0L)) * 1000L,
                             Math.max(0L, video.optLong("view_count", 0L)),
                             Math.max(0L, video.optLong("published", 0L)),
-                            Math.max(0, video.optInt("source_index", videoIndex))
+                            Math.max(0, video.optInt("source_index", videoIndex)),
+                            Math.max(0, video.optInt("popular_rank", 0))
                     ));
                 }
             }

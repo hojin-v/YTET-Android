@@ -312,6 +312,51 @@ class YtetYdlOptionsTest(unittest.TestCase):
         self.assertIsNone(ytet_ydl.supported_image_mime(b"RIFFwebp", "image/webp"))
 
 
+class YtetYdlStreamCatalogTest(unittest.TestCase):
+    def test_popular_channel_urls_request_youtube_popular_sort(self):
+        urls = ytet_ydl.stream_channel_candidate_urls("https://www.youtube.com/@leeplay.official", popular=True)
+
+        self.assertIn("https://www.youtube.com/@leeplay.official/videos?view=0&sort=p&flow=grid", urls)
+        self.assertIn("https://www.youtube.com/@leeplay.official/videos?sort=p", urls)
+
+    def test_stream_channel_videos_marks_popular_rank_and_view_count(self):
+        videos = ytet_ydl.stream_channel_videos({
+            "entries": [{
+                "id": "abc",
+                "title": "Popular Video",
+                "url": "abc",
+                "view_count_text": "1.2만회",
+                "upload_date": "20260619",
+            }]
+        }, {"title": "Channel"}, 10, "popular")
+
+        self.assertEqual(1, len(videos))
+        self.assertEqual(12_000, videos[0]["view_count"])
+        self.assertEqual(1, videos[0]["popular_rank"])
+
+    def test_merge_enriches_latest_entries_with_popular_metadata(self):
+        latest = [{
+            "id": "abc",
+            "url": "https://www.youtube.com/watch?v=abc",
+            "view_count": 0,
+            "source_index": 0,
+            "popular_rank": 0,
+        }]
+        popular = [{
+            "id": "abc",
+            "url": "https://www.youtube.com/watch?v=abc",
+            "view_count": 5000,
+            "source_index": 0,
+            "popular_rank": 1,
+        }]
+
+        merged = ytet_ydl.merge_stream_channel_videos(latest, popular, 10)
+
+        self.assertEqual(1, len(merged))
+        self.assertEqual(5000, merged[0]["view_count"])
+        self.assertEqual(1, merged[0]["popular_rank"])
+
+
 def fake_video_info():
     return {
         "formats": [

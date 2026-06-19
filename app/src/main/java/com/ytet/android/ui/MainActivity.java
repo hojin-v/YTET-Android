@@ -54,6 +54,7 @@ import android.view.ViewTreeObserver;
 import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowManager;
+import android.view.animation.DecelerateInterpolator;
 import android.view.animation.LinearInterpolator;
 import android.window.OnBackInvokedCallback;
 import android.window.OnBackInvokedDispatcher;
@@ -147,6 +148,13 @@ public final class MainActivity extends Activity {
     private static final int NOW_PLAYING_TRANSITION_NONE = 0;
     private static final int NOW_PLAYING_TRANSITION_NEXT = 1;
     private static final int NOW_PLAYING_TRANSITION_PREVIOUS = -1;
+    private static final float NOW_PLAYING_SWIPE_RESISTANCE = 1.32f;
+    private static final float NOW_PLAYING_BLOCKED_SWIPE_RESISTANCE = 0.18f;
+    private static final float NOW_PLAYING_SWIPE_COMMIT_PROGRESS = 0.46f;
+    private static final float NOW_PLAYING_CURRENT_FADE_START = 0.18f;
+    private static final float NOW_PLAYING_CURRENT_FADE_RANGE = 0.42f;
+    private static final float NOW_PLAYING_PREVIEW_FADE_START = 0.16f;
+    private static final float NOW_PLAYING_PREVIEW_FADE_RANGE = 0.52f;
     private static final String[] SUPPORTED_VIDEO_URL_MARKERS = {
             "youtube.com/",
             "youtu.be/",
@@ -1428,12 +1436,22 @@ public final class MainActivity extends Activity {
             if (viewCompare != 0) {
                 return viewCompare;
             }
+            int popularCompare = compareStreamVideosByPopularRank(first, second);
+            if (popularCompare != 0) {
+                return popularCompare;
+            }
             return compareStreamVideosByLatest(first, second);
         }
         if (streamVideoSort == StreamVideoSort.OLDEST) {
             return compareStreamVideosByOldest(first, second);
         }
         return compareStreamVideosByLatest(first, second);
+    }
+
+    private int compareStreamVideosByPopularRank(OnlineStreamVideo first, OnlineStreamVideo second) {
+        int firstRank = first.popularRank() <= 0 ? Integer.MAX_VALUE : first.popularRank();
+        int secondRank = second.popularRank() <= 0 ? Integer.MAX_VALUE : second.popularRank();
+        return Integer.compare(firstRank, secondRank);
     }
 
     private int compareStreamVideosByLatest(OnlineStreamVideo first, OnlineStreamVideo second) {
@@ -4087,6 +4105,17 @@ public final class MainActivity extends Activity {
     }
 
     private View onlineImageView(String imageUrl, String fallbackText, int sizeDp, int radiusDp) {
+        return onlineImageView(imageUrl, fallbackText, sizeDp, radiusDp, 640, ImageView.ScaleType.CENTER_CROP);
+    }
+
+    private View onlineImageView(
+            String imageUrl,
+            String fallbackText,
+            int sizeDp,
+            int radiusDp,
+            int maxBitmapDimension,
+            ImageView.ScaleType scaleType
+    ) {
         FrameLayout frame = new FrameLayout(this);
         frame.setBackground(rounded(color(R.color.ytet_panel_alt), radiusDp));
         TextView placeholder = text(initialsForText(fallbackText), Math.max(11, Math.min(22, sizeDp / 3)), android.R.color.white, true);
@@ -4100,20 +4129,24 @@ public final class MainActivity extends Activity {
             return frame;
         }
         ImageView image = new ImageView(this);
-        image.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        image.setScaleType(scaleType);
         image.setAlpha(0f);
         image.setTag(imageUrl.trim());
         frame.addView(image, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT
         ));
-        loadRemoteImage(image, imageUrl.trim());
+        loadRemoteImage(image, imageUrl.trim(), maxBitmapDimension);
         return frame;
     }
 
     private void loadRemoteImage(ImageView target, String imageUrl) {
+        loadRemoteImage(target, imageUrl, 640);
+    }
+
+    private void loadRemoteImage(ImageView target, String imageUrl, int maxBitmapDimension) {
         imageExecutor.execute(() -> {
-            Bitmap bitmap = loadRemoteBitmap(imageUrl);
+            Bitmap bitmap = loadRemoteBitmap(imageUrl, maxBitmapDimension);
             runOnUiThread(() -> {
                 if (bitmap == null || target == null || !TextUtils.equals(String.valueOf(target.getTag()), imageUrl)) {
                     return;
@@ -4124,7 +4157,17 @@ public final class MainActivity extends Activity {
         });
     }
 
-    private Bitmap loadRemoteBitmap(String imageUrl) {
+    private Bitmap loadRemoteBitmap(String imageUrl, int maxBitmapDimension) {
+        for (String candidateUrl : remoteImageCandidates(imageUrl)) {
+            Bitmap bitmap = loadRemoteBitmapCandidate(candidateUrl, maxBitmapDimension);
+            if (bitmap != null) {
+                return bitmap;
+            }
+        }
+        return null;
+    }
+
+    private Bitmap loadRemoteBitmapCandidate(String imageUrl, int maxBitmapDimension) {
         HttpURLConnection connection = null;
         try {
             connection = (HttpURLConnection) new URL(imageUrl).openConnection();
@@ -4136,11 +4179,12 @@ public final class MainActivity extends Activity {
                 if (bitmap == null) {
                     return null;
                 }
+                int dimensionLimit = Math.max(320, maxBitmapDimension);
                 int maxDimension = Math.max(bitmap.getWidth(), bitmap.getHeight());
-                if (maxDimension <= 640) {
+                if (maxDimension <= dimensionLimit) {
                     return bitmap;
                 }
-                float ratio = 640f / maxDimension;
+                float ratio = (float) dimensionLimit / maxDimension;
                 int width = Math.max(1, Math.round(bitmap.getWidth() * ratio));
                 int height = Math.max(1, Math.round(bitmap.getHeight() * ratio));
                 return Bitmap.createScaledBitmap(bitmap, width, height, true);
@@ -4152,6 +4196,38 @@ public final class MainActivity extends Activity {
                 connection.disconnect();
             }
         }
+    }
+
+    private List<String> remoteImageCandidates(String imageUrl) {
+        List<String> candidates = new ArrayList<>();
+        String clean = imageUrl == null ? "" : imageUrl.trim();
+        if (clean.isEmpty()) {
+            return candidates;
+        }
+        if (clean.contains("ytimg.com/")) {
+            int queryIndex = clean.indexOf('?');
+            String withoutQuery = queryIndex >= 0 ? clean.substring(0, queryIndex) : clean;
+            int slashIndex = withoutQuery.lastIndexOf('/');
+            if (slashIndex > 0 && slashIndex < withoutQuery.length() - 1) {
+                String base = withoutQuery.substring(0, slashIndex + 1);
+                String extension = withoutQuery.endsWith(".webp") || withoutQuery.contains("/vi_webp/")
+                        ? ".webp"
+                        : ".jpg";
+                addUnique(candidates, base + "maxresdefault" + extension);
+                addUnique(candidates, base + "sddefault" + extension);
+                addUnique(candidates, base + "hq720" + extension);
+                addUnique(candidates, withoutQuery);
+            }
+        }
+        addUnique(candidates, clean);
+        return candidates;
+    }
+
+    private void addUnique(List<String> values, String value) {
+        if (value == null || value.trim().isEmpty() || values.contains(value)) {
+            return;
+        }
+        values.add(value.trim());
     }
 
     private String initialsForText(String value) {
@@ -5049,7 +5125,7 @@ public final class MainActivity extends Activity {
             if (nowPlayingSwipeConsumed) {
                 int direction = dx < 0f ? NOW_PLAYING_TRANSITION_NEXT : NOW_PLAYING_TRANSITION_PREVIOUS;
                 boolean canMove = direction == NOW_PLAYING_TRANSITION_PREVIOUS ? hasPreviousTrack() : hasNextTrack();
-                float resistance = canMove ? 0.86f : 0.18f;
+                float resistance = canMove ? NOW_PLAYING_SWIPE_RESISTANCE : NOW_PLAYING_BLOCKED_SWIPE_RESISTANCE;
                 float maxOffset = nowPlayingSwipeMaxOffset(view);
                 float offset = Math.max(-maxOffset, Math.min(maxOffset, dx * resistance));
                 applyNowPlayingSwipeOffset(direction, canMove, offset, maxOffset);
@@ -5063,7 +5139,7 @@ public final class MainActivity extends Activity {
             if (nowPlayingSwipeConsumed && action == MotionEvent.ACTION_UP) {
                 int direction = dx < 0f ? NOW_PLAYING_TRANSITION_NEXT : NOW_PLAYING_TRANSITION_PREVIOUS;
                 boolean canMove = direction == NOW_PLAYING_TRANSITION_PREVIOUS ? hasPreviousTrack() : hasNextTrack();
-                if (canMove && nowPlayingSwipeVisualProgress(view, dx, canMove) >= 0.64f) {
+                if (canMove && nowPlayingSwipeVisualProgress(view, dx, canMove) >= NOW_PLAYING_SWIPE_COMMIT_PROGRESS) {
                     triggerNowPlayingSwipe(direction);
                     return true;
                 }
@@ -5085,7 +5161,7 @@ public final class MainActivity extends Activity {
     }
 
     private float nowPlayingSwipeVisualProgress(View view, float dx, boolean canMove) {
-        float resistance = canMove ? 0.86f : 0.18f;
+        float resistance = canMove ? NOW_PLAYING_SWIPE_RESISTANCE : NOW_PLAYING_BLOCKED_SWIPE_RESISTANCE;
         float maxOffset = nowPlayingSwipeMaxOffset(view);
         float offset = Math.max(-maxOffset, Math.min(maxOffset, dx * resistance));
         return Math.min(1f, Math.abs(offset) / Math.max(1f, maxOffset));
@@ -5095,10 +5171,10 @@ public final class MainActivity extends Activity {
         float progress = Math.min(1f, Math.abs(offset) / Math.max(1f, maxOffset));
         if (nowPlayingCurrentFrame != null) {
             float currentFade = canMove
-                    ? Math.max(0f, (progress - 0.46f) / 0.54f)
+                    ? Math.max(0f, (progress - NOW_PLAYING_CURRENT_FADE_START) / NOW_PLAYING_CURRENT_FADE_RANGE)
                     : progress;
             nowPlayingCurrentFrame.setTranslationX(offset);
-            nowPlayingCurrentFrame.setAlpha(1f - currentFade * (canMove ? 0.82f : 0.24f));
+            nowPlayingCurrentFrame.setAlpha(1f - Math.min(1f, currentFade) * (canMove ? 0.90f : 0.24f));
         }
         if (!canMove) {
             hideNowPlayingSwipePreview();
@@ -5113,10 +5189,11 @@ public final class MainActivity extends Activity {
         setNowPlayingSwipePreviewTrack(previewTrack, direction);
         if (nowPlayingPreviewFrame != null) {
             float previewStart = direction == NOW_PLAYING_TRANSITION_NEXT ? maxOffset : -maxOffset;
-            float previewProgress = Math.max(0f, (progress - 0.50f) / 0.50f);
+            float previewProgress = Math.max(0f,
+                    (progress - NOW_PLAYING_PREVIEW_FADE_START) / NOW_PLAYING_PREVIEW_FADE_RANGE);
             nowPlayingPreviewFrame.setVisibility(View.VISIBLE);
             nowPlayingPreviewFrame.setTranslationX(previewStart + offset);
-            nowPlayingPreviewFrame.setAlpha(Math.min(0.96f, previewProgress * 1.12f));
+            nowPlayingPreviewFrame.setAlpha(Math.min(1f, previewProgress * 1.12f));
         }
     }
 
@@ -5176,17 +5253,21 @@ public final class MainActivity extends Activity {
         }
         pendingNowPlayingTransitionDirection = direction;
         long requestedTrackId = playbackTrackId;
+        float maxOffset = nowPlayingSwipeMaxOffset(nowPlayingInfoFrame);
+        float currentTarget = direction == NOW_PLAYING_TRANSITION_NEXT ? -maxOffset : maxOffset;
         nowPlayingCurrentFrame.animate()
+                .translationX(currentTarget)
                 .alpha(0f)
-                .setDuration(100L)
+                .setInterpolator(new DecelerateInterpolator(1.7f))
+                .setDuration(180L)
                 .start();
         if (nowPlayingPreviewFrame != null && nowPlayingPreviewFrame.getVisibility() == View.VISIBLE) {
             nowPlayingPreviewFrame.animate().cancel();
-            nowPlayingPreviewFrame.setTranslationX(0f);
-            nowPlayingPreviewFrame.setAlpha(0f);
             nowPlayingPreviewFrame.animate()
+                    .translationX(0f)
                     .alpha(1f)
-                    .setDuration(130L)
+                    .setInterpolator(new DecelerateInterpolator(1.8f))
+                    .setDuration(210L)
                     .start();
         }
         if (direction == NOW_PLAYING_TRANSITION_NEXT) {
@@ -5340,16 +5421,20 @@ public final class MainActivity extends Activity {
         if (direction != NOW_PLAYING_TRANSITION_NONE
                 && nowPlayingPreviewFrame != null
                 && nowPlayingPreviewFrame.getVisibility() == View.VISIBLE) {
+            float previewTranslation = nowPlayingPreviewFrame.getTranslationX();
+            float previewAlpha = nowPlayingPreviewFrame.getAlpha();
             setNowPlayingCover(idle);
             setMarqueeText(nowPlayingTitle, title);
             setMarqueeText(nowPlayingMeta, meta);
             hideNowPlayingSwipePreview();
             if (nowPlayingCurrentFrame != null) {
-                nowPlayingCurrentFrame.setTranslationX(0f);
-                nowPlayingCurrentFrame.setAlpha(0f);
+                nowPlayingCurrentFrame.setTranslationX(previewTranslation);
+                nowPlayingCurrentFrame.setAlpha(Math.max(0.72f, previewAlpha));
                 nowPlayingCurrentFrame.animate()
+                        .translationX(0f)
                         .alpha(1f)
-                        .setDuration(150L)
+                        .setInterpolator(new DecelerateInterpolator(1.8f))
+                        .setDuration(170L)
                         .start();
             } else {
                 resetNowPlayingInfoFrame();
@@ -6428,11 +6513,18 @@ public final class MainActivity extends Activity {
     private View coverArtView() {
         if (playbackAlbumArtUri != null && !playbackAlbumArtUri.trim().isEmpty()) {
             if (isHttpUrl(playbackAlbumArtUri)) {
-                return onlineImageView(playbackAlbumArtUri, playbackTitle, 284, 8);
+                return onlineImageView(
+                        playbackAlbumArtUri,
+                        playbackTitle,
+                        284,
+                        8,
+                        1440,
+                        ImageView.ScaleType.FIT_CENTER
+                );
             }
             ImageView image = new ImageView(this);
             image.setBackground(rounded(color(R.color.ytet_panel_alt), 8));
-            image.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            image.setScaleType(ImageView.ScaleType.FIT_CENTER);
             image.setImageURI(Uri.parse(playbackAlbumArtUri));
             return image;
         }

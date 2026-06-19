@@ -12,6 +12,7 @@ public final class OnlineStreamVideo {
     private final long viewCount;
     private final long publishedRank;
     private final int sourceIndex;
+    private final int popularRank;
 
     public OnlineStreamVideo(
             String id,
@@ -22,7 +23,8 @@ public final class OnlineStreamVideo {
             long durationMs,
             long viewCount,
             long publishedRank,
-            int sourceIndex
+            int sourceIndex,
+            int popularRank
     ) {
         this.id = clean(id, stableId(watchUrl));
         this.title = clean(title, "제목 없음");
@@ -33,6 +35,7 @@ public final class OnlineStreamVideo {
         this.viewCount = Math.max(0L, viewCount);
         this.publishedRank = Math.max(0L, publishedRank);
         this.sourceIndex = Math.max(0, sourceIndex);
+        this.popularRank = Math.max(0, popularRank);
     }
 
     public String id() {
@@ -69,6 +72,10 @@ public final class OnlineStreamVideo {
 
     public int sourceIndex() {
         return sourceIndex;
+    }
+
+    public int popularRank() {
+        return popularRank;
     }
 
     public long playbackId() {

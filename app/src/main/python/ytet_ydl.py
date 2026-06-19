@@ -1,7 +1,6 @@
 import os
 import json
 import re
-import random
 import time
 import unicodedata
 from difflib import SequenceMatcher
@@ -77,25 +76,36 @@ def stream_channels(channels_json, per_channel=3):
             channel_url = str(channel.get("url") or "").strip()
             if not channel_url:
                 continue
-            info = None
+            latest_info = None
+            popular_info = None
             last_error = None
             for candidate_url in stream_channel_candidate_urls(channel_url):
                 try:
-                    info = ydl.extract_info(candidate_url, download=False)
+                    latest_info = ydl.extract_info(candidate_url, download=False)
                     break
                 except Exception as error:
                     last_error = error
                     continue
-            if info is None:
+            for candidate_url in stream_channel_candidate_urls(channel_url, popular=True):
+                try:
+                    popular_info = ydl.extract_info(candidate_url, download=False)
+                    break
+                except Exception as error:
+                    last_error = error
+                    continue
+            if latest_info is None and popular_info is None:
                 logger.warning(f"스트림 채널 조회 실패: {channel_url} / {last_error}")
                 continue
             try:
-                videos = stream_channel_videos(info, channel, per_channel)
+                latest_videos = stream_channel_videos(latest_info, channel, per_channel, "latest")
+                popular_videos = stream_channel_videos(popular_info, channel, per_channel, "popular")
+                videos = merge_stream_channel_videos(latest_videos, popular_videos, per_channel)
             except Exception as error:
                 logger.warning(f"스트림 채널 조회 실패: {channel_url} / {error}")
                 continue
             if not videos:
                 continue
+            info = latest_info or popular_info
             sections.append({
                 "id": str(channel.get("id") or info.get("id") or stable_text_id(channel_url)),
                 "title": stream_channel_title(info, channel),
@@ -106,18 +116,22 @@ def stream_channels(channels_json, per_channel=3):
     return json.dumps(sections, ensure_ascii=False)
 
 
-def stream_channel_candidate_urls(channel_url):
-    url = str(channel_url or "").strip().rstrip("/")
+def stream_channel_candidate_urls(channel_url, popular=False):
+    url = str(channel_url or "").strip().split("?", 1)[0].rstrip("/")
     if not url:
         return []
-    candidates = []
-    if "/videos" not in url:
-        candidates.append(url + "/videos")
-    candidates.append(url)
+    videos_url = url if "/videos" in url else url + "/videos"
+    if popular:
+        candidates = [
+            videos_url + "?view=0&sort=p&flow=grid",
+            videos_url + "?sort=p",
+        ]
+    else:
+        candidates = [videos_url, url]
     return list(dict.fromkeys(candidates))
 
 
-def stream_channel_videos(info, channel, per_channel):
+def stream_channel_videos(info, channel, per_channel, source_kind="latest"):
     if not isinstance(info, dict):
         return []
     entries = info.get("entries") if isinstance(info.get("entries"), list) else []
@@ -139,12 +153,87 @@ def stream_channel_videos(info, channel, per_channel):
             "url": watch_url,
             "thumbnail": best_thumbnail(entry) or best_thumbnail(info),
             "duration": as_int(entry.get("duration")) or 0,
-            "view_count": as_int(entry.get("view_count")) or 0,
+            "view_count": stream_video_view_count(entry),
             "published": stream_video_published_rank(entry),
             "source_index": source_index,
+            "popular_rank": source_index + 1 if source_kind == "popular" else 0,
         })
-    random.shuffle(candidates)
     return candidates[:per_channel]
+
+
+def merge_stream_channel_videos(latest_videos, popular_videos, per_channel):
+    merged = []
+    by_key = {}
+
+    def remember(item):
+        key = stream_video_key(item)
+        if key:
+            by_key[key] = item
+        merged.append(item)
+
+    for item in latest_videos or []:
+        remember(dict(item))
+
+    for popular_index, item in enumerate(popular_videos or []):
+        copy = dict(item)
+        rank = as_int(copy.get("popular_rank")) or popular_index + 1
+        key = stream_video_key(copy)
+        existing = by_key.get(key)
+        if existing is not None:
+            if as_int(existing.get("view_count")) <= 0 and as_int(copy.get("view_count")) > 0:
+                existing["view_count"] = copy.get("view_count")
+            if not existing.get("thumbnail") and copy.get("thumbnail"):
+                existing["thumbnail"] = copy.get("thumbnail")
+            if as_int(existing.get("duration")) <= 0 and as_int(copy.get("duration")) > 0:
+                existing["duration"] = copy.get("duration")
+            existing["popular_rank"] = rank
+            continue
+
+        copy["source_index"] = per_channel + popular_index
+        copy["popular_rank"] = rank
+        remember(copy)
+
+    return merged[:per_channel * 2]
+
+
+def stream_video_key(item):
+    if not isinstance(item, dict):
+        return ""
+    return str(item.get("url") or item.get("id") or "").strip()
+
+
+def stream_video_view_count(entry):
+    if not isinstance(entry, dict):
+        return 0
+    for key in ("view_count", "viewCount", "views"):
+        count = as_int(entry.get(key))
+        if count > 0:
+            return count
+    for key in ("view_count_text", "viewCountText", "short_view_count_text"):
+        count = compact_view_count(entry.get(key))
+        if count > 0:
+            return count
+    return 0
+
+
+def compact_view_count(value):
+    text = str(value or "").strip().lower().replace(",", "")
+    if not text:
+        return 0
+    match = re.search(r"(\d+(?:\.\d+)?)\s*([kmb]|천|만|억)?", text)
+    if not match:
+        return 0
+    number = float(match.group(1))
+    suffix = match.group(2) or ""
+    multiplier = {
+        "k": 1_000,
+        "m": 1_000_000,
+        "b": 1_000_000_000,
+        "천": 1_000,
+        "만": 10_000,
+        "억": 100_000_000,
+    }.get(suffix, 1)
+    return int(number * multiplier)
 
 
 def stream_video_published_rank(entry):
