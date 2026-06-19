@@ -111,6 +111,8 @@ import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
+import com.ytet.android.BuildConfig;
+
 public final class MainActivity extends Activity {
     private static final int REQUEST_OUTPUT_TREE = 1207;
     private static final int REQUEST_NOTIFICATIONS = 1208;
@@ -146,7 +148,7 @@ public final class MainActivity extends Activity {
     private final ExecutorService libraryExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService updateExecutor = Executors.newSingleThreadExecutor();
     private final DeviceMusicLibrary deviceMusicLibrary = new DeviceMusicLibrary();
-    private final UpdateChecker updateChecker = new UpdateChecker();
+    private final UpdateChecker updateChecker = new UpdateChecker(BuildConfig.UPDATE_CHANNEL);
 
     private FrameLayout contentFrame;
     private ScrollView contentScrollView;
@@ -1222,7 +1224,7 @@ public final class MainActivity extends Activity {
         String updateTag = tag == null || tag.trim().isEmpty() ? "다운로드한 업데이트" : tag.trim();
         AlertDialog dialog = new AlertDialog.Builder(this).create();
         LinearLayout body = dialogBody("업데이트 설치 준비 완료");
-        body.addView(muted(updateTag + " APK 다운로드가 완료되었습니다. Android 설치 화면을 열어 업데이트를 승인할 수 있습니다.", 13), marginBottom(14));
+        body.addView(muted(displayUpdateTag(updateTag) + " APK 다운로드가 완료되었습니다. Android 설치 화면을 열어 업데이트를 승인할 수 있습니다.", 13), marginBottom(14));
 
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
@@ -1333,20 +1335,20 @@ public final class MainActivity extends Activity {
             return;
         }
         updateChecking = true;
-        updateStatus = "정식 릴리즈 업데이트를 확인하는 중입니다.";
+        updateStatus = updateChannelLabel() + " 업데이트를 확인하는 중입니다.";
         renderUpdateState();
         String currentVersionName = currentAppVersionName();
         updateExecutor.execute(() -> {
             try {
-                UpdateInfo update = updateChecker.checkForStableUpdate(currentVersionName);
+                UpdateInfo update = updateChecker.checkForUpdate(currentVersionName);
                 runOnUiThread(() -> {
                     updateChecking = false;
                     updateChecked = true;
                     availableUpdate = update;
                     if (update == null) {
-                        updateStatus = "현재 설치된 " + currentVersionName + " 버전이 최신 정식 버전입니다.";
+                        updateStatus = "현재 설치된 " + displayVersionTag(currentVersionName) + " 버전이 최신 " + updateChannelLabel() + "입니다.";
                     } else {
-                        updateStatus = update.tagName() + " 정식 업데이트를 사용할 수 있습니다.";
+                        updateStatus = displayVersionTag(update.tagName()) + " 업데이트를 사용할 수 있습니다.";
                         showUpdateAvailableDialog(update);
                     }
                     renderUpdateState();
@@ -1378,7 +1380,7 @@ public final class MainActivity extends Activity {
         }
         dismissUpdateDialog();
         updateDownloading = true;
-        updateStatus = update.tagName() + " 업데이트 APK를 다운로드하는 중입니다.";
+        updateStatus = displayUpdateTag(update.tagName()) + " 업데이트 APK를 다운로드하는 중입니다.";
         renderUpdateState();
         showUpdateDownloadDialog(update);
 
@@ -1461,7 +1463,7 @@ public final class MainActivity extends Activity {
         if (apkFile.isFile()) {
             updateDownloading = false;
             String tag = getPreferences().getString(PREF_UPDATE_TAG, "다운로드한 업데이트");
-            updateStatus = tag + " APK 다운로드가 완료되었습니다. 설치할 수 있습니다.";
+            updateStatus = displayUpdateTag(tag) + " APK 다운로드가 완료되었습니다. 설치할 수 있습니다.";
             renderUpdateState();
             showDownloadedUpdateDialog(tag);
             return;
@@ -1480,7 +1482,7 @@ public final class MainActivity extends Activity {
 
     private void clearInstalledPendingUpdateIfNeeded() {
         String tag = getPreferences().getString(PREF_UPDATE_TAG, "");
-        if (!tag.isEmpty() && UpdateChecker.compareStableTagToCurrentVersion(tag, currentAppVersionName()) <= 0) {
+        if (!tag.isEmpty() && UpdateChecker.isDownloadedUpdateInstalled(tag, currentAppVersionName())) {
             clearPendingUpdateDownload();
             updateDownloading = false;
         }
@@ -1554,7 +1556,7 @@ public final class MainActivity extends Activity {
                     intent.getStringExtra(UpdateDownloadService.EXTRA_APK_PATH),
                     getPreferences().getString(PREF_UPDATE_APK_PATH, "")
             );
-            updateStatus = tag + " APK 다운로드가 완료되었습니다. 설치할 수 있습니다.";
+            updateStatus = displayUpdateTag(tag) + " APK 다운로드가 완료되었습니다. 설치할 수 있습니다.";
             updateDownloadProgress(100, "다운로드 완료. 설치할 수 있습니다.");
             renderUpdateState();
             showDownloadedUpdateDialog(tag);
@@ -1562,7 +1564,7 @@ public final class MainActivity extends Activity {
         }
 
         updateDownloading = true;
-        updateStatus = tag + " 업데이트 APK를 다운로드하는 중입니다.";
+        updateStatus = displayUpdateTag(tag) + " 업데이트 APK를 다운로드하는 중입니다.";
         if (updateDownloadProgressBar == null && updateDialog == null && canShowUpdateDialog()) {
             showUpdateDownloadDialog(availableUpdate);
         }
@@ -1601,9 +1603,24 @@ public final class MainActivity extends Activity {
         if (version.isEmpty()) {
             return "v0.0.0";
         }
+        if (version.matches("(?i).*nightly[-.]\\d+$")) {
+            return "Nightly " + version.replaceFirst("(?i)^.*nightly[-.](\\d+)$", "$1");
+        }
         version = version.replaceFirst("^v", "");
         version = version.replaceFirst("-android$", "");
         return "v" + version;
+    }
+
+    private String displayUpdateTag(String value) {
+        String tag = value == null ? "" : value.trim();
+        if (tag.matches("(?i)^v?\\d+\\.\\d+\\.\\d+.*") || tag.matches("(?i).*nightly[-.]\\d+$")) {
+            return displayVersionTag(tag);
+        }
+        return tag.isEmpty() ? "다운로드한 업데이트" : tag;
+    }
+
+    private String updateChannelLabel() {
+        return UpdateChecker.CHANNEL_NIGHTLY.equals(BuildConfig.UPDATE_CHANNEL) ? "Beta" : "정식 릴리즈";
     }
 
     private void saveLibraryTabScroll() {

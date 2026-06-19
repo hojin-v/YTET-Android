@@ -15,7 +15,7 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 
 public final class UpdateApkProvider extends ContentProvider {
-    public static final String AUTHORITY = "com.ytet.android.updateapk";
+    public static final String AUTHORITY_SUFFIX = ".updateapk";
     private static final String MIME_APK = "application/vnd.android.package-archive";
 
     public static Uri uriFor(Context context, File file) {
@@ -29,9 +29,13 @@ public final class UpdateApkProvider extends ContentProvider {
         }
         return new Uri.Builder()
                 .scheme("content")
-                .authority(AUTHORITY)
+                .authority(authority(context))
                 .appendPath(file.getName())
                 .build();
+    }
+
+    public static String authority(Context context) {
+        return context.getPackageName() + AUTHORITY_SUFFIX;
     }
 
     @Override

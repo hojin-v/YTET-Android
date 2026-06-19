@@ -15,18 +15,32 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public final class UpdateChecker {
+    public static final String CHANNEL_STABLE = "stable";
+    public static final String CHANNEL_NIGHTLY = "nightly";
+
     private static final String RELEASES_API_URL = "https://api.github.com/repos/hojin-v/YTET-Android/releases";
     private static final Pattern STABLE_TAG_PATTERN = Pattern.compile("^v(\\d+)\\.(\\d+)\\.(\\d+)$");
     private static final Pattern CURRENT_VERSION_PATTERN = Pattern.compile("^(\\d+)\\.(\\d+)\\.(\\d+)");
     private static final Pattern STABLE_APK_ASSET_PATTERN = Pattern.compile("^ytet-android-v\\d+\\.\\d+\\.\\d+\\.apk$");
+    private static final Pattern NIGHTLY_APK_ASSET_PATTERN = Pattern.compile("^ytet-beta-nightly-(\\d+)\\.apk$");
+    private static final Pattern NIGHTLY_VERSION_PATTERN = Pattern.compile("(?:^|[-.])nightly[-.](\\d+)$");
     private static final Pattern UNSTABLE_MARKER_PATTERN = Pattern.compile(
             "(^|[^a-z0-9])(nightly|alpha|beta|rc|dev|preview)([^a-z0-9]|$)",
             Pattern.CASE_INSENSITIVE
     );
     private static final int CONNECT_TIMEOUT_MS = 8000;
     private static final int READ_TIMEOUT_MS = 8000;
+    private final String channel;
 
-    public UpdateInfo checkForStableUpdate(String currentVersionName) throws IOException, JSONException {
+    public UpdateChecker() {
+        this(CHANNEL_STABLE);
+    }
+
+    public UpdateChecker(String channel) {
+        this.channel = CHANNEL_NIGHTLY.equals(channel) ? CHANNEL_NIGHTLY : CHANNEL_STABLE;
+    }
+
+    public UpdateInfo checkForUpdate(String currentVersionName) throws IOException, JSONException {
         HttpURLConnection connection = (HttpURLConnection) new URL(RELEASES_API_URL).openConnection();
         connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
         connection.setReadTimeout(READ_TIMEOUT_MS);
@@ -44,7 +58,13 @@ public final class UpdateChecker {
         if (status < 200 || status >= 300) {
             throw new IOException("GitHub releases request failed: " + status);
         }
-        return latestStableUpdateFromJson(body, currentVersionName);
+        return CHANNEL_NIGHTLY.equals(channel)
+                ? latestNightlyUpdateFromJson(body, currentVersionName)
+                : latestStableUpdateFromJson(body, currentVersionName);
+    }
+
+    public UpdateInfo checkForStableUpdate(String currentVersionName) throws IOException, JSONException {
+        return new UpdateChecker(CHANNEL_STABLE).checkForUpdate(currentVersionName);
     }
 
     public static UpdateInfo latestStableUpdateFromJson(String releasesJson, String currentVersionName) throws JSONException {
@@ -79,6 +99,40 @@ public final class UpdateChecker {
         return latestUpdate;
     }
 
+    public static UpdateInfo latestNightlyUpdateFromJson(String releasesJson, String currentVersionName) throws JSONException {
+        JSONArray releases = new JSONArray(releasesJson == null ? "[]" : releasesJson);
+        int currentBuild = parseNightlyBuild(currentVersionName);
+        UpdateInfo latestUpdate = null;
+        int latestBuild = currentBuild;
+        for (int index = 0; index < releases.length(); index++) {
+            JSONObject release = releases.getJSONObject(index);
+            String tagName = release.optString("tag_name", "");
+            String releaseName = release.optString("name", "");
+            if (!isNightlyRelease(tagName, releaseName, release.optBoolean("draft"))) {
+                continue;
+            }
+            JSONObject asset = findNightlyApkAsset(release.optJSONArray("assets"));
+            if (asset == null) {
+                continue;
+            }
+            int build = nightlyBuildFromApkAssetName(asset.optString("name", ""));
+            if (build <= latestBuild) {
+                continue;
+            }
+            latestBuild = build;
+            String nightlyTag = "nightly-" + build;
+            latestUpdate = new UpdateInfo(
+                    nightlyTag,
+                    "nightly." + build,
+                    releaseName.isEmpty() ? "YTET Beta Nightly " + build : releaseName,
+                    release.optString("html_url", ""),
+                    asset.optString("name", "YTET-Beta-nightly-" + build + ".apk"),
+                    asset.optString("browser_download_url", "")
+            );
+        }
+        return latestUpdate;
+    }
+
     static boolean isStableRelease(String tagName, String releaseName, boolean draft, boolean prerelease) {
         if (draft || prerelease) {
             return false;
@@ -91,10 +145,35 @@ public final class UpdateChecker {
         return !UNSTABLE_MARKER_PATTERN.matcher(combined).find();
     }
 
+    static boolean isNightlyRelease(String tagName, String releaseName, boolean draft) {
+        if (draft) {
+            return false;
+        }
+        String tag = tagName == null ? "" : tagName.trim().toLowerCase();
+        String name = releaseName == null ? "" : releaseName.trim().toLowerCase();
+        return "nightly".equals(tag) || name.contains("nightly");
+    }
+
     static boolean isApkAssetName(String assetName) {
         String lower = assetName == null ? "" : assetName.toLowerCase();
         return STABLE_APK_ASSET_PATTERN.matcher(lower).matches()
                 && !UNSTABLE_MARKER_PATTERN.matcher(lower).find();
+    }
+
+    static boolean isNightlyApkAssetName(String assetName) {
+        return NIGHTLY_APK_ASSET_PATTERN.matcher(assetName == null ? "" : assetName.toLowerCase()).matches();
+    }
+
+    static boolean isNightlyApkNewerThan(String assetName, String currentVersionName) {
+        return nightlyBuildFromApkAssetName(assetName) > parseNightlyBuild(currentVersionName);
+    }
+
+    public static boolean isDownloadedUpdateInstalled(String updateTag, String currentVersionName) {
+        int nightlyBuild = parseNightlyBuild(updateTag);
+        if (nightlyBuild > 0) {
+            return parseNightlyBuild(currentVersionName) >= nightlyBuild;
+        }
+        return compareStableTagToCurrentVersion(updateTag, currentVersionName) <= 0;
     }
 
     public static int compareStableTagToCurrentVersion(String tagName, String currentVersionName) {
@@ -126,6 +205,25 @@ public final class UpdateChecker {
         return null;
     }
 
+    private static JSONObject findNightlyApkAsset(JSONArray assets) throws JSONException {
+        if (assets == null) {
+            return null;
+        }
+        JSONObject bestAsset = null;
+        int bestBuild = -1;
+        for (int index = 0; index < assets.length(); index++) {
+            JSONObject asset = assets.getJSONObject(index);
+            String name = asset.optString("name", "");
+            String url = asset.optString("browser_download_url", "");
+            int build = nightlyBuildFromApkAssetName(name);
+            if (build > bestBuild && isNightlyApkAssetName(name) && url.startsWith("https://")) {
+                bestBuild = build;
+                bestAsset = asset;
+            }
+        }
+        return bestAsset;
+    }
+
     private static String versionNameFromTag(String tagName) {
         return tagName == null ? "" : tagName.replaceFirst("^v", "");
     }
@@ -152,6 +250,22 @@ public final class UpdateChecker {
                 Integer.parseInt(matcher.group(2)),
                 Integer.parseInt(matcher.group(3))
         };
+    }
+
+    private static int nightlyBuildFromApkAssetName(String assetName) {
+        Matcher matcher = NIGHTLY_APK_ASSET_PATTERN.matcher(assetName == null ? "" : assetName.trim().toLowerCase());
+        if (!matcher.matches()) {
+            return -1;
+        }
+        return Integer.parseInt(matcher.group(1));
+    }
+
+    private static int parseNightlyBuild(String value) {
+        Matcher matcher = NIGHTLY_VERSION_PATTERN.matcher(value == null ? "" : value.trim().toLowerCase());
+        if (!matcher.find()) {
+            return -1;
+        }
+        return Integer.parseInt(matcher.group(1));
     }
 
     private static String readBody(InputStream stream) throws IOException {

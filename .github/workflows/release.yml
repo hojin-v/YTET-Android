@@ -98,13 +98,30 @@ jobs:
             patch="${BASH_REMATCH[3]}"
             version_name="${major}.${minor}.${patch}-android"
             version_code=$((10#$major * 1000000 + 10#$minor * 1000 + 10#$patch))
+            gradle_test_task=":app:testStableDebugUnitTest"
+            gradle_build_task=":app:assembleStableRelease"
+            apk_path="app/build/outputs/apk/stable/release/app-stable-release.apk"
+            apk_asset="YTET-Android-${version}.apk"
+            zip_asset="YTET-Android-${version}-android.zip"
           else
-            version_name="0.1.3-nightly.${{ github.run_number }}"
-            version_code=$((900000000 + ${{ github.run_number }}))
+            version_name="0.1.3-nightly.${GITHUB_RUN_NUMBER}"
+            version_code=$((900000000 + GITHUB_RUN_NUMBER))
+            gradle_test_task=":app:testNightlyDebugUnitTest"
+            gradle_build_task=":app:assembleNightlyRelease"
+            apk_path="app/build/outputs/apk/nightly/release/app-nightly-release.apk"
+            apk_asset="YTET-Beta-nightly-${GITHUB_RUN_NUMBER}.apk"
+            zip_asset="YTET-Beta-nightly-${GITHUB_RUN_NUMBER}-android.zip"
           fi
           {
             echo "YTET_VERSION_NAME=$version_name"
             echo "YTET_VERSION_CODE=$version_code"
+            echo "YTET_GRADLE_TEST_TASK=$gradle_test_task"
+            echo "YTET_GRADLE_BUILD_TASK=$gradle_build_task"
+            echo "YTET_APK_PATH=$apk_path"
+            echo "YTET_APK_ASSET_NAME=$apk_asset"
+            echo "YTET_ZIP_ASSET_NAME=$zip_asset"
+            echo "YTET_DIST_APK=dist/$apk_asset"
+            echo "YTET_DIST_ZIP=dist/$zip_asset"
           } >> "$GITHUB_ENV"
 
       - name: Configure release APK signing
@@ -173,11 +190,11 @@ jobs:
 
       - name: Run JVM unit tests
         if: steps.signing.outputs.configured == 'true'
-        run: ./gradlew --no-daemon :app:testDebugUnitTest --warning-mode all
+        run: ./gradlew --no-daemon "$YTET_GRADLE_TEST_TASK" --warning-mode all
 
       - name: Build YTET Android
         if: steps.signing.outputs.configured == 'true'
-        run: ./gradlew --no-daemon clean :app:assembleRelease --warning-mode all
+        run: ./gradlew --no-daemon clean "$YTET_GRADLE_BUILD_TASK" --warning-mode all
 
       - name: Verify release APK signature
         if: steps.signing.outputs.configured == 'true'
@@ -185,29 +202,28 @@ jobs:
           set -euo pipefail
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify \
             --verbose \
-            app/build/outputs/apk/release/app-release.apk
+            "$YTET_APK_PATH"
 
       - name: Verify APK runtime packaging
         if: steps.signing.outputs.configured == 'true'
         run: |
           chmod +x scripts/verify_apk_runtime.sh
-          scripts/verify_apk_runtime.sh app/build/outputs/apk/release/app-release.apk
+          scripts/verify_apk_runtime.sh "$YTET_APK_PATH"
 
       - name: Package release assets
         if: steps.signing.outputs.configured == 'true'
         shell: bash
         run: |
           set -euo pipefail
-          version="${{ steps.version.outputs.version }}"
-          apk="app/build/outputs/apk/release/app-release.apk"
+          apk="$YTET_APK_PATH"
           if [[ ! -f "$apk" ]]; then
             echo "::error::Signed release APK not found. Check release signing secrets."
             exit 1
           fi
           mkdir -p dist
-          cp "$apk" "dist/YTET-Android-${version}.apk"
-          cp README.md docs/PORTING.md dist/
-          (cd dist && jar --create --file "YTET-Android-${version}-android.zip" "YTET-Android-${version}.apk" README.md PORTING.md)
+          cp "$apk" "$YTET_DIST_APK"
+          cp README.md dist/
+          (cd dist && jar --create --file "$YTET_ZIP_ASSET_NAME" "$YTET_APK_ASSET_NAME" README.md)
 
       - name: Upload workflow artifact
         if: steps.signing.outputs.configured == 'true'
@@ -215,8 +231,8 @@ jobs:
         with:
           name: YTET-Android-${{ steps.version.outputs.version }}-android
           path: |
-            dist/YTET-Android-${{ steps.version.outputs.version }}.apk
-            dist/YTET-Android-${{ steps.version.outputs.version }}-android.zip
+            dist/*.apk
+            dist/*.zip
           if-no-files-found: error
 
       - name: Publish GitHub Release
@@ -228,8 +244,8 @@ jobs:
         run: |
           set -euo pipefail
           tag="$RELEASE_VERSION"
-          apk="dist/YTET-Android-${tag}.apk"
-          zip="dist/YTET-Android-${tag}-android.zip"
+          apk="$YTET_DIST_APK"
+          zip="$YTET_DIST_ZIP"
 
           title="YTET Android $tag"
           notes_file="$RUNNER_TEMP/release-notes.md"
@@ -250,8 +266,15 @@ jobs:
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git tag -f nightly "$GITHUB_SHA"
             git push origin refs/tags/nightly --force
-            title="YTET Android Nightly"
-            echo "Automated Android release build from $GITHUB_SHA. Includes embedded Python yt-dlp runtime and arm64 FFmpegKit remuxing; see README before distribution." > "$notes_file"
+            title="YTET Beta Nightly $GITHUB_RUN_NUMBER"
+            {
+              echo "YTET Beta Nightly $GITHUB_RUN_NUMBER"
+              echo
+              echo "패치노트"
+              echo "- main 브랜치 최신 커밋을 기반으로 한 개발자 검증용 Beta 빌드입니다."
+              echo "- 정식 YTET 앱과 별도 앱으로 설치됩니다."
+              echo "- 커밋: $GITHUB_SHA"
+            } > "$notes_file"
             prerelease_flag="--prerelease"
           fi
 

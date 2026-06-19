@@ -35,6 +35,30 @@ android {
         }
     }
 
+    buildFeatures {
+        buildConfig = true
+    }
+
+    flavorDimensions "channel"
+    productFlavors {
+        stable {
+            dimension "channel"
+            applicationId = "com.ytet.android"
+            buildConfigField "String", "UPDATE_CHANNEL", "\"stable\""
+            manifestPlaceholders = [
+                    updateApkAuthority: "com.ytet.android.updateapk"
+            ]
+        }
+        nightly {
+            dimension "channel"
+            applicationId = "com.ytet.android.beta"
+            buildConfigField "String", "UPDATE_CHANNEL", "\"nightly\""
+            manifestPlaceholders = [
+                    updateApkAuthority: "com.ytet.android.beta.updateapk"
+            ]
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

@@ -52,7 +52,7 @@
             android:foregroundServiceType="mediaPlayback" />
         <provider
             android:name=".update.UpdateApkProvider"
-            android:authorities="com.ytet.android.updateapk"
+            android:authorities="${updateApkAuthority}"
             android:exported="false"
             android:grantUriPermissions="true" />
     </application>

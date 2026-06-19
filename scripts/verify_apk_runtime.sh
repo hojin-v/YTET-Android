@@ -8,6 +8,7 @@ if [[ ! -f "$apk" ]]; then
   echo "missing APK: $apk" >&2
   exit 1
 fi
+apk="$(cd "$(dirname "$apk")" && pwd)/$(basename "$apk")"
 
 listing="$(jar --list --file "$apk")"
 
@@ -43,10 +44,25 @@ require_archive_string() {
   local entry="$1"
   local pattern="$2"
   local message="$3"
-  if ! unzip -p "$apk" "$entry" | strings | grep "$pattern" >/dev/null; then
+  local tmpdir=""
+  if command -v unzip >/dev/null 2>&1; then
+    if ! unzip -p "$apk" "$entry" | strings | grep "$pattern" >/dev/null; then
+      echo "$message" >&2
+      exit 1
+    fi
+    return
+  fi
+
+  tmpdir="$(mktemp -d)"
+  trap '[[ -n "${tmpdir:-}" ]] && rm -rf "$tmpdir"' RETURN
+  (cd "$tmpdir" && jar --extract --file "$apk" "$entry")
+  if ! strings "$tmpdir/$entry" | grep "$pattern" >/dev/null; then
     echo "$message" >&2
     exit 1
   fi
+  rm -rf "$tmpdir"
+  tmpdir=""
+  trap - RETURN
 }
 
 require_archive_string 'assets/chaquopy/app.imy' 'ytet_ydl\.pyc' \
