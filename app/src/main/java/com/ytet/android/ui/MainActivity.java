@@ -320,8 +320,8 @@ public final class MainActivity extends Activity {
     private boolean libraryPullConsumed;
     private float libraryPullDistance;
     private boolean libraryPullReady;
-    private FrameLayout libraryPullIndicator;
-    private ImageView libraryPullIcon;
+    private View libraryPullIndicator;
+    private PullRefreshIndicatorView libraryPullIndicatorView;
     private ObjectAnimator libraryPullSpinAnimator;
     private String librarySource = LIBRARY_SOURCE_COLLECTION;
     private DeviceAudioTrack selectedTrack;
@@ -1071,20 +1071,51 @@ public final class MainActivity extends Activity {
                 ? libraryPullRefreshOffset()
                 : libraryPullHiddenOffset()
                 + Math.min(libraryPullMaxOffset() - libraryPullHiddenOffset(), dragDistance * 0.78f);
-        libraryPullIndicator.setVisibility(visible ? View.VISIBLE : View.INVISIBLE);
+        if (!visible) {
+            hideLibraryPullIndicator();
+            return;
+        }
+        libraryPullIndicator.animate().cancel();
+        libraryPullIndicator.setVisibility(View.VISIBLE);
         libraryPullIndicator.setTranslationY(offset);
         libraryPullIndicator.setAlpha(libraryLoading || ready ? 1f : Math.max(0.35f, progress));
         float scale = 0.86f + progress * 0.14f;
         libraryPullIndicator.setScaleX(scale);
         libraryPullIndicator.setScaleY(scale);
-        if (libraryPullIcon != null) {
-            if (libraryLoading) {
-                startLibraryPullSpin();
-            } else {
-                stopLibraryPullSpin();
-                libraryPullIcon.setRotation(ready ? 180f : progress * 180f);
+        if (libraryLoading) {
+            startLibraryPullSpin();
+        } else {
+            stopLibraryPullSpin();
+            if (libraryPullIndicatorView != null) {
+                libraryPullIndicatorView.setPullProgress(ready ? 1f : progress);
             }
         }
+    }
+
+    private void hideLibraryPullIndicator() {
+        if (libraryPullIndicator == null || libraryPullIndicator.getVisibility() != View.VISIBLE) {
+            stopLibraryPullSpin();
+            if (libraryPullIndicatorView != null) {
+                libraryPullIndicatorView.setPullProgress(0f);
+            }
+            return;
+        }
+        stopLibraryPullSpin();
+        libraryPullIndicator.animate()
+                .alpha(0f)
+                .scaleX(0.82f)
+                .scaleY(0.82f)
+                .translationY(libraryPullHiddenOffset())
+                .setDuration(180L)
+                .withEndAction(() -> {
+                    if (!libraryLoading && !libraryPullReady && libraryPullDistance <= 0f && libraryPullIndicator != null) {
+                        libraryPullIndicator.setVisibility(View.INVISIBLE);
+                        if (libraryPullIndicatorView != null) {
+                            libraryPullIndicatorView.setPullProgress(0f);
+                        }
+                    }
+                })
+                .start();
     }
 
     private float libraryPullHiddenOffset() {
@@ -1108,13 +1139,19 @@ public final class MainActivity extends Activity {
     }
 
     private void startLibraryPullSpin() {
-        if (libraryPullIcon == null) {
+        if (libraryPullIndicatorView == null) {
             return;
         }
         if (libraryPullSpinAnimator != null && libraryPullSpinAnimator.isStarted()) {
             return;
         }
-        libraryPullSpinAnimator = ObjectAnimator.ofFloat(libraryPullIcon, "rotation", libraryPullIcon.getRotation(), libraryPullIcon.getRotation() + 360f);
+        libraryPullIndicatorView.setRefreshing(true);
+        libraryPullSpinAnimator = ObjectAnimator.ofFloat(
+                libraryPullIndicatorView,
+                "spinDegrees",
+                libraryPullIndicatorView.getSpinDegrees(),
+                libraryPullIndicatorView.getSpinDegrees() + 360f
+        );
         libraryPullSpinAnimator.setDuration(720L);
         libraryPullSpinAnimator.setRepeatCount(ObjectAnimator.INFINITE);
         libraryPullSpinAnimator.setInterpolator(new LinearInterpolator());
@@ -1125,6 +1162,9 @@ public final class MainActivity extends Activity {
         if (libraryPullSpinAnimator != null) {
             libraryPullSpinAnimator.cancel();
             libraryPullSpinAnimator = null;
+        }
+        if (libraryPullIndicatorView != null) {
+            libraryPullIndicatorView.setRefreshing(false);
         }
     }
 
@@ -2105,22 +2145,13 @@ public final class MainActivity extends Activity {
     }
 
     private View libraryPullRefreshIndicator() {
-        FrameLayout container = new FrameLayout(this);
-        container.setVisibility(View.INVISIBLE);
-        container.setBackground(rounded(Color.WHITE, 28));
-        ImageView icon = new ImageView(this);
-        icon.setImageResource(R.drawable.ic_refresh);
-        icon.setColorFilter(Color.BLACK);
-        icon.setScaleType(ImageView.ScaleType.CENTER);
-        container.addView(icon, new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-        ));
-
-        libraryPullIndicator = container;
-        libraryPullIcon = icon;
+        PullRefreshIndicatorView indicator = new PullRefreshIndicatorView(this);
+        indicator.setVisibility(View.INVISIBLE);
+        indicator.setAlpha(0f);
+        libraryPullIndicator = indicator;
+        libraryPullIndicatorView = indicator;
         updateLibraryPullIndicator(0f, false);
-        return container;
+        return indicator;
     }
 
     private View librarySearchToolbar() {
@@ -8466,6 +8497,117 @@ public final class MainActivity extends Activity {
 
         static QueueListItem track(DeviceAudioTrack track, int index) {
             return new QueueListItem(TYPE_TRACK, null, track, index);
+        }
+    }
+
+    private final class PullRefreshIndicatorView extends View {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final RectF arcBounds = new RectF();
+        private final Path arrowHead = new Path();
+        private float pullProgress;
+        private float spinDegrees;
+        private boolean refreshing;
+
+        PullRefreshIndicatorView(Context context) {
+            super(context);
+            setWillNotDraw(false);
+        }
+
+        public void setSpinDegrees(float degrees) {
+            spinDegrees = degrees;
+            invalidate();
+        }
+
+        public float getSpinDegrees() {
+            return spinDegrees;
+        }
+
+        void setPullProgress(float progress) {
+            pullProgress = Math.max(0f, Math.min(1f, progress));
+            if (!refreshing) {
+                spinDegrees = pullProgress * 360f;
+            }
+            invalidate();
+        }
+
+        void setRefreshing(boolean active) {
+            if (refreshing == active) {
+                return;
+            }
+            refreshing = active;
+            if (active) {
+                pullProgress = 1f;
+            }
+            invalidate();
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            float width = getWidth();
+            float height = getHeight();
+            if (width <= 0f || height <= 0f) {
+                return;
+            }
+            float cx = width / 2f;
+            float cy = height / 2f;
+            float outerRadius = Math.min(width, height) * 0.5f;
+
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(Color.WHITE);
+            canvas.drawCircle(cx, cy, outerRadius, paint);
+
+            float progress = refreshing ? 1f : pullProgress;
+            if (progress <= 0f) {
+                return;
+            }
+
+            float iconRadius = outerRadius * 0.42f;
+            float strokeWidth = Math.max(dp(3), outerRadius * 0.13f);
+            arcBounds.set(cx - iconRadius, cy - iconRadius, cx + iconRadius, cy + iconRadius);
+
+            float sweep = refreshing ? 292f : 58f + progress * 256f;
+            float start = -128f + (refreshing ? spinDegrees : progress * 320f);
+
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(strokeWidth);
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setStrokeJoin(Paint.Join.ROUND);
+            paint.setColor(Color.BLACK);
+            canvas.drawArc(arcBounds, start, sweep, false, paint);
+
+            drawRefreshArrowHead(canvas, cx, cy, iconRadius, start + sweep, strokeWidth, progress);
+        }
+
+        private void drawRefreshArrowHead(
+                Canvas canvas,
+                float cx,
+                float cy,
+                float radius,
+                float angleDegrees,
+                float strokeWidth,
+                float progress
+        ) {
+            double radians = Math.toRadians(angleDegrees);
+            float tipX = cx + (float) Math.cos(radians) * radius;
+            float tipY = cy + (float) Math.sin(radians) * radius;
+            float tangentX = -(float) Math.sin(radians);
+            float tangentY = (float) Math.cos(radians);
+            float normalX = (float) Math.cos(radians);
+            float normalY = (float) Math.sin(radians);
+            float size = strokeWidth * (refreshing ? 1.55f : 1.2f + progress * 0.35f);
+            float baseX = tipX - tangentX * size;
+            float baseY = tipY - tangentY * size;
+
+            arrowHead.reset();
+            arrowHead.moveTo(tipX, tipY);
+            arrowHead.lineTo(baseX + normalX * size * 0.58f, baseY + normalY * size * 0.58f);
+            arrowHead.lineTo(baseX - normalX * size * 0.58f, baseY - normalY * size * 0.58f);
+            arrowHead.close();
+
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(Color.BLACK);
+            canvas.drawPath(arrowHead, paint);
         }
     }
 
