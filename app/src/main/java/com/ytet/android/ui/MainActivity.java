@@ -139,6 +139,7 @@ public final class MainActivity extends Activity {
     private static final String LIBRARY_SOURCE_COLLECTION = "collection";
     private static final String LIBRARY_SOURCE_DEVICE = "device";
     private static final long LIBRARY_SEARCH_DEBOUNCE_MS = 120L;
+    private static final long LIBRARY_PULL_MIN_REFRESH_VISIBLE_MS = 680L;
     private static final int MAX_SLEEP_TIMER_HOURS = 23;
     private static final int MAX_SLEEP_TIMER_MINUTES = MAX_SLEEP_TIMER_HOURS * 60 + 59;
     private static final int BOTTOM_CHROME_BASE = 0xFF0B0B0D;
@@ -325,6 +326,13 @@ public final class MainActivity extends Activity {
     private View libraryPullIndicator;
     private PullRefreshIndicatorView libraryPullIndicatorView;
     private ObjectAnimator libraryPullSpinAnimator;
+    private long libraryPullRefreshStartedAtMs;
+    private boolean libraryPullRefreshSettling;
+    private final Runnable libraryPullFinishRunnable = () -> {
+        libraryPullRefreshSettling = false;
+        libraryPullRefreshStartedAtMs = 0L;
+        updateLibraryPullIndicator(0f, false);
+    };
     private String librarySource = LIBRARY_SOURCE_COLLECTION;
     private DeviceAudioTrack selectedTrack;
     private DeviceAudioTrack pendingDeleteTrack;
@@ -562,6 +570,7 @@ public final class MainActivity extends Activity {
         }
         unregisterBackNavigationCallback();
         mainHandler.removeCallbacks(librarySearchCommit);
+        mainHandler.removeCallbacks(libraryPullFinishRunnable);
         libraryExecutor.shutdownNow();
         streamExecutor.shutdownNow();
         imageExecutor.shutdownNow();
@@ -1060,6 +1069,9 @@ public final class MainActivity extends Activity {
         libraryPullConsumed = false;
         libraryPullDistance = 0f;
         libraryPullReady = false;
+        libraryPullRefreshSettling = false;
+        libraryPullRefreshStartedAtMs = 0L;
+        mainHandler.removeCallbacks(libraryPullFinishRunnable);
         updateLibraryPullIndicator(0f, false);
     }
 
@@ -1067,9 +1079,12 @@ public final class MainActivity extends Activity {
         if (libraryPullIndicator == null) {
             return;
         }
-        boolean visible = libraryLoading || ready || dragDistance > dp(4);
-        float progress = Math.min(1f, Math.max(0f, dragDistance / libraryPullMaxDragDistance()));
-        float offset = libraryLoading
+        boolean refreshVisualActive = libraryLoading || libraryPullRefreshSettling;
+        boolean visible = refreshVisualActive || ready || dragDistance > dp(4);
+        float progress = refreshVisualActive
+                ? 1f
+                : Math.min(1f, Math.max(0f, dragDistance / libraryPullMaxDragDistance()));
+        float offset = refreshVisualActive
                 ? libraryPullRefreshOffset()
                 : libraryPullHiddenOffset()
                 + Math.min(libraryPullMaxOffset() - libraryPullHiddenOffset(), dragDistance * 0.78f);
@@ -1080,16 +1095,16 @@ public final class MainActivity extends Activity {
         libraryPullIndicator.animate().cancel();
         libraryPullIndicator.setVisibility(View.VISIBLE);
         libraryPullIndicator.setTranslationY(offset);
-        libraryPullIndicator.setAlpha(libraryLoading || ready ? 1f : Math.max(0.35f, progress));
+        libraryPullIndicator.setAlpha(refreshVisualActive || ready ? 1f : Math.max(0.35f, progress));
         float scale = 0.86f + progress * 0.14f;
         libraryPullIndicator.setScaleX(scale);
         libraryPullIndicator.setScaleY(scale);
-        if (libraryLoading) {
+        if (refreshVisualActive) {
             startLibraryPullSpin();
         } else {
             stopLibraryPullSpin();
             if (libraryPullIndicatorView != null) {
-                libraryPullIndicatorView.setPullProgress(ready ? 1f : progress);
+                libraryPullIndicatorView.setPullProgress(progress);
             }
         }
     }
@@ -1170,14 +1185,40 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private void beginLibraryPullRefreshVisual() {
+        if (currentTab != Tab.LIBRARY || libraryPullIndicator == null) {
+            return;
+        }
+        libraryPullRefreshStartedAtMs = System.currentTimeMillis();
+        libraryPullRefreshSettling = false;
+        mainHandler.removeCallbacks(libraryPullFinishRunnable);
+        updateLibraryPullIndicator(libraryPullRefreshTriggerDistance(), true);
+    }
+
+    private void finishLibraryPullRefreshVisual() {
+        if (libraryPullRefreshStartedAtMs <= 0L || libraryPullIndicator == null) {
+            return;
+        }
+        if (currentTab != Tab.LIBRARY) {
+            libraryPullRefreshSettling = false;
+            libraryPullRefreshStartedAtMs = 0L;
+            mainHandler.removeCallbacks(libraryPullFinishRunnable);
+            return;
+        }
+        long elapsedMs = Math.max(0L, System.currentTimeMillis() - libraryPullRefreshStartedAtMs);
+        long delayMs = Math.max(220L, LIBRARY_PULL_MIN_REFRESH_VISIBLE_MS - elapsedMs);
+        libraryPullRefreshSettling = true;
+        mainHandler.removeCallbacks(libraryPullFinishRunnable);
+        updateLibraryPullIndicator(libraryPullRefreshTriggerDistance(), true);
+        mainHandler.postDelayed(libraryPullFinishRunnable, delayMs);
+    }
+
     private View buildHomeTab() {
         LinearLayout root = screenRoot();
         if (!streamLoaded && !streamLoading) {
             startStreamRefresh(false);
         }
 
-        root.addView(title("스트림"), marginBottom(6));
-        root.addView(muted("온라인 추천 채널에서 매번 다른 플레이리스트 영상을 불러옵니다.", 13), marginBottom(18));
         if (streamLoading && streamSections.isEmpty()) {
             LinearLayout loading = panel();
             loading.addView(label("추천을 불러오는 중"), marginBottom(8));
@@ -1939,7 +1980,7 @@ public final class MainActivity extends Activity {
     private View libraryRecyclerHeader() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(20), dp(32), dp(20), dp(14));
+        root.setPadding(dp(20), dp(20), dp(20), dp(14));
         root.addView(librarySearchToolbar(), marginBottom(8));
         root.addView(libraryFilterBar(), marginBottom(shouldShowLibrarySearchInput() ? 8 : 12));
         if (shouldShowLibrarySearchInput()) {
@@ -6984,6 +7025,7 @@ public final class MainActivity extends Activity {
         }
         libraryLoading = true;
         libraryStatus = "";
+        beginLibraryPullRefreshVisual();
         if (renderImmediately && (currentTab == Tab.HOME || currentTab == Tab.LIBRARY)) {
             renderCurrentTab();
         }
@@ -6996,6 +7038,7 @@ public final class MainActivity extends Activity {
                     markLibraryDataChanged();
                     libraryLoaded = true;
                     libraryLoading = false;
+                    finishLibraryPullRefreshVisual();
                     libraryStatus = tracks.isEmpty()
                             ? emptyLibraryStatus()
                             : "";
@@ -7009,6 +7052,7 @@ public final class MainActivity extends Activity {
                     librarySearchIndex.clear();
                     markLibraryDataChanged();
                     selectedTrack = null;
+                    finishLibraryPullRefreshVisual();
                     libraryStatus = "스캔 실패: " + exception.getMessage();
                     renderLibraryDependentTabs();
                 });
@@ -7639,7 +7683,7 @@ public final class MainActivity extends Activity {
     private LinearLayout screenRoot() {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(20), dp(32), dp(20), dp(34));
+        root.setPadding(dp(20), dp(20), dp(20), dp(34));
         return root;
     }
 
@@ -8769,7 +8813,7 @@ public final class MainActivity extends Activity {
         void setPullProgress(float progress) {
             pullProgress = Math.max(0f, Math.min(1f, progress));
             if (!refreshing) {
-                spinDegrees = pullProgress * 360f;
+                spinDegrees = pullProgress * 520f;
             }
             invalidate();
         }
@@ -8810,8 +8854,8 @@ public final class MainActivity extends Activity {
             float strokeWidth = Math.max(dp(3), outerRadius * 0.13f);
             arcBounds.set(cx - iconRadius, cy - iconRadius, cx + iconRadius, cy + iconRadius);
 
-            float sweep = refreshing ? 292f : 58f + progress * 256f;
-            float start = -128f + (refreshing ? spinDegrees : progress * 320f);
+            float sweep = refreshing ? 292f : 54f + progress * 248f;
+            float start = -126f + spinDegrees;
 
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(strokeWidth);
@@ -8845,11 +8889,14 @@ public final class MainActivity extends Activity {
 
             arrowHead.reset();
             arrowHead.moveTo(tipX, tipY);
-            arrowHead.lineTo(baseX + normalX * size * 0.58f, baseY + normalY * size * 0.58f);
-            arrowHead.lineTo(baseX - normalX * size * 0.58f, baseY - normalY * size * 0.58f);
-            arrowHead.close();
+            arrowHead.lineTo(baseX + normalX * size * 0.64f, baseY + normalY * size * 0.64f);
+            arrowHead.moveTo(tipX, tipY);
+            arrowHead.lineTo(baseX - normalX * size * 0.64f, baseY - normalY * size * 0.64f);
 
-            paint.setStyle(Paint.Style.FILL);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(Math.max(dp(2), strokeWidth * 0.92f));
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setStrokeJoin(Paint.Join.ROUND);
             paint.setColor(Color.BLACK);
             canvas.drawPath(arrowHead, paint);
         }

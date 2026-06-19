@@ -20,6 +20,11 @@ public final class OnlineStreamCatalog {
                 "https://www.youtube.com/@%EB%A0%88%EC%9D%B4%EB%B0%B1"
         ));
         channels.add(new OnlineStreamChannel(
+                "leeplay",
+                "LEEPLAY",
+                "https://www.youtube.com/@leeplay.official"
+        ));
+        channels.add(new OnlineStreamChannel(
                 "minplay",
                 "민플리",
                 "https://www.youtube.com/@%EB%AF%BC%ED%94%8C%EB%A6%AC"
