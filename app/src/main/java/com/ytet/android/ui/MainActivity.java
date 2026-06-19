@@ -159,9 +159,14 @@ public final class MainActivity extends Activity {
     private int mainNavigationInset;
     private FrameLayout nowPlayingBar;
     private FrameLayout nowPlayingInfoFrame;
+    private FrameLayout nowPlayingCurrentFrame;
+    private FrameLayout nowPlayingPreviewFrame;
     private FrameLayout nowPlayingCover;
+    private FrameLayout nowPlayingPreviewCover;
     private TextView nowPlayingTitle;
     private TextView nowPlayingMeta;
+    private TextView nowPlayingPreviewTitle;
+    private TextView nowPlayingPreviewMeta;
     private MiniPlaybackProgressView nowPlayingProgress;
     private ImageButton playPauseButton;
     private View bottomVignette;
@@ -171,6 +176,8 @@ public final class MainActivity extends Activity {
     private boolean renderedNowPlayingIdle = true;
     private String renderedNowPlayingTitle = "";
     private String renderedNowPlayingMeta = "";
+    private long renderedNowPlayingPreviewTrackId = Long.MIN_VALUE;
+    private int renderedNowPlayingPreviewDirection = NOW_PLAYING_TRANSITION_NONE;
     private boolean nowPlayingContentInitialized;
     private int pendingNowPlayingTransitionDirection = NOW_PLAYING_TRANSITION_NONE;
     private float nowPlayingSwipeStartX;
@@ -186,6 +193,14 @@ public final class MainActivity extends Activity {
     private ProgressBar updateDownloadProgressBar;
     private Dialog playerDialog;
     private Dialog queueDialog;
+    private QueueSheetLayout queueSheetLayout;
+    private QueueRecyclerAdapter queueRecyclerAdapter;
+    private RecyclerView queueRecyclerView;
+    private FrameLayout queueCurrentTrackContainer;
+    private int queueDialogRenderedIndex = Integer.MIN_VALUE;
+    private int queueDialogRenderedQueueSize = Integer.MIN_VALUE;
+    private long queueDialogRenderedTrackId = Long.MIN_VALUE;
+    private long queueDialogRenderedFingerprint = Long.MIN_VALUE;
     private AlertDialog updateDialog;
     private OnBackInvokedCallback backInvokedCallback;
     private PlaybackSeekBarView expandedPlaybackSeekBar;
@@ -430,6 +445,7 @@ public final class MainActivity extends Activity {
             updateNowPlayingBar();
             updateExpandedPlaybackProgress();
             updateExpandedPlayer();
+            updateQueueDialog();
         }
     };
 
@@ -753,10 +769,15 @@ public final class MainActivity extends Activity {
         nowPlayingInfoFrame.setClickable(true);
         nowPlayingInfoFrame.setOnTouchListener(this::handleNowPlayingInfoTouch);
 
+        nowPlayingCurrentFrame = new FrameLayout(this);
         LinearLayout infoRow = new LinearLayout(this);
         infoRow.setOrientation(LinearLayout.HORIZONTAL);
         infoRow.setGravity(Gravity.CENTER_VERTICAL);
-        nowPlayingInfoFrame.addView(infoRow, new FrameLayout.LayoutParams(
+        nowPlayingCurrentFrame.addView(infoRow, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+        ));
+        nowPlayingInfoFrame.addView(nowPlayingCurrentFrame, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT
         ));
@@ -779,6 +800,37 @@ public final class MainActivity extends Activity {
                 dp(20)
         ));
         infoRow.addView(copy, new LinearLayout.LayoutParams(0, dp(44), 1f));
+
+        nowPlayingPreviewFrame = new FrameLayout(this);
+        nowPlayingPreviewFrame.setAlpha(0f);
+        nowPlayingPreviewFrame.setVisibility(View.INVISIBLE);
+        LinearLayout previewRow = new LinearLayout(this);
+        previewRow.setOrientation(LinearLayout.HORIZONTAL);
+        previewRow.setGravity(Gravity.CENTER_VERTICAL);
+        nowPlayingPreviewFrame.addView(previewRow, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+        ));
+        nowPlayingPreviewCover = new FrameLayout(this);
+        previewRow.addView(nowPlayingPreviewCover, marginRight(10, dp(44), dp(44)));
+        LinearLayout previewCopy = new LinearLayout(this);
+        previewCopy.setOrientation(LinearLayout.VERTICAL);
+        previewCopy.setGravity(Gravity.CENTER_VERTICAL);
+        nowPlayingPreviewTitle = marqueeText("", 14, R.color.ytet_text, true);
+        nowPlayingPreviewMeta = marqueeText("", 12, R.color.ytet_muted, false);
+        previewCopy.addView(nowPlayingPreviewTitle, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(22)
+        ));
+        previewCopy.addView(nowPlayingPreviewMeta, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(20)
+        ));
+        previewRow.addView(previewCopy, new LinearLayout.LayoutParams(0, dp(44), 1f));
+        nowPlayingInfoFrame.addView(nowPlayingPreviewFrame, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+        ));
         row.addView(nowPlayingInfoFrame, new LinearLayout.LayoutParams(0, dp(44), 1f));
 
         playPauseButton = iconButton(R.drawable.ic_play_arrow, "재생", true);
@@ -4472,7 +4524,8 @@ public final class MainActivity extends Activity {
         playbackQueueIndex = index;
         setStreamingStatus("준비 중: " + track.title());
         updateNowPlayingBar();
-        startPlayback(PlaybackService.playQueueIntent(this, station, activeQueuePreview, index));
+        updateQueueDialog();
+        startPlayback(PlaybackService.seekQueueIndexIntent(this, index));
     }
 
     private void toggleStreamPlayback() {
@@ -4504,7 +4557,8 @@ public final class MainActivity extends Activity {
             nowPlayingSwipeStartY = event.getRawY();
             nowPlayingSwipeTracking = true;
             nowPlayingSwipeConsumed = false;
-            view.animate().cancel();
+            cancelNowPlayingContentAnimations();
+            hideNowPlayingSwipePreview();
             return true;
         }
         if (!nowPlayingSwipeTracking) {
@@ -4521,12 +4575,12 @@ public final class MainActivity extends Activity {
                 view.getParent().requestDisallowInterceptTouchEvent(true);
             }
             if (nowPlayingSwipeConsumed) {
-                boolean canMove = dx > 0f ? hasPreviousTrack() : hasNextTrack();
+                int direction = dx < 0f ? NOW_PLAYING_TRANSITION_NEXT : NOW_PLAYING_TRANSITION_PREVIOUS;
+                boolean canMove = direction == NOW_PLAYING_TRANSITION_PREVIOUS ? hasPreviousTrack() : hasNextTrack();
                 float resistance = canMove ? 0.42f : 0.16f;
-                float maxOffset = dp(72);
+                float maxOffset = nowPlayingSwipeMaxOffset(view);
                 float offset = Math.max(-maxOffset, Math.min(maxOffset, dx * resistance));
-                view.setTranslationX(offset);
-                view.setAlpha(1f - Math.min(0.28f, Math.abs(offset) / Math.max(1f, maxOffset) * 0.28f));
+                applyNowPlayingSwipeOffset(direction, canMove, offset, maxOffset);
                 return true;
             }
             return true;
@@ -4555,18 +4609,105 @@ public final class MainActivity extends Activity {
         return true;
     }
 
+    private float nowPlayingSwipeMaxOffset(View view) {
+        int width = view == null ? 0 : view.getWidth();
+        return Math.max(dp(72), width * 0.34f);
+    }
+
+    private void applyNowPlayingSwipeOffset(int direction, boolean canMove, float offset, float maxOffset) {
+        float progress = Math.min(1f, Math.abs(offset) / Math.max(1f, maxOffset));
+        if (nowPlayingCurrentFrame != null) {
+            nowPlayingCurrentFrame.setTranslationX(offset);
+            nowPlayingCurrentFrame.setAlpha(1f - progress * (canMove ? 0.78f : 0.28f));
+        }
+        if (!canMove) {
+            hideNowPlayingSwipePreview();
+            return;
+        }
+
+        DeviceAudioTrack previewTrack = nowPlayingTrackForDirection(direction);
+        if (previewTrack == null) {
+            hideNowPlayingSwipePreview();
+            return;
+        }
+        setNowPlayingSwipePreviewTrack(previewTrack, direction);
+        if (nowPlayingPreviewFrame != null) {
+            float previewStart = direction == NOW_PLAYING_TRANSITION_NEXT ? maxOffset : -maxOffset;
+            nowPlayingPreviewFrame.setVisibility(View.VISIBLE);
+            nowPlayingPreviewFrame.setTranslationX(previewStart + offset);
+            nowPlayingPreviewFrame.setAlpha(Math.min(0.94f, progress * 1.08f));
+        }
+    }
+
+    private void setNowPlayingSwipePreviewTrack(DeviceAudioTrack track, int direction) {
+        if (track == null
+                || nowPlayingPreviewCover == null
+                || nowPlayingPreviewTitle == null
+                || nowPlayingPreviewMeta == null) {
+            return;
+        }
+        if (renderedNowPlayingPreviewTrackId == track.id()
+                && renderedNowPlayingPreviewDirection == direction) {
+            return;
+        }
+        renderedNowPlayingPreviewTrackId = track.id();
+        renderedNowPlayingPreviewDirection = direction;
+        nowPlayingPreviewCover.removeAllViews();
+        nowPlayingPreviewCover.addView(nowPlayingCoverView(track), new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+        ));
+        setMarqueeText(nowPlayingPreviewTitle, track.title());
+        setMarqueeText(nowPlayingPreviewMeta, track.artist() + " · " + valueOrDefault(track.album(), "앨범 정보 없음"));
+    }
+
+    private void hideNowPlayingSwipePreview() {
+        renderedNowPlayingPreviewTrackId = Long.MIN_VALUE;
+        renderedNowPlayingPreviewDirection = NOW_PLAYING_TRANSITION_NONE;
+        if (nowPlayingPreviewFrame == null) {
+            return;
+        }
+        nowPlayingPreviewFrame.animate().cancel();
+        nowPlayingPreviewFrame.setVisibility(View.INVISIBLE);
+        nowPlayingPreviewFrame.setAlpha(0f);
+        nowPlayingPreviewFrame.setTranslationX(0f);
+    }
+
+    private DeviceAudioTrack nowPlayingTrackForDirection(int direction) {
+        if (activeQueuePreview.isEmpty() || playbackQueueIndex < 0) {
+            return null;
+        }
+        int index = playbackQueueIndex + (direction == NOW_PLAYING_TRANSITION_NEXT ? 1 : -1);
+        if (index >= activeQueuePreview.size() && playbackRepeatMode == PlaybackService.REPEAT_ALL) {
+            index = 0;
+        } else if (index < 0 && playbackRepeatMode == PlaybackService.REPEAT_ALL) {
+            index = activeQueuePreview.size() - 1;
+        }
+        if (index < 0 || index >= activeQueuePreview.size()) {
+            return null;
+        }
+        return activeQueuePreview.get(index);
+    }
+
     private void triggerNowPlayingSwipe(int direction) {
-        if (nowPlayingInfoFrame == null) {
+        if (nowPlayingCurrentFrame == null) {
             return;
         }
         pendingNowPlayingTransitionDirection = direction;
         long requestedTrackId = playbackTrackId;
         float exitX = direction == NOW_PLAYING_TRANSITION_NEXT ? -dp(64) : dp(64);
-        nowPlayingInfoFrame.animate()
+        nowPlayingCurrentFrame.animate()
                 .translationX(exitX)
-                .alpha(0.35f)
+                .alpha(0f)
                 .setDuration(110L)
                 .start();
+        if (nowPlayingPreviewFrame != null && nowPlayingPreviewFrame.getVisibility() == View.VISIBLE) {
+            nowPlayingPreviewFrame.animate()
+                    .translationX(0f)
+                    .alpha(1f)
+                    .setDuration(110L)
+                    .start();
+        }
         if (direction == NOW_PLAYING_TRANSITION_NEXT) {
             nextTrack();
         } else if (direction == NOW_PLAYING_TRANSITION_PREVIOUS) {
@@ -4576,20 +4717,29 @@ public final class MainActivity extends Activity {
             if (pendingNowPlayingTransitionDirection != NOW_PLAYING_TRANSITION_NONE
                     && playbackTrackId == requestedTrackId) {
                 pendingNowPlayingTransitionDirection = NOW_PLAYING_TRANSITION_NONE;
+                nowPlayingSwipeConsumed = false;
                 snapNowPlayingInfoFrame();
             }
         }, 800L);
     }
 
     private void snapNowPlayingInfoFrame() {
-        if (nowPlayingInfoFrame == null) {
+        if (nowPlayingCurrentFrame == null) {
             return;
         }
-        nowPlayingInfoFrame.animate()
+        nowPlayingCurrentFrame.animate()
                 .translationX(0f)
                 .alpha(1f)
                 .setDuration(160L)
                 .start();
+        if (nowPlayingPreviewFrame != null && nowPlayingPreviewFrame.getVisibility() == View.VISIBLE) {
+            nowPlayingPreviewFrame.animate()
+                    .translationX(0f)
+                    .alpha(0f)
+                    .setDuration(140L)
+                    .withEndAction(this::hideNowPlayingSwipePreview)
+                    .start();
+        }
     }
 
     private boolean hasPreviousTrack() {
@@ -4677,7 +4827,11 @@ public final class MainActivity extends Activity {
         if (nowPlayingProgress != null) {
             nowPlayingProgress.setProgress(playbackDurationMs, playbackPositionMs, !idle && playbackDurationMs > 0L);
         }
-        applyNowPlayingContent(idle, title, meta, contentChanged && nowPlayingContentInitialized);
+        if (contentChanged) {
+            applyNowPlayingContent(idle, title, meta, nowPlayingContentInitialized);
+        } else if (!nowPlayingSwipeConsumed) {
+            resetNowPlayingInfoFrame();
+        }
         renderedNowPlayingIdle = idle;
         renderedNowPlayingTrackId = renderTrackId;
         renderedNowPlayingTitle = title;
@@ -4701,10 +4855,33 @@ public final class MainActivity extends Activity {
         cancelNowPlayingContentAnimations();
         int direction = pendingNowPlayingTransitionDirection;
         pendingNowPlayingTransitionDirection = NOW_PLAYING_TRANSITION_NONE;
-        if (nowPlayingInfoFrame != null) {
+        if (direction != NOW_PLAYING_TRANSITION_NONE
+                && nowPlayingPreviewFrame != null
+                && nowPlayingPreviewFrame.getVisibility() == View.VISIBLE) {
+            float previewX = nowPlayingPreviewFrame.getTranslationX();
+            float previewAlpha = nowPlayingPreviewFrame.getAlpha();
+            setNowPlayingCover(idle);
+            setMarqueeText(nowPlayingTitle, title);
+            setMarqueeText(nowPlayingMeta, meta);
+            hideNowPlayingSwipePreview();
+            if (nowPlayingCurrentFrame != null) {
+                nowPlayingCurrentFrame.setTranslationX(previewX);
+                nowPlayingCurrentFrame.setAlpha(previewAlpha);
+                nowPlayingCurrentFrame.animate()
+                        .translationX(0f)
+                        .alpha(1f)
+                        .setDuration(130L)
+                        .start();
+            } else {
+                resetNowPlayingInfoFrame();
+            }
+            nowPlayingSwipeConsumed = false;
+            return;
+        }
+        if (nowPlayingCurrentFrame != null) {
             float exitX = direction == NOW_PLAYING_TRANSITION_PREVIOUS ? dp(58) : -dp(58);
             float enterX = -exitX;
-            nowPlayingInfoFrame.animate()
+            nowPlayingCurrentFrame.animate()
                     .translationX(exitX)
                     .alpha(0f)
                     .setDuration(120L)
@@ -4713,9 +4890,9 @@ public final class MainActivity extends Activity {
                         setMarqueeText(nowPlayingTitle, title);
                         setMarqueeText(nowPlayingMeta, meta);
                         setNowPlayingContentAlpha(1f);
-                        nowPlayingInfoFrame.setTranslationX(enterX);
-                        nowPlayingInfoFrame.setAlpha(0f);
-                        nowPlayingInfoFrame.animate()
+                        nowPlayingCurrentFrame.setTranslationX(enterX);
+                        nowPlayingCurrentFrame.setAlpha(0f);
+                        nowPlayingCurrentFrame.animate()
                                 .translationX(0f)
                                 .alpha(1f)
                                 .setDuration(180L)
@@ -4742,8 +4919,11 @@ public final class MainActivity extends Activity {
     }
 
     private void cancelNowPlayingContentAnimations() {
-        if (nowPlayingInfoFrame != null) {
-            nowPlayingInfoFrame.animate().cancel();
+        if (nowPlayingCurrentFrame != null) {
+            nowPlayingCurrentFrame.animate().cancel();
+        }
+        if (nowPlayingPreviewFrame != null) {
+            nowPlayingPreviewFrame.animate().cancel();
         }
         if (nowPlayingCover != null) {
             nowPlayingCover.animate().cancel();
@@ -4761,9 +4941,17 @@ public final class MainActivity extends Activity {
             nowPlayingInfoFrame.setAlpha(1f);
             nowPlayingInfoFrame.setTranslationX(0f);
         }
+        if (nowPlayingCurrentFrame != null) {
+            nowPlayingCurrentFrame.setAlpha(1f);
+            nowPlayingCurrentFrame.setTranslationX(0f);
+        }
+        hideNowPlayingSwipePreview();
     }
 
     private void setNowPlayingContentAlpha(float alpha) {
+        if (nowPlayingCurrentFrame != null) {
+            nowPlayingCurrentFrame.setAlpha(alpha);
+        }
         if (nowPlayingCover != null) {
             nowPlayingCover.setAlpha(alpha);
         }
@@ -4801,16 +4989,38 @@ public final class MainActivity extends Activity {
     }
 
     private View nowPlayingCoverView(boolean idle) {
-        if (!idle && playbackAlbumArtUri != null && !playbackAlbumArtUri.trim().isEmpty()) {
+        return nowPlayingCoverView(
+                idle,
+                playbackAlbumArtUri,
+                idle ? "YT" : coverInitials(),
+                idle ? color(R.color.ytet_panel_alt) : color(R.color.ytet_accent_dark)
+        );
+    }
+
+    private View nowPlayingCoverView(DeviceAudioTrack track) {
+        String title = track == null ? "" : valueOrDefault(track.title(), "");
+        String initials = title.isEmpty()
+                ? "YT"
+                : title.substring(0, Math.min(2, title.length())).toUpperCase();
+        return nowPlayingCoverView(
+                false,
+                track == null ? "" : track.albumArtUri(),
+                initials,
+                color(R.color.ytet_accent_dark)
+        );
+    }
+
+    private View nowPlayingCoverView(boolean idle, String artworkUri, String initials, int placeholderColor) {
+        if (!idle && artworkUri != null && !artworkUri.trim().isEmpty()) {
             ImageView image = new ImageView(this);
             image.setBackground(rounded(color(R.color.ytet_panel_alt), 8));
             image.setScaleType(ImageView.ScaleType.CENTER_CROP);
-            image.setImageURI(Uri.parse(playbackAlbumArtUri));
+            image.setImageURI(Uri.parse(artworkUri));
             return image;
         }
-        TextView placeholder = text(idle ? "YT" : coverInitials(), 13, android.R.color.white, true);
+        TextView placeholder = text(initials, 13, android.R.color.white, true);
         placeholder.setGravity(Gravity.CENTER);
-        placeholder.setBackground(rounded(idle ? color(R.color.ytet_panel_alt) : color(R.color.ytet_accent_dark), 8));
+        placeholder.setBackground(rounded(placeholderColor, 8));
         return placeholder;
     }
 
@@ -4993,12 +5203,42 @@ public final class MainActivity extends Activity {
         return Math.max(dp(60), navigationInset + bottomTabsHeight());
     }
 
+    private int queueSheetCollapsedHeight() {
+        int screenHeight = getResources().getDisplayMetrics().heightPixels;
+        return Math.max(dp(340), Math.round(screenHeight * 0.52f));
+    }
+
     private void applyQueueWindow(Window window) {
         if (window == null) {
             return;
         }
-        int background = color(R.color.ytet_background);
-        applyOpaqueDialogBars(window, background, background);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.setDecorFitsSystemWindows(false);
+        }
+        window.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS
+                | WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION);
+        window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS
+                | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                | WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+        WindowManager.LayoutParams attributes = window.getAttributes();
+        attributes.dimAmount = 0.42f;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            attributes.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;
+        }
+        window.setAttributes(attributes);
+        window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        window.setStatusBarColor(Color.TRANSPARENT);
+        window.setNavigationBarColor(Color.TRANSPARENT);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            window.setNavigationBarDividerColor(Color.TRANSPARENT);
+        }
+        View decor = window.getDecorView();
+        decor.setSystemUiVisibility(decor.getSystemUiVisibility()
+                | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+        window.setGravity(Gravity.BOTTOM);
+        window.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT);
     }
 
     private void applyOpaqueDialogBars(Window window, int statusColor, int navigationColor) {
@@ -5793,13 +6033,29 @@ public final class MainActivity extends Activity {
     }
 
     private View queueRow(DeviceAudioTrack track, int index) {
+        return queueTrackRow(track, index, false, true);
+    }
+
+    private View queueCurrentTrackRow(DeviceAudioTrack track, int index) {
+        LinearLayout wrapper = new LinearLayout(this);
+        wrapper.setOrientation(LinearLayout.VERTICAL);
+        wrapper.setPadding(0, 0, 0, 0);
+        TextView label = muted("현재 곡", 12);
+        label.setGravity(Gravity.START);
+        wrapper.addView(label, marginBottom(6));
+        wrapper.addView(queueTrackRow(track, index, true, false), matchWrap());
+        return wrapper;
+    }
+
+    private View queueTrackRow(DeviceAudioTrack track, int index, boolean currentOverride, boolean clickable) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(12), dp(10), dp(12), dp(10));
-        boolean current = track.id() == playbackTrackId
+        boolean current = currentOverride
+                || track.id() == playbackTrackId
                 || (playbackTrackId < 0L && index == playbackQueueIndex);
-        row.setBackground(rounded(current ? color(R.color.ytet_panel_alt) : color(R.color.ytet_panel), 8));
+        row.setBackground(rounded(current ? selectedTrackBackgroundColor() : color(R.color.ytet_panel), 10));
 
         LinearLayout.LayoutParams coverParams = new LinearLayout.LayoutParams(dp(48), dp(48));
         coverParams.setMargins(0, 0, dp(12), 0);
@@ -5807,7 +6063,7 @@ public final class MainActivity extends Activity {
 
         LinearLayout info = new LinearLayout(this);
         info.setOrientation(LinearLayout.VERTICAL);
-        TextView title = text(track.title(), 14, current ? R.color.ytet_text : R.color.ytet_muted, current);
+        TextView title = text(track.title(), 14, current ? R.color.ytet_accent : R.color.ytet_text, current);
         title.setSingleLine(true);
         title.setEllipsize(TextUtils.TruncateAt.END);
         info.addView(title, marginBottom(3));
@@ -5816,7 +6072,9 @@ public final class MainActivity extends Activity {
         meta.setEllipsize(TextUtils.TruncateAt.END);
         info.addView(meta, matchWrap());
         row.addView(info, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        row.setOnClickListener(view -> playQueueTrack(track, index));
+        if (clickable) {
+            row.setOnClickListener(view -> playQueueTrack(track, index));
+        }
         return row;
     }
 
@@ -5976,26 +6234,47 @@ public final class MainActivity extends Activity {
         if (queueDialog == null) {
             queueDialog = new Dialog(this);
             queueDialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+            queueDialog.setOnDismissListener(dialog -> {
+                queueSheetLayout = null;
+                queueRecyclerAdapter = null;
+                queueRecyclerView = null;
+                queueCurrentTrackContainer = null;
+                queueDialogRenderedIndex = Integer.MIN_VALUE;
+                queueDialogRenderedQueueSize = Integer.MIN_VALUE;
+                queueDialogRenderedTrackId = Long.MIN_VALUE;
+                queueDialogRenderedFingerprint = Long.MIN_VALUE;
+            });
         }
         queueDialog.setContentView(buildQueueDialogContent());
         queueDialog.show();
         applyQueueWindow(queueDialog.getWindow());
+        if (queueSheetLayout != null) {
+            queueSheetLayout.prepareCollapsed();
+        }
     }
 
     private void updateQueueDialog() {
         if (queueDialog != null && queueDialog.isShowing()) {
-            queueDialog.setContentView(buildQueueDialogContent());
-            applyQueueWindow(queueDialog.getWindow());
+            bindQueueDialogState(false);
         }
     }
 
     private View buildQueueDialogContent() {
-        List<DeviceAudioTrack> queueSnapshot = new ArrayList<>(activeQueuePreview);
-        int currentIndex = playbackQueueIndex;
-        DragDismissLayout root = new DragDismissLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(20), dp(30), dp(20), dp(28));
-        root.setBackgroundColor(color(R.color.ytet_background));
+        queueSheetLayout = new QueueSheetLayout(this);
+        queueSheetLayout.setBackgroundColor(Color.TRANSPARENT);
+
+        LinearLayout sheet = new LinearLayout(this);
+        sheet.setOrientation(LinearLayout.VERTICAL);
+        sheet.setPadding(dp(20), dp(12), dp(20), dp(18));
+        sheet.setBackground(roundedTop(color(R.color.ytet_background), 22));
+        queueSheetLayout.setSheet(sheet);
+
+        View handle = new View(this);
+        handle.setBackground(rounded(0x55FFFFFF, 3));
+        LinearLayout.LayoutParams handleParams = new LinearLayout.LayoutParams(dp(42), dp(4));
+        handleParams.gravity = Gravity.CENTER_HORIZONTAL;
+        handleParams.setMargins(0, 0, 0, dp(12));
+        sheet.addView(handle, handleParams);
 
         LinearLayout top = new LinearLayout(this);
         top.setOrientation(LinearLayout.HORIZONTAL);
@@ -6012,21 +6291,111 @@ public final class MainActivity extends Activity {
         top.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         View spacer = new View(this);
         top.addView(spacer, new LinearLayout.LayoutParams(dp(44), dp(42)));
-        root.addView(top, marginBottom(18));
+        sheet.addView(top, marginBottom(10));
+
+        queueCurrentTrackContainer = new FrameLayout(this);
+        sheet.addView(queueCurrentTrackContainer, marginBottom(10));
 
         RecyclerView list = new RecyclerView(this);
+        queueRecyclerView = list;
         list.setClipToPadding(false);
         list.setItemAnimator(null);
-        list.setLayoutManager(new LinearLayoutManager(this));
-        QueueRecyclerAdapter adapter = new QueueRecyclerAdapter();
-        list.setAdapter(adapter);
-        adapter.submitItems(buildQueueRecyclerItems(queueSnapshot, currentIndex));
-        root.addView(list, new LinearLayout.LayoutParams(
+        list.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        list.setLayoutManager(new QueueLinearLayoutManager(this));
+        queueRecyclerAdapter = new QueueRecyclerAdapter();
+        list.setAdapter(queueRecyclerAdapter);
+        sheet.addView(list, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 0,
                 1f
         ));
-        return root;
+
+        queueSheetLayout.addView(sheet, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                Gravity.BOTTOM
+        ));
+        bindQueueDialogState(true);
+        return queueSheetLayout;
+    }
+
+    private void bindQueueDialogState(boolean forceScrollToCurrent) {
+        if (queueRecyclerAdapter == null || queueCurrentTrackContainer == null) {
+            return;
+        }
+        List<DeviceAudioTrack> queueSnapshot = new ArrayList<>(activeQueuePreview);
+        int currentIndex = safeQueueIndex(queueSnapshot);
+        DeviceAudioTrack current = currentIndex >= 0 && currentIndex < queueSnapshot.size()
+                ? queueSnapshot.get(currentIndex)
+                : null;
+        long currentId = current == null ? Long.MIN_VALUE : current.id();
+        long queueFingerprint = queueFingerprint(queueSnapshot);
+        boolean indexChanged = queueDialogRenderedIndex != currentIndex
+                || queueDialogRenderedQueueSize != queueSnapshot.size()
+                || queueDialogRenderedTrackId != currentId
+                || queueDialogRenderedFingerprint != queueFingerprint;
+        if (!forceScrollToCurrent && !indexChanged) {
+            return;
+        }
+        queueCurrentTrackContainer.removeAllViews();
+        queueCurrentTrackContainer.addView(current == null
+                ? muted("현재 재생 중인 곡이 없습니다.", 14)
+                : queueCurrentTrackRow(current, currentIndex), new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT
+        ));
+        queueRecyclerAdapter.submitItems(buildQueueRecyclerItems(queueSnapshot, currentIndex));
+        queueDialogRenderedIndex = currentIndex;
+        queueDialogRenderedQueueSize = queueSnapshot.size();
+        queueDialogRenderedTrackId = currentId;
+        queueDialogRenderedFingerprint = queueFingerprint;
+        if ((forceScrollToCurrent || indexChanged) && queueRecyclerView != null) {
+            int target = queueInitialScrollPosition(queueSnapshot, currentIndex);
+            queueRecyclerView.post(() -> {
+                RecyclerView.LayoutManager manager = queueRecyclerView.getLayoutManager();
+                if (manager instanceof LinearLayoutManager) {
+                    ((LinearLayoutManager) manager).scrollToPositionWithOffset(target, dp(2));
+                } else {
+                    queueRecyclerView.scrollToPosition(target);
+                }
+            });
+        }
+    }
+
+    private int safeQueueIndex(List<DeviceAudioTrack> queue) {
+        if (queue == null || queue.isEmpty()) {
+            return -1;
+        }
+        if (playbackQueueIndex >= 0 && playbackQueueIndex < queue.size()) {
+            return playbackQueueIndex;
+        }
+        for (int index = 0; index < queue.size(); index++) {
+            if (queue.get(index).id() == playbackTrackId) {
+                return index;
+            }
+        }
+        return 0;
+    }
+
+    private long queueFingerprint(List<DeviceAudioTrack> queue) {
+        long fingerprint = 1125899906842597L;
+        if (queue == null) {
+            return fingerprint;
+        }
+        for (DeviceAudioTrack track : queue) {
+            fingerprint = fingerprint * 31L + (track == null ? 0L : track.id());
+        }
+        return fingerprint;
+    }
+
+    private int queueInitialScrollPosition(List<DeviceAudioTrack> queue, int currentIndex) {
+        if (queue == null || queue.size() <= 1 || currentIndex < 0) {
+            return 0;
+        }
+        if (currentIndex < queue.size() - 1) {
+            return currentIndex;
+        }
+        return Math.max(0, currentIndex - 1);
     }
 
     private List<QueueListItem> buildQueueRecyclerItems(List<DeviceAudioTrack> queue, int currentIndex) {
@@ -6035,32 +6404,16 @@ public final class MainActivity extends Activity {
             items.add(QueueListItem.staticView(muted("재생목록을 불러오는 중입니다.", 14)));
             return items;
         }
-        addQueueSectionItems(items, queue, "이전 곡", 0, Math.max(0, currentIndex), true);
-        addQueueSectionItems(items, queue, "현재 곡", Math.max(0, currentIndex), Math.min(queue.size(), currentIndex + 1), false);
-        addQueueSectionItems(items, queue, "다음 곡", Math.max(0, currentIndex + 1), queue.size(), false);
-        return items;
-    }
-
-    private void addQueueSectionItems(
-            List<QueueListItem> items,
-            List<DeviceAudioTrack> queue,
-            String title,
-            int from,
-            int to,
-            boolean compactPrevious
-    ) {
-        if (items == null || queue == null || from >= to || from >= queue.size()) {
-            return;
-        }
-        items.add(QueueListItem.staticView(sectionTitle(title)));
-        int start = compactPrevious ? Math.max(from, to - 5) : from;
-        int end = Math.min(to, queue.size());
-        for (int index = start; index < end; index++) {
+        for (int index = 0; index < queue.size(); index++) {
+            if (index == currentIndex) {
+                continue;
+            }
             items.add(QueueListItem.track(queue.get(index), index));
         }
-        if (compactPrevious && start > from) {
-            items.add(QueueListItem.staticView(muted("이전 " + (start - from) + "곡은 접혀 있습니다.", 12)));
+        if (items.isEmpty()) {
+            items.add(QueueListItem.staticView(muted("다른 곡이 없습니다.", 14)));
         }
+        return items;
     }
 
     private void updateQueuePreviewFromIds(long[] ids) {
@@ -7085,6 +7438,19 @@ public final class MainActivity extends Activity {
         return drawable;
     }
 
+    private GradientDrawable roundedTop(int fillColor, int radiusDp) {
+        GradientDrawable drawable = new GradientDrawable();
+        drawable.setColor(fillColor);
+        float radius = dp(radiusDp);
+        drawable.setCornerRadii(new float[]{
+                radius, radius,
+                radius, radius,
+                0f, 0f,
+                0f, 0f
+        });
+        return drawable;
+    }
+
     private GradientDrawable roundedStroke(int fillColor, int strokeColor, int radiusDp, int strokeDp) {
         GradientDrawable drawable = rounded(fillColor, radiusDp);
         drawable.setStroke(dp(strokeDp), strokeColor);
@@ -7432,6 +7798,138 @@ public final class MainActivity extends Activity {
         @Override
         public int getItemCount() {
             return items.size();
+        }
+    }
+
+    private final class QueueLinearLayoutManager extends LinearLayoutManager {
+        QueueLinearLayoutManager(Context context) {
+            super(context);
+        }
+
+        @Override
+        public boolean canScrollVertically() {
+            return queueSheetLayout != null && queueSheetLayout.isExpanded() && super.canScrollVertically();
+        }
+    }
+
+    private final class QueueSheetLayout extends FrameLayout {
+        private View sheet;
+        private float downY;
+        private float downX;
+        private float startTranslationY;
+        private boolean dragging;
+        private boolean expanded;
+        private final int touchSlop;
+
+        QueueSheetLayout(Context context) {
+            super(context);
+            touchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
+            setClickable(true);
+        }
+
+        void setSheet(View sheet) {
+            this.sheet = sheet;
+        }
+
+        boolean isExpanded() {
+            return expanded;
+        }
+
+        void prepareCollapsed() {
+            post(() -> setExpanded(false, false));
+        }
+
+        void setExpanded(boolean nextExpanded, boolean animate) {
+            if (sheet == null) {
+                expanded = nextExpanded;
+                return;
+            }
+            expanded = nextExpanded;
+            float target = nextExpanded ? 0f : collapsedTranslationY();
+            if (animate) {
+                sheet.animate()
+                        .translationY(target)
+                        .setDuration(220L)
+                        .start();
+            } else {
+                sheet.animate().cancel();
+                sheet.setTranslationY(target);
+            }
+            if (queueRecyclerView != null) {
+                queueRecyclerView.setNestedScrollingEnabled(nextExpanded);
+            }
+            if (queueRecyclerAdapter != null) {
+                queueRecyclerAdapter.notifyDataSetChanged();
+            }
+        }
+
+        private float collapsedTranslationY() {
+            return Math.max(0f, getHeight() - queueSheetCollapsedHeight());
+        }
+
+        @Override
+        public boolean onInterceptTouchEvent(MotionEvent event) {
+            if (sheet == null) {
+                return super.onInterceptTouchEvent(event);
+            }
+            int action = event.getActionMasked();
+            if (action == MotionEvent.ACTION_DOWN) {
+                downY = event.getRawY();
+                downX = event.getRawX();
+                startTranslationY = sheet.getTranslationY();
+                dragging = false;
+                return false;
+            }
+            if (action == MotionEvent.ACTION_MOVE) {
+                float dy = event.getRawY() - downY;
+                float dx = event.getRawX() - downX;
+                if (Math.abs(dy) > touchSlop && Math.abs(dy) > Math.abs(dx) * 1.2f) {
+                    if (!expanded && dy < 0f) {
+                        dragging = true;
+                        return true;
+                    }
+                    if (expanded && dy > 0f && queueRecyclerView != null && !queueRecyclerView.canScrollVertically(-1)) {
+                        dragging = true;
+                        return true;
+                    }
+                }
+            }
+            return super.onInterceptTouchEvent(event);
+        }
+
+        @Override
+        public boolean onTouchEvent(MotionEvent event) {
+            if (sheet == null) {
+                return super.onTouchEvent(event);
+            }
+            int action = event.getActionMasked();
+            if (action == MotionEvent.ACTION_DOWN) {
+                downY = event.getRawY();
+                downX = event.getRawX();
+                startTranslationY = sheet.getTranslationY();
+                dragging = false;
+                return true;
+            }
+            if (action == MotionEvent.ACTION_MOVE) {
+                float dy = event.getRawY() - downY;
+                if (!dragging && Math.abs(dy) > touchSlop) {
+                    dragging = true;
+                }
+                if (dragging) {
+                    float next = Math.max(0f, Math.min(collapsedTranslationY(), startTranslationY + dy));
+                    sheet.setTranslationY(next);
+                }
+                return true;
+            }
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                if (dragging) {
+                    float midpoint = collapsedTranslationY() * 0.58f;
+                    setExpanded(sheet.getTranslationY() < midpoint, true);
+                }
+                dragging = false;
+                return true;
+            }
+            return true;
         }
     }
 

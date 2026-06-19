@@ -50,6 +50,7 @@ public final class PlaybackService extends Service {
     public static final String ACTION_PREVIOUS = "com.ytet.android.action.PLAYBACK_PREVIOUS";
     public static final String ACTION_STOP = "com.ytet.android.action.PLAYBACK_STOP";
     public static final String ACTION_SEEK_TO = "com.ytet.android.action.PLAYBACK_SEEK_TO";
+    public static final String ACTION_SEEK_TO_QUEUE_INDEX = "com.ytet.android.action.PLAYBACK_SEEK_TO_QUEUE_INDEX";
     public static final String ACTION_TOGGLE_SHUFFLE = "com.ytet.android.action.PLAYBACK_TOGGLE_SHUFFLE";
     public static final String ACTION_TOGGLE_REPEAT = "com.ytet.android.action.PLAYBACK_TOGGLE_REPEAT";
     private static final String ACTION_PREVIOUS_UNAVAILABLE = "com.ytet.android.action.PLAYBACK_PREVIOUS_UNAVAILABLE";
@@ -206,6 +207,13 @@ public final class PlaybackService extends Service {
         return intent;
     }
 
+    public static Intent seekQueueIndexIntent(Context context, int index) {
+        Intent intent = new Intent(context, PlaybackService.class);
+        intent.setAction(ACTION_SEEK_TO_QUEUE_INDEX);
+        intent.putExtra(EXTRA_START_INDEX, Math.max(0, index));
+        return intent;
+    }
+
     public static Intent queueEditIntent(Context context, String action, List<DeviceAudioTrack> tracks) {
         Intent intent = new Intent(context, PlaybackService.class);
         intent.setAction(action);
@@ -305,6 +313,8 @@ public final class PlaybackService extends Service {
             playPrevious();
         } else if (ACTION_SEEK_TO.equals(action)) {
             seekTo(intent.getLongExtra(EXTRA_SEEK_POSITION_MS, 0L));
+        } else if (ACTION_SEEK_TO_QUEUE_INDEX.equals(action)) {
+            seekToQueueIndex(intent.getIntExtra(EXTRA_START_INDEX, 0));
         } else if (ACTION_STOP.equals(action)) {
             stopPlayback();
         } else if (ACTION_TOGGLE_SHUFFLE.equals(action)) {
@@ -643,6 +653,21 @@ public final class PlaybackService extends Service {
 
     private void playNext() {
         moveToNextTrack(false);
+    }
+
+    private void seekToQueueIndex(int index) {
+        if (queue.isEmpty()) {
+            broadcastState();
+            return;
+        }
+        int clamped = Math.max(0, Math.min(index, queue.size() - 1));
+        if (queueIndex == clamped && !preparing && errorStatus == null) {
+            play();
+            return;
+        }
+        queueIndex = clamped;
+        failedTrackSkips = 0;
+        prepareCurrentTrack(true);
     }
 
     private void seekTo(long positionMs) {
