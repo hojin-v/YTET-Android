@@ -6659,7 +6659,7 @@ public final class MainActivity extends Activity {
             return row;
         }
 
-        row.setGravity(Gravity.CENTER);
+        row.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
 
         TextView remaining = muted(sleepTimerInlineText(), 14);
         expandedSleepTimerRemainingText = remaining;
@@ -7104,7 +7104,7 @@ public final class MainActivity extends Activity {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 dp(28)
         ));
-        queueSheetLayout.setDragHandle(handleArea);
+        registerQueueSheetGestureTarget(handleArea);
 
         sheet.addView(queuePlayerControlPanel(), marginBottom(10));
         sheet.addView(queueHeaderRow(), marginBottom(12));
@@ -7139,6 +7139,20 @@ public final class MainActivity extends Activity {
         return queueSheetLayout;
     }
 
+    private void registerQueueSheetGestureTarget(View target) {
+        if (target == null || queueSheetLayout == null) {
+            return;
+        }
+        target.setClickable(true);
+        target.setFocusable(true);
+        target.setOnClickListener(view -> {
+            if (queueSheetLayout != null) {
+                queueSheetLayout.toggleExpandedAnimated();
+            }
+        });
+        queueSheetLayout.addDragHandle(target);
+    }
+
     private int queueSheetBackgroundColor() {
         int base = playbackThemeColor == 0 ? color(R.color.ytet_background) : playbackThemeColor;
         return blendColors(base, color(R.color.ytet_background), 0.58f);
@@ -7168,6 +7182,7 @@ public final class MainActivity extends Activity {
         copy.addView(queuePlayerTitle, marginBottom(2));
         copy.addView(queuePlayerMeta, matchWrap());
         current.addView(copy, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        registerQueueSheetGestureTarget(current);
         panel.addView(current, marginBottom(6));
 
         LinearLayout controls = new LinearLayout(this);
@@ -7295,7 +7310,14 @@ public final class MainActivity extends Activity {
         TextView title = text("재생목록", 17, R.color.ytet_text, true);
         title.setSingleLine(true);
         title.setEllipsize(TextUtils.TruncateAt.END);
-        row.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        FrameLayout titleTarget = new FrameLayout(this);
+        titleTarget.addView(title, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER_VERTICAL
+        ));
+        row.addView(titleTarget, new LinearLayout.LayoutParams(0, dp(48), 1f));
+        registerQueueSheetGestureTarget(titleTarget);
 
         View save = queueSaveButton();
         row.addView(save, new LinearLayout.LayoutParams(dp(44), dp(48)));
@@ -9094,6 +9116,7 @@ public final class MainActivity extends Activity {
     private final class QueueSheetLayout extends FrameLayout {
         private View sheet;
         private View dragHandle;
+        private final List<View> dragHandles = new ArrayList<>();
         private float downY;
         private float downX;
         private float startTranslationY;
@@ -9118,6 +9141,19 @@ public final class MainActivity extends Activity {
 
         void setDragHandle(View dragHandle) {
             this.dragHandle = dragHandle;
+        }
+
+        void addDragHandle(View dragTarget) {
+            if (dragTarget != null && !dragHandles.contains(dragTarget)) {
+                dragHandles.add(dragTarget);
+            }
+        }
+
+        void toggleExpandedAnimated() {
+            if (sheet == null || dismissing || queueReordering) {
+                return;
+            }
+            setExpanded(!expanded, true);
         }
 
         boolean isDraggingSheet() {
@@ -9260,8 +9296,20 @@ public final class MainActivity extends Activity {
             startTranslationY = sheet == null ? 0f : sheet.getTranslationY();
             dragging = false;
             downOutsideSheet = sheet != null && !isRawPointInsideView(sheet, downX, downY);
-            downInDragHandle = dragHandle != null && isRawPointInsideView(dragHandle, downX, downY);
+            downInDragHandle = isRawPointInsideDragHandle(downX, downY);
             startedExpanded = expanded;
+        }
+
+        private boolean isRawPointInsideDragHandle(float rawX, float rawY) {
+            if (dragHandle != null && isRawPointInsideView(dragHandle, rawX, rawY)) {
+                return true;
+            }
+            for (View handle : dragHandles) {
+                if (isRawPointInsideView(handle, rawX, rawY)) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private boolean shouldStartSheetDrag(MotionEvent event) {
