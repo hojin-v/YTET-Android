@@ -21,8 +21,8 @@ public final class UpdateChecker {
     private static final String RELEASES_API_URL = "https://api.github.com/repos/hojin-v/YTET-Android/releases";
     private static final Pattern STABLE_TAG_PATTERN = Pattern.compile("^v(\\d+)\\.(\\d+)\\.(\\d+)$");
     private static final Pattern CURRENT_VERSION_PATTERN = Pattern.compile("^(\\d+)\\.(\\d+)\\.(\\d+)");
-    private static final Pattern STABLE_APK_ASSET_PATTERN = Pattern.compile("^ytet-android-v\\d+\\.\\d+\\.\\d+\\.apk$");
-    private static final Pattern NIGHTLY_APK_ASSET_PATTERN = Pattern.compile("^ytet-beta(?:-nightly-(\\d+))?\\.apk$");
+    private static final Pattern STABLE_APK_ASSET_PATTERN = Pattern.compile("^(?:rabbyt|ytet)-android-v\\d+\\.\\d+\\.\\d+\\.apk$");
+    private static final Pattern NIGHTLY_APK_ASSET_PATTERN = Pattern.compile("^(?:rabbyt|ytet)-beta(?:-nightly-(\\d+))?\\.apk$");
     private static final Pattern NIGHTLY_VERSION_PATTERN = Pattern.compile("(?:^|[-.])(nightly|beta)[-.](\\d+)(?:$|[^0-9])");
     private static final Pattern BETA_VERSION_NAME_PATTERN = Pattern.compile("\\b\\d+\\.\\d+\\.\\d+-beta\\.\\d+\\b");
     private static final Pattern UNSTABLE_MARKER_PATTERN = Pattern.compile(
@@ -47,7 +47,7 @@ public final class UpdateChecker {
         connection.setReadTimeout(READ_TIMEOUT_MS);
         connection.setRequestMethod("GET");
         connection.setRequestProperty("Accept", "application/vnd.github+json");
-        connection.setRequestProperty("User-Agent", "YTET-Android-Updater");
+        connection.setRequestProperty("User-Agent", "RabbYT-Android-Updater");
 
         int status = connection.getResponseCode();
         InputStream stream = status >= 200 && status < 300
@@ -90,7 +90,7 @@ public final class UpdateChecker {
                     versionNameFromTag(tagName),
                     releaseName.isEmpty() ? tagName : releaseName,
                     release.optString("html_url", ""),
-                    asset.optString("name", "YTET.apk"),
+                    asset.optString("name", "RabbYT.apk"),
                     asset.optString("browser_download_url", "")
             );
             if (latestUpdate == null || compareStableTagToCurrentVersion(tagName, latestUpdate.versionName()) > 0) {
@@ -131,7 +131,7 @@ public final class UpdateChecker {
                     versionName,
                     releaseName.isEmpty() ? "Nightly" : releaseName,
                     release.optString("html_url", ""),
-                    asset.optString("name", "YTET-Beta.apk"),
+                    asset.optString("name", "RabbYT-Beta.apk"),
                     asset.optString("browser_download_url", "")
             );
         }
@@ -221,7 +221,8 @@ public final class UpdateChecker {
             String name = asset.optString("name", "");
             String url = asset.optString("browser_download_url", "");
             String lower = name.toLowerCase();
-            if ("ytet-beta.apk".equals(lower) && url.startsWith("https://")) {
+            if (("rabbyt-beta.apk".equals(lower) || "ytet-beta.apk".equals(lower))
+                    && url.startsWith("https://")) {
                 return asset;
             }
             int build = nightlyBuildFromApkAssetName(name);

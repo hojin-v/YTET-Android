@@ -7,7 +7,7 @@
     <shortcut
         android:shortcutId="share_youtube_url"
         android:enabled="true"
-        android:icon="@drawable/ytet_launcher_icon"
+        android:icon="@drawable/rabbyt_launcher_icon"
         android:shortcutShortLabel="@string/share_extract_short_label"
         android:shortcutLongLabel="@string/share_extract_long_label">
         <intent

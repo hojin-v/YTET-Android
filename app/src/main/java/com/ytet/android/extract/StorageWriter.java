@@ -2,7 +2,9 @@ package com.ytet.android.extract;
 
 import android.content.ContentValues;
 import android.content.ContentResolver;
+import android.content.ContentUris;
 import android.content.Context;
+import android.database.Cursor;
 import android.media.MediaScannerConnection;
 import android.net.Uri;
 import android.os.Build;
@@ -34,6 +36,16 @@ public final class StorageWriter {
         File downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
         new File(downloads, DefaultMediaPaths.APP_FOLDER + "/" + DefaultMediaPaths.MUSIC_FOLDER).mkdirs();
         new File(downloads, DefaultMediaPaths.APP_FOLDER + "/" + DefaultMediaPaths.VIDEO_FOLDER).mkdirs();
+    }
+
+    public void migrateLegacyDefaultFolders(Context context) {
+        if (context == null) {
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            migrateLegacyMediaStoreRows(context);
+        }
+        migrateLegacyPublicDirectory(context);
     }
 
     public List<CopiedFile> copyToDefaultPublicFolder(
@@ -266,13 +278,146 @@ public final class StorageWriter {
         return MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
     }
 
+    private void migrateLegacyMediaStoreRows(Context context) {
+        ContentResolver resolver = context.getContentResolver();
+        Uri collectionUri = defaultDownloadsCollectionUri();
+        String[] projection = {
+                MediaStore.MediaColumns._ID,
+                MediaStore.MediaColumns.RELATIVE_PATH
+        };
+        String selection = MediaStore.MediaColumns.RELATIVE_PATH + " LIKE ?";
+        String[] args = {DefaultMediaPaths.legacyRootRelativePath() + "%"};
+        try (Cursor cursor = resolver.query(collectionUri, projection, selection, args, null)) {
+            if (cursor == null) {
+                return;
+            }
+            int idIndex = cursor.getColumnIndex(MediaStore.MediaColumns._ID);
+            int pathIndex = cursor.getColumnIndex(MediaStore.MediaColumns.RELATIVE_PATH);
+            if (idIndex < 0 || pathIndex < 0) {
+                return;
+            }
+            while (cursor.moveToNext()) {
+                String oldPath = cursor.getString(pathIndex);
+                String newPath = DefaultMediaPaths.migratedRelativePath(oldPath);
+                if (oldPath == null || oldPath.equals(newPath)) {
+                    continue;
+                }
+                ContentValues values = new ContentValues();
+                values.put(MediaStore.MediaColumns.RELATIVE_PATH, newPath);
+                Uri itemUri = ContentUris.withAppendedId(collectionUri, cursor.getLong(idIndex));
+                try {
+                    resolver.update(itemUri, values, null, null);
+                } catch (Exception ignored) {
+                    // Existing files remain visible through the legacy scan path if a row cannot be moved.
+                }
+            }
+        } catch (Exception ignored) {
+            // Best-effort migration; scoped storage or permission limits should not block app startup.
+        }
+    }
+
+    private void migrateLegacyPublicDirectory(Context context) {
+        File downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+        File legacyRoot = new File(downloads, DefaultMediaPaths.LEGACY_APP_FOLDER);
+        if (!legacyRoot.exists()) {
+            return;
+        }
+        File currentRoot = new File(downloads, DefaultMediaPaths.APP_FOLDER);
+        List<String> scanPaths = new ArrayList<>();
+        try {
+            if (!currentRoot.exists() && legacyRoot.renameTo(currentRoot)) {
+                collectFilePaths(currentRoot, scanPaths);
+            } else {
+                moveDirectoryContents(legacyRoot, currentRoot, scanPaths);
+                deleteEmptyDirectories(legacyRoot);
+            }
+        } catch (Exception ignored) {
+            // Legacy files are still scanned from Download/YTET when a filesystem move is not allowed.
+        }
+        if (!scanPaths.isEmpty()) {
+            MediaScannerConnection.scanFile(context, scanPaths.toArray(new String[0]), null, null);
+        }
+    }
+
+    private void moveDirectoryContents(File sourceDirectory, File targetDirectory, List<String> scanPaths) throws IOException {
+        File[] children = sourceDirectory.listFiles();
+        if (children == null || children.length == 0) {
+            return;
+        }
+        if (!targetDirectory.exists() && !targetDirectory.mkdirs()) {
+            throw new IOException("Target directory cannot be created.");
+        }
+        for (File child : children) {
+            File target = new File(targetDirectory, child.getName());
+            if (child.isDirectory()) {
+                moveDirectoryContents(child, target, scanPaths);
+                deleteEmptyDirectories(child);
+            } else if (child.isFile()) {
+                File uniqueTarget = uniqueTargetFile(target);
+                Files.move(child.toPath(), uniqueTarget.toPath());
+                scanPaths.add(uniqueTarget.getAbsolutePath());
+            }
+        }
+    }
+
+    private File uniqueTargetFile(File target) {
+        if (!target.exists()) {
+            return target;
+        }
+        String name = target.getName();
+        int dot = name.lastIndexOf('.');
+        String baseName = dot > 0 ? name.substring(0, dot) : name;
+        String extension = dot > 0 ? name.substring(dot) : "";
+        File parent = target.getParentFile();
+        for (int index = 1; index < 1000; index++) {
+            File candidate = new File(parent, baseName + " (" + index + ")" + extension);
+            if (!candidate.exists()) {
+                return candidate;
+            }
+        }
+        return new File(parent, baseName + " (" + System.currentTimeMillis() + ")" + extension);
+    }
+
+    private void collectFilePaths(File file, List<String> scanPaths) {
+        if (file == null || !file.exists()) {
+            return;
+        }
+        if (file.isFile()) {
+            scanPaths.add(file.getAbsolutePath());
+            return;
+        }
+        File[] children = file.listFiles();
+        if (children == null) {
+            return;
+        }
+        for (File child : children) {
+            collectFilePaths(child, scanPaths);
+        }
+    }
+
+    private boolean deleteEmptyDirectories(File directory) {
+        File[] children = directory == null ? null : directory.listFiles();
+        if (children == null) {
+            return false;
+        }
+        boolean empty = true;
+        for (File child : children) {
+            if (child.isDirectory()) {
+                empty &= deleteEmptyDirectories(child);
+            } else {
+                empty = false;
+            }
+        }
+        return empty && directory.delete();
+    }
+
     private String targetRelativePath(MediaType mediaType, File baseDir, File file) {
         String parent = DefaultMediaPaths.normalizeRelativePath(safeRelativePath(relativeParentPath(baseDir, file)));
         return DefaultMediaPaths.extractionRelativePath(mediaType) + parent;
     }
 
     private String targetDisplayName(File file) {
-        return safePathSegment(file == null ? "" : file.getName(), "YTET");
+        return safePathSegment(file == null ? "" : file.getName(), "RabbYT");
     }
 
     private String defaultScanPath(String relativePath, String displayName) {

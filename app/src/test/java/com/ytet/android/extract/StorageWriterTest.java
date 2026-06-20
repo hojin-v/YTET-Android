@@ -36,27 +36,27 @@ public final class StorageWriterTest {
     }
 
     @Test
-    public void defaultAudioPathPreservesPlaylistFolderUnderYtetMusic() throws Exception {
+    public void defaultAudioPathPreservesPlaylistFolderUnderRabbytMusic() throws Exception {
         File workspace = new File("/tmp/workspace");
         File output = new File(workspace, "Album/001 - Song.m4a");
 
-        assertEquals("Download/YTET/Music/Album/", targetRelativePath(MediaType.AUDIO, workspace, output));
+        assertEquals("Download/RabbYT/Music/Album/", targetRelativePath(MediaType.AUDIO, workspace, output));
     }
 
     @Test
-    public void defaultAudioPathSanitizesPlaylistFolderUnderYtetMusic() throws Exception {
+    public void defaultAudioPathSanitizesPlaylistFolderUnderRabbytMusic() throws Exception {
         File workspace = new File("/tmp/workspace");
         File output = new File(workspace, "Album: Best?/001 - Song.m4a");
 
-        assertEquals("Download/YTET/Music/Album Best/", targetRelativePath(MediaType.AUDIO, workspace, output));
+        assertEquals("Download/RabbYT/Music/Album Best/", targetRelativePath(MediaType.AUDIO, workspace, output));
     }
 
     @Test
-    public void defaultVideoPathUsesYtetVideo() throws Exception {
+    public void defaultVideoPathUsesRabbytVideo() throws Exception {
         File workspace = new File("/tmp/workspace");
         File output = new File(workspace, "Clip.mp4");
 
-        assertEquals("Download/YTET/Video/", targetRelativePath(MediaType.VIDEO, workspace, output));
+        assertEquals("Download/RabbYT/Video/", targetRelativePath(MediaType.VIDEO, workspace, output));
     }
 
     private String mimeType(String fileName) throws Exception {

@@ -317,7 +317,7 @@ public final class PlaybackService extends Service {
                 .setAudioAttributes(attributes)
                 .setOnAudioFocusChangeListener(focusChangeListener)
                 .build();
-        mediaSession = new MediaSession(this, "YTETPlayback");
+        mediaSession = new MediaSession(this, "RabbYTPlayback");
         mediaSession.setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS
                 | MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS);
         mediaSession.setCallback(new MediaSession.Callback() {
@@ -1544,7 +1544,7 @@ public final class PlaybackService extends Service {
         DeviceAudioTrack track = currentTrack();
         Bitmap artwork = artworkFor(track);
         builder.setSmallIcon(R.drawable.ic_stat_playback)
-                .setContentTitle(track == null ? "YTET 로컬 플레이어" : track.title())
+                .setContentTitle(track == null ? "RabbYT 로컬 플레이어" : track.title())
                 .setContentText(track == null ? "기기 저장 음악" : track.artist() + " · " + mixTitle)
                 .setContentIntent(contentIntent())
                 .setDeleteIntent(serviceAction(ACTION_STOP, 6))

@@ -76,7 +76,7 @@ public final class YtDlpPythonEngine implements ExtractorEngine {
 
             throwIfCanceled(cancellationSignal);
             progressListener.onProgress(95, "저장", request.usesDefaultOutput()
-                    ? "기본 YTET 폴더로 복사 중"
+                    ? "기본 RabbYT 폴더로 복사 중"
                     : "선택한 Android 폴더로 복사 중");
             List<StorageWriter.CopiedFile> copiedFiles = request.usesDefaultOutput()
                     ? storageWriter.copyToDefaultPublicFolder(context, request.mediaType(), workspace, outputFiles)

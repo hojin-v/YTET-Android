@@ -182,7 +182,7 @@ public final class ExtractionService extends Service {
                 : new Notification.Builder(this);
 
         builder.setSmallIcon(R.drawable.ic_stat_extract)
-                .setContentTitle("YTET - " + stage)
+                .setContentTitle("RabbYT - " + stage)
                 .setContentText(message)
                 .setContentIntent(contentIntent())
                 .setAutoCancel(finished)

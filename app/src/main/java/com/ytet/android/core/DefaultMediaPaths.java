@@ -2,11 +2,14 @@ package com.ytet.android.core;
 
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.List;
 
 public final class DefaultMediaPaths {
     public static final String DEFAULT_OUTPUT_URI = "ytet://default-output";
     public static final String DOWNLOADS_FOLDER = "Download";
-    public static final String APP_FOLDER = "YTET";
+    public static final String LEGACY_APP_FOLDER = "YTET";
+    public static final String APP_FOLDER = "RabbYT";
     public static final String MUSIC_FOLDER = "Music";
     public static final String VIDEO_FOLDER = "Video";
 
@@ -23,16 +26,36 @@ public final class DefaultMediaPaths {
         return normalizeRelativePath(DOWNLOADS_FOLDER + "/" + APP_FOLDER);
     }
 
+    public static String legacyRootRelativePath() {
+        return normalizeRelativePath(DOWNLOADS_FOLDER + "/" + LEGACY_APP_FOLDER);
+    }
+
     public static String musicRelativePath() {
         return normalizeRelativePath(DOWNLOADS_FOLDER + "/" + APP_FOLDER + "/" + MUSIC_FOLDER);
+    }
+
+    public static String legacyMusicRelativePath() {
+        return normalizeRelativePath(DOWNLOADS_FOLDER + "/" + LEGACY_APP_FOLDER + "/" + MUSIC_FOLDER);
+    }
+
+    public static List<String> musicRelativePaths() {
+        return Arrays.asList(musicRelativePath(), legacyMusicRelativePath());
     }
 
     public static String videoRelativePath() {
         return normalizeRelativePath(DOWNLOADS_FOLDER + "/" + APP_FOLDER + "/" + VIDEO_FOLDER);
     }
 
+    public static String legacyVideoRelativePath() {
+        return normalizeRelativePath(DOWNLOADS_FOLDER + "/" + LEGACY_APP_FOLDER + "/" + VIDEO_FOLDER);
+    }
+
     public static String extractionRelativePath(MediaType mediaType) {
         return mediaType == MediaType.VIDEO ? videoRelativePath() : musicRelativePath();
+    }
+
+    public static String legacyExtractionRelativePath(MediaType mediaType) {
+        return mediaType == MediaType.VIDEO ? legacyVideoRelativePath() : legacyMusicRelativePath();
     }
 
     public static String displayPath(MediaType mediaType) {
@@ -42,7 +65,8 @@ public final class DefaultMediaPaths {
     public static boolean isDefaultTreeUriFor(MediaType mediaType, String treeUri) {
         String relativePath = primaryExternalStorageRelativePathFromTreeUri(treeUri);
         return !relativePath.isEmpty()
-                && normalizeRelativePath(relativePath).equals(extractionRelativePath(mediaType));
+                && (normalizeRelativePath(relativePath).equals(extractionRelativePath(mediaType))
+                || normalizeRelativePath(relativePath).equals(legacyExtractionRelativePath(mediaType)));
     }
 
     public static String displayTreePath(String treeUri) {
@@ -67,6 +91,18 @@ public final class DefaultMediaPaths {
             return "";
         }
         return normalized.endsWith("/") ? normalized : normalized + "/";
+    }
+
+    public static String migratedRelativePath(String path) {
+        String normalized = normalizeRelativePath(path);
+        String legacyRoot = legacyRootRelativePath();
+        if (normalized.equals(legacyRoot)) {
+            return rootRelativePath();
+        }
+        if (normalized.startsWith(legacyRoot)) {
+            return rootRelativePath() + normalized.substring(legacyRoot.length());
+        }
+        return normalized;
     }
 
     public static String cleanRelativePath(String path) {

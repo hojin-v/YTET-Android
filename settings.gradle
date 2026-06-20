@@ -14,6 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "YTET Android"
+rootProject.name = "RabbYT Android"
 include ":app"
-

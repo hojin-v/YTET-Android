@@ -162,7 +162,7 @@ public final class UpdateDownloadService extends Service {
         HttpURLConnection connection = (HttpURLConnection) new URL(apkUrl).openConnection();
         connection.setConnectTimeout(12000);
         connection.setReadTimeout(30000);
-        connection.setRequestProperty("User-Agent", "YTET-Android-Updater");
+        connection.setRequestProperty("User-Agent", "RabbYT-Android-Updater");
         try {
             int status = connection.getResponseCode();
             if (status == HttpURLConnection.HTTP_PARTIAL) {
@@ -407,7 +407,7 @@ public final class UpdateDownloadService extends Service {
 
     private String updateApkFileName(String tagName, String apkName) {
         String tag = sanitizeFileSegment(tagName.isEmpty() ? "update" : tagName);
-        String assetName = sanitizeFileSegment(apkName.isEmpty() ? "YTET.apk" : apkName);
+        String assetName = sanitizeFileSegment(apkName.isEmpty() ? "RabbYT.apk" : apkName);
         if (assetName.startsWith(tag + "-")) {
             return assetName;
         }
@@ -417,7 +417,7 @@ public final class UpdateDownloadService extends Service {
     private String sanitizeFileSegment(String value) {
         String clean = value == null ? "" : value.trim().replaceAll("[^A-Za-z0-9._-]+", "_");
         clean = clean.replaceAll("_+", "_");
-        return clean.isEmpty() ? "YTET.apk" : clean;
+        return clean.isEmpty() ? "RabbYT.apk" : clean;
     }
 
     private void deleteOtherUpdateApks(File keepFile) {

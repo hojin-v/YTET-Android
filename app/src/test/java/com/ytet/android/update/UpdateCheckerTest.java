@@ -9,12 +9,12 @@ import static org.junit.Assert.assertTrue;
 public final class UpdateCheckerTest {
     @Test
     public void acceptsOnlyFormalVersionTags() {
-        assertTrue(UpdateChecker.isStableRelease("v1.2.3", "YTET Android v1.2.3", false, false));
-        assertFalse(UpdateChecker.isStableRelease("nightly", "YTET Android Nightly", false, true));
-        assertFalse(UpdateChecker.isStableRelease("v1.2.3-beta", "YTET beta", false, false));
-        assertFalse(UpdateChecker.isStableRelease("v1.2.3", "YTET Android RC", false, false));
-        assertFalse(UpdateChecker.isStableRelease("v1.2.3", "YTET Android v1.2.3", true, false));
-        assertTrue(UpdateChecker.isStableRelease("v1.2.4", "YTET Android March release", false, false));
+        assertTrue(UpdateChecker.isStableRelease("v1.2.3", "RabbYT Android v1.2.3", false, false));
+        assertFalse(UpdateChecker.isStableRelease("nightly", "RabbYT Android Nightly", false, true));
+        assertFalse(UpdateChecker.isStableRelease("v1.2.3-beta", "RabbYT beta", false, false));
+        assertFalse(UpdateChecker.isStableRelease("v1.2.3", "RabbYT Android RC", false, false));
+        assertFalse(UpdateChecker.isStableRelease("v1.2.3", "RabbYT Android v1.2.3", true, false));
+        assertTrue(UpdateChecker.isStableRelease("v1.2.4", "RabbYT Android March release", false, false));
     }
 
     @Test
@@ -25,23 +25,25 @@ public final class UpdateCheckerTest {
     }
 
     @Test
-    public void acceptsOnlyYtetApkAssets() {
+    public void acceptsOnlyBrandedApkAssets() {
+        assertTrue(UpdateChecker.isApkAssetName("RabbYT-Android-v0.1.4.apk"));
         assertTrue(UpdateChecker.isApkAssetName("YTET-Android-v0.1.4.apk"));
-        assertFalse(UpdateChecker.isApkAssetName("YTET-Android-v0.1.4-debug.apk"));
+        assertFalse(UpdateChecker.isApkAssetName("RabbYT-Android-v0.1.4-debug.apk"));
         assertFalse(UpdateChecker.isApkAssetName("app-release.apk"));
-        assertFalse(UpdateChecker.isApkAssetName("YTET-Android-v0.1.4-android-debug.zip"));
-        assertFalse(UpdateChecker.isApkAssetName("YTET-Android-nightly-debug.apk"));
-        assertFalse(UpdateChecker.isApkAssetName("YTET-Android-v0.1.4-beta-debug.apk"));
+        assertFalse(UpdateChecker.isApkAssetName("RabbYT-Android-v0.1.4-android-debug.zip"));
+        assertFalse(UpdateChecker.isApkAssetName("RabbYT-Android-nightly-debug.apk"));
+        assertFalse(UpdateChecker.isApkAssetName("RabbYT-Android-v0.1.4-beta-debug.apk"));
         assertFalse(UpdateChecker.isApkAssetName("source-code.zip"));
     }
 
     @Test
     public void acceptsOnlyBetaNightlyApkAssets() {
+        assertTrue(UpdateChecker.isNightlyApkAssetName("RabbYT-Beta.apk"));
+        assertTrue(UpdateChecker.isNightlyApkAssetName("RabbYT-Beta-nightly-128.apk"));
         assertTrue(UpdateChecker.isNightlyApkAssetName("YTET-Beta.apk"));
-        assertTrue(UpdateChecker.isNightlyApkAssetName("YTET-Beta-nightly-128.apk"));
-        assertFalse(UpdateChecker.isNightlyApkAssetName("YTET-Android-nightly-128.apk"));
-        assertFalse(UpdateChecker.isNightlyApkAssetName("YTET-Beta-nightly-debug.apk"));
-        assertFalse(UpdateChecker.isNightlyApkAssetName("YTET-Beta-debug.apk"));
+        assertFalse(UpdateChecker.isNightlyApkAssetName("RabbYT-Android-nightly-128.apk"));
+        assertFalse(UpdateChecker.isNightlyApkAssetName("RabbYT-Beta-nightly-debug.apk"));
+        assertFalse(UpdateChecker.isNightlyApkAssetName("RabbYT-Beta-debug.apk"));
     }
 
     @Test
@@ -53,10 +55,10 @@ public final class UpdateCheckerTest {
 
     @Test
     public void comparesNightlyAssetBuildsAgainstCurrentVersion() {
-        assertTrue(UpdateChecker.isNightlyApkNewerThan("YTET-Beta-nightly-42.apk", "1.3.8-beta.41"));
-        assertFalse(UpdateChecker.isNightlyApkNewerThan("YTET-Beta-nightly-42.apk", "1.3.8-beta.42"));
-        assertFalse(UpdateChecker.isNightlyApkNewerThan("YTET-Beta.apk", "1.3.8-beta.41"));
-        assertFalse(UpdateChecker.isNightlyApkNewerThan("YTET-Beta-nightly-debug.apk", "1.3.8-beta.41"));
+        assertTrue(UpdateChecker.isNightlyApkNewerThan("RabbYT-Beta-nightly-42.apk", "1.3.8-beta.41"));
+        assertFalse(UpdateChecker.isNightlyApkNewerThan("RabbYT-Beta-nightly-42.apk", "1.3.8-beta.42"));
+        assertFalse(UpdateChecker.isNightlyApkNewerThan("RabbYT-Beta.apk", "1.3.8-beta.41"));
+        assertFalse(UpdateChecker.isNightlyApkNewerThan("RabbYT-Beta-nightly-debug.apk", "1.3.8-beta.41"));
     }
 
     @Test

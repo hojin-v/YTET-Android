@@ -1,6 +1,6 @@
 <resources>
-    <string name="app_name">YTET Beta</string>
+    <string name="app_name">RabbYT Beta</string>
     <string name="app_package">com.ytet.android.beta</string>
-    <string name="share_extract_short_label">YTET Beta 추출</string>
-    <string name="share_extract_long_label">YTET Beta로 추출</string>
+    <string name="share_extract_short_label">RabbYT Beta 추출</string>
+    <string name="share_extract_long_label">RabbYT Beta로 추출</string>
 </resources>

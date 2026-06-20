@@ -101,8 +101,8 @@ jobs:
             gradle_test_task=":app:testStableDebugUnitTest"
             gradle_build_task=":app:assembleStableRelease"
             apk_path="app/build/outputs/apk/stable/release/app-stable-release.apk"
-            apk_asset="YTET-Android-${version}.apk"
-            zip_asset="YTET-Android-${version}-android.zip"
+            apk_asset="RabbYT-Android-${version}.apk"
+            zip_asset="RabbYT-Android-${version}-android.zip"
           else
             latest_tag="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)"
             if [[ "$latest_tag" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
@@ -119,8 +119,8 @@ jobs:
             gradle_test_task=":app:testNightlyDebugUnitTest"
             gradle_build_task=":app:assembleNightlyRelease"
             apk_path="app/build/outputs/apk/nightly/release/app-nightly-release.apk"
-            apk_asset="YTET-Beta.apk"
-            zip_asset="YTET-Beta-android.zip"
+            apk_asset="RabbYT-Beta.apk"
+            zip_asset="RabbYT-Beta-android.zip"
           fi
           {
             echo "YTET_VERSION_NAME=$version_name"
@@ -202,7 +202,7 @@ jobs:
         if: steps.signing.outputs.configured == 'true'
         run: ./gradlew --no-daemon "$YTET_GRADLE_TEST_TASK" --warning-mode all
 
-      - name: Build YTET Android
+      - name: Build RabbYT Android
         if: steps.signing.outputs.configured == 'true'
         run: ./gradlew --no-daemon clean "$YTET_GRADLE_BUILD_TASK" --warning-mode all
 
@@ -239,7 +239,7 @@ jobs:
         if: steps.signing.outputs.configured == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: YTET-Android-${{ steps.version.outputs.version }}-android
+          name: RabbYT-Android-${{ steps.version.outputs.version }}-android
           path: |
             dist/*.apk
             dist/*.zip
@@ -258,14 +258,14 @@ jobs:
           apk="$YTET_DIST_APK"
           zip="$YTET_DIST_ZIP"
 
-          title="YTET Android $tag"
+          title="RabbYT Android $tag"
           notes_file="$RUNNER_TEMP/release-notes.md"
           tag_notes="$(git for-each-ref "refs/tags/$tag" --format='%(contents)' || true)"
           if [[ -n "${tag_notes//[[:space:]]/}" ]]; then
             printf '%s\n' "$tag_notes" > "$notes_file"
           else
             {
-              echo "YTET Android $tag"
+              echo "RabbYT Android $tag"
               echo
               echo "패치노트"
               echo "- 정식 릴리즈 빌드입니다."
@@ -285,7 +285,7 @@ jobs:
               echo "- 베타 버전: $YTET_VERSION_NAME"
               echo "- 빌드: beta.$GITHUB_RUN_NUMBER"
               echo "- main 브랜치 최신 커밋을 기반으로 한 개발자 검증용 Beta 빌드입니다."
-              echo "- 정식 YTET 앱과 별도 앱으로 설치됩니다."
+              echo "- 정식 RabbYT 앱과 별도 앱으로 설치됩니다."
               echo "- 커밋: $GITHUB_SHA"
             } > "$notes_file"
             prerelease_flag="--prerelease"

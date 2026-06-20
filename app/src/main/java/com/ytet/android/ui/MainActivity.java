@@ -509,6 +509,7 @@ public final class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         applyMainWindowBars();
         outputTreeUri = getPreferences().getString(PREF_OUTPUT_TREE, null);
+        normalizeSavedOutputTree();
         librarySource = getPreferences().getString(PREF_LIBRARY_SOURCE, LIBRARY_SOURCE_COLLECTION);
         librarySort = LibrarySort.fromKey(getPreferences().getString(PREF_LIBRARY_SORT, LibrarySort.NEWEST.key));
         updateApkPath = getPreferences().getString(PREF_UPDATE_APK_PATH, "");
@@ -1042,7 +1043,9 @@ public final class MainActivity extends Activity {
 
     private void ensureDefaultMediaFolders() {
         try {
-            new StorageWriter().ensureDefaultFolders();
+            StorageWriter storageWriter = new StorageWriter();
+            storageWriter.migrateLegacyDefaultFolders(this);
+            storageWriter.ensureDefaultFolders();
         } catch (Exception ignored) {
             // MediaStore creates the public folders when the first file is saved on scoped-storage devices.
         }
@@ -1914,7 +1917,7 @@ public final class MainActivity extends Activity {
         }
         dismissUpdateDialog();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !getPackageManager().canRequestPackageInstalls()) {
-            updateStatus = "설치를 계속하려면 YTET의 알 수 없는 앱 설치를 허용한 뒤 설치를 다시 누르세요.";
+            updateStatus = "설치를 계속하려면 RabbYT의 알 수 없는 앱 설치를 허용한 뒤 설치를 다시 누르세요.";
             renderUpdateState();
             openInstallPermissionSettings();
             return;
@@ -1923,7 +1926,7 @@ public final class MainActivity extends Activity {
 
         Intent install = new Intent(Intent.ACTION_INSTALL_PACKAGE);
         install.setData(apkUri);
-        install.setClipData(ClipData.newRawUri("YTET update", apkUri));
+        install.setClipData(ClipData.newRawUri("RabbYT update", apkUri));
         install.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION);
         install.putExtra(Intent.EXTRA_RETURN_RESULT, false);
         try {
@@ -1933,7 +1936,7 @@ public final class MainActivity extends Activity {
         } catch (ActivityNotFoundException exception) {
             Intent fallback = new Intent(Intent.ACTION_VIEW);
             fallback.setDataAndType(apkUri, UPDATE_APK_MIME);
-            fallback.setClipData(ClipData.newRawUri("YTET update", apkUri));
+            fallback.setClipData(ClipData.newRawUri("RabbYT update", apkUri));
             fallback.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION);
             try {
                 startActivity(fallback);
@@ -2615,7 +2618,7 @@ public final class MainActivity extends Activity {
         LinearLayout body = dialogBody("내 콘텐츠 보기");
         body.addView(librarySourceOption(
                 "보관함",
-                "YTET/Music에 저장된 음악만 보기",
+                "RabbYT/Music에 저장된 음악만 보기",
                 !isDeviceFileSource(),
                 () -> {
                     setLibrarySource(LIBRARY_SOURCE_COLLECTION);
@@ -5651,7 +5654,7 @@ public final class MainActivity extends Activity {
         return nowPlayingCoverView(
                 idle,
                 playbackAlbumArtUri,
-                idle ? "YT" : coverInitials(),
+                idle ? "RY" : coverInitials(),
                 idle ? color(R.color.ytet_panel_alt) : color(R.color.ytet_accent_dark)
         );
     }
@@ -5659,7 +5662,7 @@ public final class MainActivity extends Activity {
     private View nowPlayingCoverView(DeviceAudioTrack track) {
         String title = track == null ? "" : valueOrDefault(track.title(), "");
         String initials = title.isEmpty()
-                ? "YT"
+                ? "RY"
                 : title.substring(0, Math.min(2, title.length())).toUpperCase();
         return nowPlayingCoverView(
                 false,
@@ -6764,7 +6767,7 @@ public final class MainActivity extends Activity {
     private String coverInitials() {
         String title = playbackTitle == null ? "" : playbackTitle.trim();
         if (title.isEmpty() || "로컬 재생 대기".equals(title)) {
-            return "YTET";
+            return "RY";
         }
         return title.substring(0, Math.min(2, title.length())).toUpperCase();
     }
@@ -7569,9 +7572,10 @@ public final class MainActivity extends Activity {
         }
         libraryExecutor.execute(() -> {
             try {
+                migrateLegacyDefaultMediaFolders();
                 List<DeviceAudioTrack> tracks = deviceMusicLibrary.loadTracks(
                         this,
-                        Arrays.asList(DefaultMediaPaths.musicRelativePath())
+                        DefaultMediaPaths.musicRelativePaths()
                 );
                 runOnUiThread(() -> {
                     homeTracks = tracks;
@@ -7720,6 +7724,7 @@ public final class MainActivity extends Activity {
         }
         libraryExecutor.execute(() -> {
             try {
+                migrateLegacyDefaultMediaFolders();
                 List<DeviceAudioTrack> tracks = deviceMusicLibrary.loadTracks(this, libraryScanRelativePaths());
                 runOnUiThread(() -> {
                     libraryTracks = tracks;
@@ -7753,7 +7758,15 @@ public final class MainActivity extends Activity {
         if (isDeviceFileSource()) {
             return null;
         }
-        return Arrays.asList(DefaultMediaPaths.musicRelativePath());
+        return DefaultMediaPaths.musicRelativePaths();
+    }
+
+    private void migrateLegacyDefaultMediaFolders() {
+        try {
+            new StorageWriter().migrateLegacyDefaultFolders(this);
+        } catch (Exception ignored) {
+            // Legacy paths stay in the scan list if the device does not allow moving those files.
+        }
     }
 
     private String emptyLibraryStatus() {
@@ -7970,6 +7983,17 @@ public final class MainActivity extends Activity {
         getPreferences().edit().remove(PREF_OUTPUT_TREE).apply();
         updateFolderLabel();
         renderCurrentTab();
+    }
+
+    private void normalizeSavedOutputTree() {
+        if (outputTreeUri == null || outputTreeUri.trim().isEmpty()) {
+            return;
+        }
+        if (DefaultMediaPaths.isDefaultTreeUriFor(MediaType.AUDIO, outputTreeUri)
+                || DefaultMediaPaths.isDefaultTreeUriFor(MediaType.VIDEO, outputTreeUri)) {
+            outputTreeUri = null;
+            getPreferences().edit().remove(PREF_OUTPUT_TREE).apply();
+        }
     }
 
     private String progressStatus(String stage, String message) {

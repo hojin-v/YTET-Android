@@ -65,7 +65,7 @@ public final class StationCatalogTest {
                 "essential;",
                 "Album",
                 "[Playlist] 퇴근 후 나만의 시간.m4a",
-                "YTET",
+                "RabbYT",
                 "content://audio/10",
                 2_807_000,
                 10_000

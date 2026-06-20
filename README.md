@@ -1,10 +1,10 @@
 <div align="center">
 
-# YTET
+# RabbYT
 
-YouTube Extractor Toolkit
+YouTube extractor and local music player
 
-Android 저장소에서 개발되는 YTET 모바일 앱입니다. 앱 표시 이름은 `YTET`이며, 로컬 음악 스트리밍, 디바이스 음악 관리, YouTube 추출기를 하단 탭으로 제공합니다.
+Android 저장소에서 개발되는 RabbYT 모바일 앱입니다. 앱 표시 이름은 `RabbYT`이며, 로컬 음악 스트리밍, 디바이스 음악 관리, YouTube 추출기를 하단 탭으로 제공합니다.
 
 [![CI](https://github.com/hojin-v/YTET-Android/actions/workflows/ci.yml/badge.svg)](https://github.com/hojin-v/YTET-Android/actions/workflows/ci.yml)
 [![Release](https://github.com/hojin-v/YTET-Android/actions/workflows/release.yml/badge.svg)](https://github.com/hojin-v/YTET-Android/actions/workflows/release.yml)
@@ -18,7 +18,7 @@ Android 저장소에서 개발되는 YTET 모바일 앱입니다. 앱 표시 이
 
 ## Overview
 
-YTET는 기존 YouTube 추출기 기능을 유지하면서, 기기에 저장된 음악을 앱 안에서 빠르게 듣고 관리하는 Android 앱입니다.
+RabbYT는 기존 YouTube 추출기 기능을 유지하면서, 기기에 저장된 음악을 앱 안에서 빠르게 듣고 관리하는 Android 앱입니다.
 
 하단 탭은 `홈`, `내 음악`, `추출기`로 구성됩니다. 홈은 Android MediaStore에서 읽은 로컬 음악만으로 전체 셔플, 아티스트 믹스, 폴더 믹스를 만들고, 내 음악은 폴더와 파일을 스캔해 재생/공유/삭제를 제공합니다. 추출 작업은 기존처럼 사용자가 저장 폴더를 직접 선택하고 foreground service에서 진행됩니다.
 
@@ -49,7 +49,7 @@ YTET는 기존 YouTube 추출기 기능을 유지하면서, 기기에 저장된 
 
 ## Quick Start
 
-1. [Releases](https://github.com/hojin-v/YTET-Android/releases)에서 최신 `YTET-Android-버전.apk` 또는 ZIP을 받습니다.
+1. [Releases](https://github.com/hojin-v/YTET-Android/releases)에서 최신 `RabbYT-Android-버전.apk` 또는 ZIP을 받습니다.
 2. APK를 Android 기기에 설치합니다.
 3. `홈`에서 오디오 권한을 허용한 뒤 기기 음악 기반 추천 믹스를 재생합니다.
 4. `내 음악`에서 기기 음악을 폴더별로 보고 선택한 파일을 앱 안에서 재생합니다.
@@ -69,7 +69,7 @@ YTET는 기존 YouTube 추출기 기능을 유지하면서, 기기에 저장된 
 - 아티스트 믹스: MediaStore의 아티스트 값이 정확히 같은 곡만 묶은 셔플
 - 폴더 믹스: 디바이스 폴더명이 같은 곡만 묶은 셔플
 
-YTET는 사용자가 보유하지 않은 음악 취향을 추측해 “밤에 어울리는 음악”, “차분한 힙합” 같은 테마를 만들지 않습니다. 그런 분류는 오분류를 만들 수 있으므로, 앱은 실제 파일 메타데이터와 폴더 구조에서 확인되는 값만 사용합니다.
+RabbYT는 사용자가 보유하지 않은 음악 취향을 추측해 “밤에 어울리는 음악”, “차분한 힙합” 같은 테마를 만들지 않습니다. 그런 분류는 오분류를 만들 수 있으므로, 앱은 실제 파일 메타데이터와 폴더 구조에서 확인되는 값만 사용합니다.
 
 재생은 `PlaybackService`에서 foreground media playback으로 유지됩니다. 앱을 나가거나 화면을 잠근 뒤에도 재생이 이어지며, Android 알림 영역과 잠금화면에서 이전, 재생/일시정지, 다음 컨트롤을 사용할 수 있습니다.
 
@@ -84,6 +84,8 @@ YTET는 사용자가 보유하지 않은 음악 취향을 추측해 “밤에 �
 
 스캔된 음악은 폴더 칩과 파일 목록으로 표시됩니다. 파일을 선택하면 앱 내 재생, 열기, 공유, 삭제 작업을 실행할 수 있으며, Android 11 이상에서는 시스템 삭제 확인 화면을 거칩니다.
 
+기존 `YTET` 이름으로 저장된 사용자를 위해 보관함은 `Download/YTET/Music`도 함께 스캔합니다. 앱은 가능한 경우 기존 기본 저장 폴더를 `Download/RabbYT`로 옮기며, 예전 기본 폴더가 저장 폴더로 남아 있으면 새 기본 저장 경로로 되돌립니다. 이동이 제한된 기기에서는 기존 경로를 계속 읽어 호환성을 유지합니다.
+
 ## Updates
 
 홈 탭의 업데이트 영역은 GitHub Releases API를 통해 최신 정식 릴리즈를 확인합니다.
@@ -95,9 +97,9 @@ YTET는 사용자가 보유하지 않은 음악 취향을 추측해 “밤에 �
 - 태그가 `v1.2.3` 같은 정식 버전 형식
 - 태그나 릴리즈명에 `nightly`, `alpha`, `beta`, `rc`, `dev`, `preview`가 없음
 - 현재 앱의 `versionName`보다 높은 버전
-- 다운로드 가능한 YTET APK asset이 있음
+- 다운로드 가능한 RabbYT APK asset이 있음
 
-업데이트 APK는 Android `DownloadManager`로 내려받고, 다운로드가 끝나면 Android 패키지 설치 화면을 엽니다. Android 정책상 앱이 사용자 승인 없이 조용히 업데이트를 설치하지는 않습니다.
+업데이트 APK는 앱의 업데이트 다운로드 서비스가 받아 앱 전용 `updates` 폴더에 저장하고, 다운로드가 끝나면 Android 패키지 설치 화면을 엽니다. Android 정책상 앱이 사용자 승인 없이 조용히 업데이트를 설치하지는 않습니다.
 
 업데이트 설치가 성공하려면 기존 앱과 새 APK가 같은 signing key로 서명되어 있어야 합니다. GitHub Actions 릴리즈 빌드는 `v1.2.3` 태그를 `versionName=1.2.3-android`, 증가하는 `versionCode`로 반영하고, 다음 secrets로 signed release APK를 만듭니다.
 
@@ -229,8 +231,8 @@ flowchart TD
 
 Every release build uploads:
 
-- `YTET-Android-버전.apk`
-- `YTET-Android-버전-android.zip`
+- `RabbYT-Android-버전.apk`
+- `RabbYT-Android-버전-android.zip`
 
 ## Source Environment
 
@@ -274,7 +276,7 @@ YouTube JS challenge 처리를 위한 `yt-dlp-ejs` script package는 포함되�
 
 - 권한이 있는 콘텐츠에만 사용하세요.
 - YouTube 서비스 약관과 지역 법규를 확인해야 합니다.
-- YTET는 YouTube 또는 Google과 관련이 없습니다.
+- RabbYT는 YouTube 또는 Google과 관련이 없습니다.
 - 영상 제공 품질과 자막 여부는 YouTube와 업로더 설정에 따라 달라집니다.
 - MP3 변환은 Android 경로에 아직 포팅하지 않았습니다.
 - 내장 Python, `yt-dlp`, `mutagen`, `FFmpegKit` 등 함께 배포되는 런타임의 라이선스와 고지 의무를 확인해야 합니다.

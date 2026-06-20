@@ -16,7 +16,7 @@ AUDIO_EXTENSIONS = {".m4a", ".aac", ".flac", ".mp3", ".opus", ".ogg", ".wav", ".
 DEFAULT_ANDROID_SDK = 36
 EXTRACTION_REPORT_NAME = "ytet-extraction-report.json"
 MUSICBRAINZ_API_ROOT = "https://musicbrainz.org/ws/2"
-MUSICBRAINZ_USER_AGENT = "YTET-Android/0.1 (https://github.com/hojin/youtube-audio-extractor-android)"
+MUSICBRAINZ_USER_AGENT = "RabbYT-Android/0.1 (https://github.com/hojin/youtube-audio-extractor-android)"
 MUSICBRAINZ_MIN_INTERVAL = 1.05
 
 
@@ -906,16 +906,16 @@ def final_outtmpl(info):
 
 def final_stem(info):
     if not isinstance(info, dict):
-        return "YTET"
+        return "RabbYT"
     left = first_text(info.get("uploader"), info.get("channel"), info.get("artist"))
-    title = first_text(info.get("title"), info.get("track"), info.get("id"), "YTET")
+    title = first_text(info.get("title"), info.get("track"), info.get("id"), "RabbYT")
     return sanitize_filename(f"{left} - {title}" if left and left != title else title)
 
 
 def sanitize_filename(name):
-    text = re.sub(r'[\\/:*?"<>|\r\n]+', " ", str(name or "YTET")).strip()
+    text = re.sub(r'[\\/:*?"<>|\r\n]+', " ", str(name or "RabbYT")).strip()
     text = re.sub(r"\s+", " ", text)
-    return text[:160].rstrip(" .") or "YTET"
+    return text[:160].rstrip(" .") or "RabbYT"
 
 
 def first_text(*values):
