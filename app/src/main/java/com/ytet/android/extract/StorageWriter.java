@@ -344,17 +344,37 @@ public final class StorageWriter {
         if (children == null || children.length == 0) {
             return;
         }
-        if (!targetDirectory.exists() && !targetDirectory.mkdirs()) {
-            throw new IOException("Target directory cannot be created.");
-        }
         for (File child : children) {
             File target = new File(targetDirectory, child.getName());
             if (child.isDirectory()) {
-                moveDirectoryContents(child, target, scanPaths);
+                boolean targetExisted = target.exists();
+                try {
+                    moveDirectoryContents(child, target, scanPaths);
+                } catch (IOException exception) {
+                    if (!targetExisted) {
+                        deleteEmptyDirectories(target);
+                    }
+                    throw exception;
+                }
                 deleteEmptyDirectories(child);
+                if (!targetExisted) {
+                    deleteEmptyDirectories(target);
+                }
             } else if (child.isFile()) {
+                File parent = target.getParentFile();
+                boolean parentExisted = parent == null || parent.exists();
+                if (parent != null && !parentExisted && !parent.mkdirs()) {
+                    throw new IOException("Target directory cannot be created.");
+                }
                 File uniqueTarget = uniqueTargetFile(target);
-                Files.move(child.toPath(), uniqueTarget.toPath());
+                try {
+                    Files.move(child.toPath(), uniqueTarget.toPath());
+                } catch (IOException exception) {
+                    if (parent != null && !parentExisted) {
+                        deleteEmptyDirectories(parent);
+                    }
+                    throw exception;
+                }
                 scanPaths.add(uniqueTarget.getAbsolutePath());
             }
         }
