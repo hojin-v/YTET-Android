@@ -9595,7 +9595,6 @@ public final class MainActivity extends Activity {
     private final class PullRefreshIndicatorView extends View {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final RectF arcBounds = new RectF();
-        private final Path arrowHead = new Path();
         private float pullProgress;
         private float spinDegrees;
         private boolean refreshing;
@@ -9667,43 +9666,6 @@ public final class MainActivity extends Activity {
             paint.setStrokeJoin(Paint.Join.ROUND);
             paint.setColor(Color.BLACK);
             canvas.drawArc(arcBounds, start, sweep, false, paint);
-
-            if (!refreshing) {
-                drawRefreshArrowHead(canvas, cx, cy, iconRadius, start + sweep, strokeWidth, progress);
-            }
-        }
-
-        private void drawRefreshArrowHead(
-                Canvas canvas,
-                float cx,
-                float cy,
-                float radius,
-                float angleDegrees,
-                float strokeWidth,
-                float progress
-        ) {
-            double radians = Math.toRadians(angleDegrees);
-            float tipRadius = radius + strokeWidth * 0.08f;
-            float tipX = cx + (float) Math.cos(radians) * tipRadius;
-            float tipY = cy + (float) Math.sin(radians) * tipRadius;
-            float tangentX = -(float) Math.sin(radians);
-            float tangentY = (float) Math.cos(radians);
-            float normalX = (float) Math.cos(radians);
-            float normalY = (float) Math.sin(radians);
-            float size = strokeWidth * (1.18f + progress * 0.22f);
-            float baseX = tipX - tangentX * size * 0.86f;
-            float baseY = tipY - tangentY * size * 0.86f;
-
-            arrowHead.reset();
-            arrowHead.moveTo(tipX, tipY);
-            arrowHead.lineTo(baseX + normalX * size * 0.52f, baseY + normalY * size * 0.52f);
-            arrowHead.lineTo(baseX - normalX * size * 0.52f, baseY - normalY * size * 0.52f);
-            arrowHead.close();
-
-            paint.setStyle(Paint.Style.FILL);
-            paint.setStrokeJoin(Paint.Join.ROUND);
-            paint.setColor(Color.BLACK);
-            canvas.drawPath(arrowHead, paint);
         }
     }
 
