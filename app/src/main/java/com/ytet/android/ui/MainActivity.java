@@ -1285,10 +1285,7 @@ public final class MainActivity extends Activity {
         }
 
         if (streamLoading && streamSections.isEmpty()) {
-            LinearLayout loading = panel();
-            loading.addView(label("추천을 불러오는 중"), marginBottom(8));
-            loading.addView(muted("네트워크 상태에 따라 잠시 걸릴 수 있습니다.", 13), matchWrap());
-            root.addView(loading, marginBottom(18));
+            root.addView(streamLoadingView(), matchWrap());
             return root;
         }
         if (!streamLoadStatus.trim().isEmpty()) {
@@ -1305,6 +1302,30 @@ public final class MainActivity extends Activity {
             root.addView(streamSectionView(section), marginBottom(18));
         }
         return root;
+    }
+
+    private View streamLoadingView() {
+        LinearLayout loading = new LinearLayout(this);
+        loading.setOrientation(LinearLayout.VERTICAL);
+        loading.setGravity(Gravity.CENTER);
+        loading.setPadding(0, dp(28), 0, dp(28));
+
+        int height = Math.max(dp(280), getResources().getDisplayMetrics().heightPixels - dp(330));
+        StreamLoadingSpinnerView spinner = new StreamLoadingSpinnerView(this);
+        LinearLayout.LayoutParams spinnerParams = new LinearLayout.LayoutParams(dp(44), dp(44));
+        spinnerParams.setMargins(0, 0, 0, dp(18));
+        loading.addView(spinner, spinnerParams);
+
+        TextView title = label("추천을 불러오는 중");
+        title.setGravity(Gravity.CENTER);
+        loading.addView(title, marginBottom(8));
+
+        TextView hint = muted("네트워크 상태에 따라 잠시 걸릴 수 있습니다.", 13);
+        hint.setGravity(Gravity.CENTER);
+        loading.addView(hint, matchWrap());
+
+        loading.setMinimumHeight(height);
+        return loading;
     }
 
     private View streamSectionView(OnlineStreamSection section) {
@@ -9493,6 +9514,84 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private final class StreamLoadingSpinnerView extends View {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final RectF arcBounds = new RectF();
+        private ObjectAnimator spinAnimator;
+        private float spinDegrees;
+
+        StreamLoadingSpinnerView(Context context) {
+            super(context);
+            setWillNotDraw(false);
+        }
+
+        public void setSpinDegrees(float degrees) {
+            spinDegrees = degrees;
+            invalidate();
+        }
+
+        public float getSpinDegrees() {
+            return spinDegrees;
+        }
+
+        @Override
+        protected void onAttachedToWindow() {
+            super.onAttachedToWindow();
+            startSpin();
+        }
+
+        @Override
+        protected void onDetachedFromWindow() {
+            stopSpin();
+            super.onDetachedFromWindow();
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            float width = getWidth();
+            float height = getHeight();
+            if (width <= 0f || height <= 0f) {
+                return;
+            }
+
+            float cx = width / 2f;
+            float cy = height / 2f;
+            float radius = Math.min(width, height) * 0.34f;
+            float strokeWidth = Math.max(dp(3), Math.min(width, height) * 0.09f);
+            arcBounds.set(cx - radius, cy - radius, cx + radius, cy + radius);
+
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(strokeWidth);
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setColor(color(R.color.ytet_muted));
+            paint.setAlpha(92);
+            canvas.drawCircle(cx, cy, radius, paint);
+
+            paint.setColor(color(R.color.ytet_text));
+            paint.setAlpha(255);
+            canvas.drawArc(arcBounds, spinDegrees - 90f, 270f, false, paint);
+        }
+
+        private void startSpin() {
+            if (spinAnimator != null && spinAnimator.isStarted()) {
+                return;
+            }
+            spinAnimator = ObjectAnimator.ofFloat(this, "spinDegrees", spinDegrees, spinDegrees + 360f);
+            spinAnimator.setDuration(820L);
+            spinAnimator.setRepeatCount(ObjectAnimator.INFINITE);
+            spinAnimator.setInterpolator(new LinearInterpolator());
+            spinAnimator.start();
+        }
+
+        private void stopSpin() {
+            if (spinAnimator != null) {
+                spinAnimator.cancel();
+                spinAnimator = null;
+            }
+        }
+    }
+
     private final class PullRefreshIndicatorView extends View {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final RectF arcBounds = new RectF();
@@ -9569,7 +9668,9 @@ public final class MainActivity extends Activity {
             paint.setColor(Color.BLACK);
             canvas.drawArc(arcBounds, start, sweep, false, paint);
 
-            drawRefreshArrowHead(canvas, cx, cy, iconRadius, start + sweep, strokeWidth, progress);
+            if (!refreshing) {
+                drawRefreshArrowHead(canvas, cx, cy, iconRadius, start + sweep, strokeWidth, progress);
+            }
         }
 
         private void drawRefreshArrowHead(
@@ -9582,25 +9683,24 @@ public final class MainActivity extends Activity {
                 float progress
         ) {
             double radians = Math.toRadians(angleDegrees);
-            float tipX = cx + (float) Math.cos(radians) * radius;
-            float tipY = cy + (float) Math.sin(radians) * radius;
+            float tipRadius = radius + strokeWidth * 0.08f;
+            float tipX = cx + (float) Math.cos(radians) * tipRadius;
+            float tipY = cy + (float) Math.sin(radians) * tipRadius;
             float tangentX = -(float) Math.sin(radians);
             float tangentY = (float) Math.cos(radians);
             float normalX = (float) Math.cos(radians);
             float normalY = (float) Math.sin(radians);
-            float size = strokeWidth * (refreshing ? 1.55f : 1.2f + progress * 0.35f);
-            float baseX = tipX - tangentX * size;
-            float baseY = tipY - tangentY * size;
+            float size = strokeWidth * (1.18f + progress * 0.22f);
+            float baseX = tipX - tangentX * size * 0.86f;
+            float baseY = tipY - tangentY * size * 0.86f;
 
             arrowHead.reset();
             arrowHead.moveTo(tipX, tipY);
-            arrowHead.lineTo(baseX + normalX * size * 0.64f, baseY + normalY * size * 0.64f);
-            arrowHead.moveTo(tipX, tipY);
-            arrowHead.lineTo(baseX - normalX * size * 0.64f, baseY - normalY * size * 0.64f);
+            arrowHead.lineTo(baseX + normalX * size * 0.52f, baseY + normalY * size * 0.52f);
+            arrowHead.lineTo(baseX - normalX * size * 0.52f, baseY - normalY * size * 0.52f);
+            arrowHead.close();
 
-            paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeWidth(Math.max(dp(2), strokeWidth * 0.92f));
-            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setStyle(Paint.Style.FILL);
             paint.setStrokeJoin(Paint.Join.ROUND);
             paint.setColor(Color.BLACK);
             canvas.drawPath(arrowHead, paint);
