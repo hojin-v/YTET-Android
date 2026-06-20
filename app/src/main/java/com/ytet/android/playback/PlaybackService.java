@@ -128,6 +128,7 @@ public final class PlaybackService extends Service {
     private final ArrayList<DeviceAudioTrack> originalQueue = new ArrayList<>();
     private final DeviceMusicLibrary musicLibrary = new DeviceMusicLibrary();
     private final ExecutorService queueExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService onlineResolveExecutor = Executors.newFixedThreadPool(2);
     private final ExecutorService artworkExecutor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final AudioManager.OnAudioFocusChangeListener focusChangeListener = this::onAudioFocusChanged;
@@ -429,6 +430,7 @@ public final class PlaybackService extends Service {
     @Override
     public void onDestroy() {
         queueExecutor.shutdownNow();
+        onlineResolveExecutor.shutdownNow();
         artworkExecutor.shutdownNow();
         mainHandler.removeCallbacks(stateTick);
         mainHandler.removeCallbacks(sleepTimerRunnable);
@@ -719,7 +721,7 @@ public final class PlaybackService extends Service {
     }
 
     private void resolveOnlineAndPrepare(DeviceAudioTrack track, int version) {
-        queueExecutor.execute(() -> {
+        onlineResolveExecutor.execute(() -> {
             OnlineStreamResolver.ResolvedStream resolved;
             try {
                 resolved = OnlineStreamResolver.resolve(this, track.contentUri());

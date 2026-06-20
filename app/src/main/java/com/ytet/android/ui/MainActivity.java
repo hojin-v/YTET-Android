@@ -94,6 +94,7 @@ import com.ytet.android.playback.PlaybackStats;
 import com.ytet.android.stream.MusicStation;
 import com.ytet.android.stream.OnlineStreamCatalog;
 import com.ytet.android.stream.OnlineStreamClient;
+import com.ytet.android.stream.OnlineStreamResolver;
 import com.ytet.android.stream.OnlineStreamSection;
 import com.ytet.android.stream.OnlineStreamVideo;
 import com.ytet.android.stream.StationCatalog;
@@ -104,6 +105,7 @@ import com.ytet.android.update.UpdateInfo;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -117,6 +119,7 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ConcurrentHashMap;
 
 import androidx.recyclerview.widget.DefaultItemAnimator;
 import androidx.recyclerview.widget.GridLayoutManager;
@@ -168,8 +171,10 @@ public final class MainActivity extends Activity {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService libraryExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService streamExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService streamResolveExecutor = Executors.newFixedThreadPool(2);
     private final ExecutorService imageExecutor = Executors.newFixedThreadPool(3);
     private final ExecutorService updateExecutor = Executors.newSingleThreadExecutor();
+    private final Set<String> streamResolvePrefetchUrls = Collections.newSetFromMap(new ConcurrentHashMap<>());
     private final DeviceMusicLibrary deviceMusicLibrary = new DeviceMusicLibrary();
     private final UpdateChecker updateChecker = new UpdateChecker(BuildConfig.UPDATE_CHANNEL);
 
@@ -599,6 +604,7 @@ public final class MainActivity extends Activity {
         mainHandler.removeCallbacks(libraryPullFinishRunnable);
         libraryExecutor.shutdownNow();
         streamExecutor.shutdownNow();
+        streamResolveExecutor.shutdownNow();
         imageExecutor.shutdownNow();
         updateExecutor.shutdownNow();
         super.onDestroy();
@@ -1427,6 +1433,7 @@ public final class MainActivity extends Activity {
             root.addView(empty, marginBottom(18));
             return;
         }
+        prefetchOnlineStreamVideos(videos, 8);
         for (int index = 0; index < videos.size(); index++) {
             OnlineStreamVideo video = videos.get(index);
             int sourceIndex = streamVideoIndex(section, video);
@@ -7613,6 +7620,7 @@ public final class MainActivity extends Activity {
                     streamLoadStatus = sections.isEmpty()
                             ? "온라인 추천을 불러오지 못했습니다."
                             : "";
+                    prefetchOnlineStreamSections(sections);
                     if (currentTab == Tab.HOME) {
                         renderCurrentTab();
                     }
@@ -7628,6 +7636,63 @@ public final class MainActivity extends Activity {
                 });
             }
         });
+    }
+
+    private void prefetchOnlineStreamSections(List<OnlineStreamSection> sections) {
+        if (sections == null || sections.isEmpty()) {
+            return;
+        }
+        int scheduled = 0;
+        for (OnlineStreamSection section : sections) {
+            List<OnlineStreamVideo> videos = section == null ? new ArrayList<>() : section.videos();
+            int sectionCount = 0;
+            for (OnlineStreamVideo video : videos) {
+                if (scheduleOnlineStreamPrefetch(video)) {
+                    scheduled++;
+                    sectionCount++;
+                }
+                if (scheduled >= 10 || sectionCount >= 2) {
+                    break;
+                }
+            }
+            if (scheduled >= 10) {
+                return;
+            }
+        }
+    }
+
+    private void prefetchOnlineStreamVideos(List<OnlineStreamVideo> videos, int limit) {
+        if (videos == null || videos.isEmpty() || limit <= 0) {
+            return;
+        }
+        int scheduled = 0;
+        for (OnlineStreamVideo video : videos) {
+            if (scheduleOnlineStreamPrefetch(video)) {
+                scheduled++;
+            }
+            if (scheduled >= limit) {
+                return;
+            }
+        }
+    }
+
+    private boolean scheduleOnlineStreamPrefetch(OnlineStreamVideo video) {
+        if (video == null) {
+            return false;
+        }
+        String url = video.watchUrl() == null ? "" : video.watchUrl().trim();
+        if (url.isEmpty() || !streamResolvePrefetchUrls.add(url)) {
+            return false;
+        }
+        Context appContext = getApplicationContext();
+        streamResolveExecutor.execute(() -> {
+            try {
+                OnlineStreamResolver.resolve(appContext, url);
+            } catch (Exception ignored) {
+                streamResolvePrefetchUrls.remove(url);
+            }
+        });
+        return true;
     }
 
     private OnlineStreamSection updatedFocusedStreamSection(List<OnlineStreamSection> sections) {
