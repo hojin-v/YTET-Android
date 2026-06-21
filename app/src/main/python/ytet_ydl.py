@@ -1,5 +1,6 @@
 import os
 import json
+import random
 import re
 import time
 import unicodedata
@@ -57,6 +58,17 @@ class YtetLogger:
 def stream_channels(channels_json, per_channel=3):
     channels = json.loads(channels_json or "[]")
     per_channel = max(1, min(as_int(per_channel) or 3, 40))
+    harvest_limit = stream_channel_quick_harvest_limit(per_channel)
+    return stream_channel_sections(channels, harvest_limit, stream_channel_display_limit(per_channel), varied=True)
+
+
+def stream_channel_candidates(channels_json, per_channel=400):
+    channels = json.loads(channels_json or "[]")
+    harvest_limit = max(1, min(as_int(per_channel) or 400, 500))
+    return stream_channel_sections(channels, harvest_limit, harvest_limit * 2, varied=False)
+
+
+def stream_channel_sections(channels, harvest_limit, output_limit, varied):
     logger = YtetLogger()
     sections = []
     options = {
@@ -66,7 +78,7 @@ def stream_channels(channels_json, per_channel=3):
         "logger": logger,
         "no_warnings": False,
         "noplaylist": False,
-        "playlistend": 40,
+        "playlistend": harvest_limit,
         "quiet": True,
     }
     with YoutubeDL(options) as ydl:
@@ -88,8 +100,21 @@ def stream_channels(channels_json, per_channel=3):
             if latest_info is None:
                 logger.warning(f"스트림 채널 조회 실패: {channel_url} / {last_error}")
                 continue
+            popular_info = None
+            for candidate_url in stream_channel_candidate_urls(channel_url, popular=True):
+                try:
+                    popular_info = ydl.extract_info(candidate_url, download=False)
+                    break
+                except Exception:
+                    continue
             try:
-                videos = stream_channel_videos(latest_info, channel, per_channel, "latest")
+                latest_videos = stream_channel_videos(latest_info, channel, harvest_limit, "latest")
+                popular_videos = stream_channel_videos(popular_info, channel, harvest_limit, "popular") if popular_info else []
+                videos = merge_stream_channel_videos(latest_videos, popular_videos, harvest_limit)
+                if varied:
+                    videos = varied_stream_channel_videos(videos, output_limit)
+                else:
+                    videos = unique_stream_channel_videos(videos, output_limit)
             except Exception as error:
                 logger.warning(f"스트림 채널 조회 실패: {channel_url} / {error}")
                 continue
@@ -103,6 +128,18 @@ def stream_channels(channels_json, per_channel=3):
                 "videos": videos,
             })
     return json.dumps(sections, ensure_ascii=False)
+
+
+def stream_channel_quick_harvest_limit(per_channel):
+    return max(per_channel, min(max(per_channel * 2, 80), 120))
+
+
+def stream_channel_harvest_limit(per_channel):
+    return max(per_channel, min(max(per_channel * 10, 200), 500))
+
+
+def stream_channel_display_limit(per_channel):
+    return max(1, per_channel)
 
 
 def enrich_stream_videos(videos_json):
@@ -198,6 +235,72 @@ def merge_stream_channel_videos(latest_videos, popular_videos, per_channel):
         remember(copy)
 
     return merged[:per_channel * 2]
+
+
+def unique_stream_channel_videos(videos, limit=None):
+    unique = []
+    seen = set()
+    for item in videos or []:
+        key = stream_video_key(item)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        unique.append(dict(item))
+        if limit and len(unique) >= limit:
+            break
+    return unique
+
+
+def varied_stream_channel_videos(videos, limit, rng=None):
+    unique = unique_stream_channel_videos(videos)
+    if not unique:
+        return []
+
+    rng = rng or random.Random(time.time_ns())
+    limit = max(1, min(as_int(limit) or len(unique), len(unique)))
+    if len(unique) <= limit:
+        selected = list(unique)
+    else:
+        selected = []
+        selected_keys = set()
+
+        def add(item):
+            key = stream_video_key(item)
+            if key and key not in selected_keys:
+                selected_keys.add(key)
+                selected.append(item)
+
+        popular_quota = max(1, limit // 4)
+        latest_quota = max(1, limit // 4)
+        for item in sorted(unique, key=stream_video_popular_sort_key)[:popular_quota]:
+            add(item)
+        for item in sorted(unique, key=stream_video_latest_sort_key)[:latest_quota]:
+            add(item)
+
+        rest = [item for item in unique if stream_video_key(item) not in selected_keys]
+        rng.shuffle(rest)
+        for item in rest:
+            add(item)
+            if len(selected) >= limit:
+                break
+
+    rng.shuffle(selected)
+    return selected
+
+
+def stream_video_popular_sort_key(item):
+    return (
+        -(as_int(item.get("view_count")) or 0),
+        -(as_int(item.get("published")) or 0),
+        as_int(item.get("source_index")) or 0,
+    )
+
+
+def stream_video_latest_sort_key(item):
+    return (
+        -(as_int(item.get("published")) or 0),
+        as_int(item.get("source_index")) or 0,
+    )
 
 
 def enrich_stream_video_metadata(ydl, videos):

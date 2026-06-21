@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import importlib
 import json
+import random
 import sys
 import tempfile
 import types
@@ -355,6 +356,56 @@ class YtetYdlStreamCatalogTest(unittest.TestCase):
         self.assertEqual(1, len(merged))
         self.assertEqual(5000, merged[0]["view_count"])
         self.assertEqual(1, merged[0]["popular_rank"])
+
+    def test_varied_stream_video_selection_keeps_popular_and_non_latest_candidates(self):
+        videos = []
+        for index in range(12):
+            videos.append({
+                "id": f"id-{index}",
+                "url": f"https://www.youtube.com/watch?v=id-{index}",
+                "view_count": 50_000 - index * 1000,
+                "published": 20260620 - index,
+                "source_index": index,
+                "popular_rank": index + 1 if index < 4 else 0,
+            })
+
+        selected = ytet_ydl.varied_stream_channel_videos(videos, 6, random.Random(7))
+        selected_ids = {item["id"] for item in selected}
+
+        self.assertEqual(6, len(selected))
+        self.assertIn("id-0", selected_ids)
+        self.assertTrue(any(int(item["id"].split("-")[1]) >= 6 for item in selected))
+
+    def test_zero_view_popular_order_falls_back_to_latest_order(self):
+        videos = [
+            {
+                "id": "old-popular",
+                "url": "https://www.youtube.com/watch?v=old-popular",
+                "view_count": 0,
+                "published": 20250101,
+                "source_index": 8,
+                "popular_rank": 1,
+            },
+            {
+                "id": "new-latest",
+                "url": "https://www.youtube.com/watch?v=new-latest",
+                "view_count": 0,
+                "published": 20260620,
+                "source_index": 0,
+                "popular_rank": 9,
+            },
+        ]
+
+        popular_order = [item["id"] for item in sorted(videos, key=ytet_ydl.stream_video_popular_sort_key)]
+        latest_order = [item["id"] for item in sorted(videos, key=ytet_ydl.stream_video_latest_sort_key)]
+
+        self.assertEqual(["new-latest", "old-popular"], popular_order)
+        self.assertEqual(["new-latest", "old-popular"], latest_order)
+
+    def test_stream_channel_limits_keep_display_small_and_expand_harvest(self):
+        self.assertEqual(80, ytet_ydl.stream_channel_quick_harvest_limit(40))
+        self.assertEqual(400, ytet_ydl.stream_channel_harvest_limit(40))
+        self.assertEqual(40, ytet_ydl.stream_channel_display_limit(40))
 
     def test_enrich_stream_video_metadata_fills_flat_playlist_fields(self):
         class DetailYdl:

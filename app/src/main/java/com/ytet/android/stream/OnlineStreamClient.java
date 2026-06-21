@@ -33,6 +33,30 @@ public final class OnlineStreamClient {
 
         PyObject module = Python.getInstance().getModule("ytet_ydl");
         String json = module.callAttr("stream_channels", request.toString(), Math.max(1, videosPerChannel)).toString();
+        return parseSections(json);
+    }
+
+    public static List<OnlineStreamSection> loadCandidateSections(
+            Context context,
+            List<OnlineStreamChannel> channels,
+            int candidateLimit
+    ) throws Exception {
+        ensurePython(context);
+        JSONArray request = new JSONArray();
+        for (OnlineStreamChannel channel : channels == null ? new ArrayList<OnlineStreamChannel>() : channels) {
+            JSONObject item = new JSONObject();
+            item.put("id", channel.id());
+            item.put("title", channel.title());
+            item.put("url", channel.url());
+            request.put(item);
+        }
+
+        PyObject module = Python.getInstance().getModule("ytet_ydl");
+        String json = module.callAttr("stream_channel_candidates", request.toString(), Math.max(1, candidateLimit)).toString();
+        return parseSections(json);
+    }
+
+    private static List<OnlineStreamSection> parseSections(String json) throws Exception {
         JSONArray sections = new JSONArray(json);
         List<OnlineStreamSection> result = new ArrayList<>();
         for (int sectionIndex = 0; sectionIndex < sections.length(); sectionIndex++) {

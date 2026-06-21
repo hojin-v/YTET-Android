@@ -1,5 +1,7 @@
 package com.ytet.android.ui;
 
+import android.annotation.SuppressLint;
+import android.annotation.TargetApi;
 import android.animation.ObjectAnimator;
 import android.Manifest;
 import android.app.Activity;
@@ -92,11 +94,14 @@ import com.ytet.android.library.UserPlaylists;
 import com.ytet.android.playback.PlaybackService;
 import com.ytet.android.playback.PlaybackStats;
 import com.ytet.android.stream.MusicStation;
+import com.ytet.android.stream.OnlineStreamCache;
+import com.ytet.android.stream.OnlineStreamChannel;
 import com.ytet.android.stream.OnlineStreamCatalog;
 import com.ytet.android.stream.OnlineStreamClient;
 import com.ytet.android.stream.OnlineStreamResolver;
 import com.ytet.android.stream.OnlineStreamSection;
 import com.ytet.android.stream.OnlineStreamVideo;
+import com.ytet.android.stream.OnlineStreamVideoSort;
 import com.ytet.android.stream.StationCatalog;
 import com.ytet.android.update.UpdateChecker;
 import com.ytet.android.update.UpdateApkProvider;
@@ -161,6 +166,8 @@ public final class MainActivity extends Activity {
     private static final float NOW_PLAYING_CURRENT_FADE_RANGE = 0.42f;
     private static final float NOW_PLAYING_PREVIEW_FADE_START = 0.16f;
     private static final float NOW_PLAYING_PREVIEW_FADE_RANGE = 0.52f;
+    private static final int STREAM_DISPLAY_VIDEO_COUNT = 40;
+    private static final int STREAM_BACKGROUND_CANDIDATE_COUNT = 400;
     private static final String[] SUPPORTED_VIDEO_URL_MARKERS = {
             "youtube.com/",
             "youtu.be/",
@@ -318,6 +325,7 @@ public final class MainActivity extends Activity {
     private OnlineStreamSection focusedStreamSection;
     private StreamVideoSort streamVideoSort = StreamVideoSort.POPULAR;
     private final Set<String> streamMetadataLoadingChannelIds = new HashSet<>();
+    private final Set<String> streamMetadataLoadedChannelIds = new HashSet<>();
     private boolean libraryLoaded;
     private boolean libraryLoading;
     private String libraryStatus = "기기 음악 권한을 허용하면 앨범과 아티스트를 정리합니다.";
@@ -535,31 +543,19 @@ public final class MainActivity extends Activity {
         super.onStart();
         if (!receiverRegistered) {
             IntentFilter filter = new IntentFilter(ExtractionService.ACTION_PROGRESS);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                registerReceiver(progressReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
-            } else {
-                registerReceiver(progressReceiver, filter);
-            }
+            registerReceiverCompat(progressReceiver, filter);
             receiverRegistered = true;
         }
         if (!playbackReceiverRegistered) {
             IntentFilter filter = new IntentFilter(PlaybackService.ACTION_STATE);
             filter.addAction(PlaybackService.ACTION_SLEEP_TIMER_FINISHED);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                registerReceiver(playbackReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
-            } else {
-                registerReceiver(playbackReceiver, filter);
-            }
+            registerReceiverCompat(playbackReceiver, filter);
             playbackReceiverRegistered = true;
             startService(PlaybackService.commandIntent(this, PlaybackService.ACTION_REQUEST_STATE));
         }
         if (!updateReceiverRegistered) {
             IntentFilter filter = new IntentFilter(UpdateDownloadService.ACTION_PROGRESS);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                registerReceiver(updateReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
-            } else {
-                registerReceiver(updateReceiver, filter);
-            }
+            registerReceiverCompat(updateReceiver, filter);
             updateReceiverRegistered = true;
         }
         refreshPendingUpdateDownloadState();
@@ -612,6 +608,7 @@ public final class MainActivity extends Activity {
     }
 
     @Override
+    @SuppressLint("GestureBackNavigation")
     public void onBackPressed() {
         if (closeOpenDialogFromBack()) {
             return;
@@ -623,6 +620,15 @@ public final class MainActivity extends Activity {
             return;
         }
         super.onBackPressed();
+    }
+
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
+    private void registerReceiverCompat(BroadcastReceiver receiver, IntentFilter filter) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(receiver, filter);
+        }
     }
 
     private void registerBackNavigationCallback() {
@@ -1447,6 +1453,7 @@ public final class MainActivity extends Activity {
     private void ensureStreamSectionMetadata(OnlineStreamSection section) {
         if (section == null
                 || streamSectionHasMetadata(section)
+                || streamMetadataLoadedChannelIds.contains(section.channelId())
                 || streamMetadataLoadingChannelIds.contains(section.channelId())) {
             return;
         }
@@ -1459,6 +1466,7 @@ public final class MainActivity extends Activity {
             } catch (Exception exception) {
                 runOnUiThread(() -> {
                     streamMetadataLoadingChannelIds.remove(section.channelId());
+                    streamMetadataLoadedChannelIds.add(section.channelId());
                     if (focusedStreamSection != null
                             && TextUtils.equals(focusedStreamSection.channelId(), section.channelId())) {
                         renderCurrentTab();
@@ -1470,6 +1478,7 @@ public final class MainActivity extends Activity {
 
     private void finishStreamSectionMetadataLoad(OnlineStreamSection section, List<OnlineStreamVideo> enriched) {
         streamMetadataLoadingChannelIds.remove(section.channelId());
+        streamMetadataLoadedChannelIds.add(section.channelId());
         if (enriched == null || enriched.isEmpty()) {
             return;
         }
@@ -1490,15 +1499,30 @@ public final class MainActivity extends Activity {
             focusedStreamSection = updated;
             renderCurrentTab();
         }
+        cacheStreamSections(Collections.singletonList(updated));
+    }
+
+    private void cacheStreamSections(List<OnlineStreamSection> sections) {
+        if (sections == null || sections.isEmpty()) {
+            return;
+        }
+        Context appContext = getApplicationContext();
+        streamExecutor.execute(() -> {
+            try {
+                OnlineStreamCache.mergeSections(appContext, sections);
+            } catch (Exception exception) {
+                // Visible metadata is already updated; cache persistence must not undo the UI state.
+            }
+        });
     }
 
     private boolean streamSectionHasMetadata(OnlineStreamSection section) {
         for (OnlineStreamVideo video : section.videos()) {
-            if (video.viewCount() > 0L || video.publishedRank() > 0L) {
-                return true;
+            if (video.viewCount() <= 0L || video.publishedRank() <= 0L) {
+                return false;
             }
         }
-        return false;
+        return true;
     }
 
     private View streamSortDropdownButton() {
@@ -1534,50 +1558,12 @@ public final class MainActivity extends Activity {
 
     private int compareStreamVideos(OnlineStreamVideo first, OnlineStreamVideo second) {
         if (streamVideoSort == StreamVideoSort.POPULAR) {
-            int viewCompare = Long.compare(second.viewCount(), first.viewCount());
-            if (viewCompare != 0) {
-                return viewCompare;
-            }
-            int popularCompare = compareStreamVideosByPopularRank(first, second);
-            if (popularCompare != 0) {
-                return popularCompare;
-            }
-            return compareStreamVideosByLatest(first, second);
+            return OnlineStreamVideoSort.comparePopular(first, second);
         }
         if (streamVideoSort == StreamVideoSort.OLDEST) {
-            return compareStreamVideosByOldest(first, second);
+            return OnlineStreamVideoSort.compareOldest(first, second);
         }
-        return compareStreamVideosByLatest(first, second);
-    }
-
-    private int compareStreamVideosByPopularRank(OnlineStreamVideo first, OnlineStreamVideo second) {
-        int firstRank = first.popularRank() <= 0 ? Integer.MAX_VALUE : first.popularRank();
-        int secondRank = second.popularRank() <= 0 ? Integer.MAX_VALUE : second.popularRank();
-        return Integer.compare(firstRank, secondRank);
-    }
-
-    private int compareStreamVideosByLatest(OnlineStreamVideo first, OnlineStreamVideo second) {
-        if (first.publishedRank() > 0L || second.publishedRank() > 0L) {
-            int publishedCompare = Long.compare(second.publishedRank(), first.publishedRank());
-            if (publishedCompare != 0) {
-                return publishedCompare;
-            }
-        }
-        return Integer.compare(first.sourceIndex(), second.sourceIndex());
-    }
-
-    private int compareStreamVideosByOldest(OnlineStreamVideo first, OnlineStreamVideo second) {
-        if (first.publishedRank() > 0L && second.publishedRank() > 0L) {
-            int publishedCompare = Long.compare(first.publishedRank(), second.publishedRank());
-            if (publishedCompare != 0) {
-                return publishedCompare;
-            }
-        } else if (first.publishedRank() > 0L) {
-            return -1;
-        } else if (second.publishedRank() > 0L) {
-            return 1;
-        }
-        return Integer.compare(second.sourceIndex(), first.sourceIndex());
+        return OnlineStreamVideoSort.compareLatest(first, second);
     }
 
     private int streamVideoIndex(OnlineStreamSection section, OnlineStreamVideo target) {
@@ -7037,15 +7023,11 @@ public final class MainActivity extends Activity {
             queueDialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
             queueDialog.setCancelable(false);
             queueDialog.setCanceledOnTouchOutside(false);
-            queueDialog.setOnKeyListener((dialog, keyCode, event) -> {
-                if (keyCode != KeyEvent.KEYCODE_BACK) {
-                    return false;
-                }
-                if (event.getAction() == KeyEvent.ACTION_UP) {
-                    collapseOrDismissQueueDialog();
-                }
-                return true;
-            });
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerQueueDialogBackCallback(queueDialog);
+            } else {
+                registerLegacyQueueDialogBackKeyListener(queueDialog);
+            }
             queueDialog.setOnDismissListener(dialog -> {
                 queueSheetLayout = null;
                 queueRecyclerAdapter = null;
@@ -7073,6 +7055,27 @@ public final class MainActivity extends Activity {
         if (queueSheetLayout != null) {
             queueSheetLayout.showCollapsed();
         }
+    }
+
+    @TargetApi(Build.VERSION_CODES.TIRAMISU)
+    private void registerQueueDialogBackCallback(Dialog dialog) {
+        dialog.getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                OnBackInvokedDispatcher.PRIORITY_DEFAULT,
+                this::collapseOrDismissQueueDialog
+        );
+    }
+
+    @SuppressLint("GestureBackNavigation")
+    private void registerLegacyQueueDialogBackKeyListener(Dialog dialog) {
+        dialog.setOnKeyListener((target, keyCode, event) -> {
+            if (keyCode != KeyEvent.KEYCODE_BACK) {
+                return false;
+            }
+            if (event.getAction() == KeyEvent.ACTION_UP) {
+                collapseOrDismissQueueDialog();
+            }
+            return true;
+        });
     }
 
     private void dismissQueueDialogAnimated() {
@@ -7609,37 +7612,132 @@ public final class MainActivity extends Activity {
         if (renderImmediately && currentTab == Tab.HOME) {
             renderCurrentTab();
         }
+        Context appContext = getApplicationContext();
+        List<OnlineStreamChannel> channels = OnlineStreamCatalog.defaultChannels();
         streamExecutor.execute(() -> {
+            boolean displayed = false;
+            Exception lastError = null;
+
             try {
-                List<OnlineStreamSection> sections = OnlineStreamClient.loadSections(
-                        this,
-                        OnlineStreamCatalog.defaultChannels(),
-                        40
+                List<OnlineStreamSection> cached = OnlineStreamCache.loadDisplaySections(
+                        appContext,
+                        channels,
+                        STREAM_DISPLAY_VIDEO_COUNT
                 );
-                runOnUiThread(() -> {
-                    streamSections = sections;
-                    focusedStreamSection = updatedFocusedStreamSection(sections);
-                    streamLoaded = true;
-                    streamLoading = false;
-                    streamLoadStatus = sections.isEmpty()
-                            ? "온라인 추천을 불러오지 못했습니다."
-                            : "";
-                    prefetchOnlineStreamSections(sections);
-                    if (currentTab == Tab.HOME) {
-                        renderCurrentTab();
-                    }
-                });
+                if (!cached.isEmpty()) {
+                    displayed = true;
+                    publishStreamSections(cached, true, "");
+                }
             } catch (Exception exception) {
-                runOnUiThread(() -> {
-                    streamLoaded = true;
-                    streamLoading = false;
-                    streamLoadStatus = "온라인 추천을 불러오지 못했습니다: " + safeMessage(exception);
-                    if (currentTab == Tab.HOME) {
-                        renderCurrentTab();
+                lastError = exception;
+            }
+
+            if (!displayed) {
+                try {
+                    List<OnlineStreamSection> quick = OnlineStreamClient.loadSections(
+                            appContext,
+                            channels,
+                            STREAM_DISPLAY_VIDEO_COUNT
+                    );
+                    try {
+                        OnlineStreamCache.mergeSections(appContext, quick);
+                    } catch (Exception exception) {
+                        lastError = exception;
                     }
-                });
+                    List<OnlineStreamSection> quickDisplay = new ArrayList<>();
+                    try {
+                        quickDisplay = OnlineStreamCache.loadDisplaySections(
+                                appContext,
+                                channels,
+                                STREAM_DISPLAY_VIDEO_COUNT
+                        );
+                    } catch (Exception exception) {
+                        lastError = exception;
+                    }
+                    if (quickDisplay.isEmpty()) {
+                        quickDisplay = OnlineStreamCache.selectDisplaySections(quick, STREAM_DISPLAY_VIDEO_COUNT);
+                    }
+                    if (quickDisplay.isEmpty()) {
+                        quickDisplay = quick;
+                    }
+                    if (!quickDisplay.isEmpty()) {
+                        displayed = true;
+                        publishStreamSections(quickDisplay, true, "");
+                    }
+                } catch (Exception exception) {
+                    lastError = exception;
+                }
+            }
+
+            try {
+                List<OnlineStreamSection> candidates = OnlineStreamClient.loadCandidateSections(
+                        appContext,
+                        channels,
+                        STREAM_BACKGROUND_CANDIDATE_COUNT
+                );
+                try {
+                    OnlineStreamCache.mergeSections(appContext, candidates);
+                } catch (Exception exception) {
+                    lastError = exception;
+                }
+                if (!displayed) {
+                    List<OnlineStreamSection> backgroundDisplay = new ArrayList<>();
+                    try {
+                        backgroundDisplay = OnlineStreamCache.loadDisplaySections(
+                                appContext,
+                                channels,
+                                STREAM_DISPLAY_VIDEO_COUNT
+                        );
+                    } catch (Exception exception) {
+                        lastError = exception;
+                    }
+                    if (backgroundDisplay.isEmpty()) {
+                        backgroundDisplay = OnlineStreamCache.selectDisplaySections(candidates, STREAM_DISPLAY_VIDEO_COUNT);
+                    }
+                    if (!backgroundDisplay.isEmpty()) {
+                        displayed = true;
+                        publishStreamSections(backgroundDisplay, true, "");
+                    }
+                }
+            } catch (Exception exception) {
+                lastError = exception;
+            }
+
+            boolean finalDisplayed = displayed;
+            Exception finalError = lastError;
+            runOnUiThread(() -> finishStreamRefresh(finalDisplayed, finalError));
+        });
+    }
+
+    private void publishStreamSections(List<OnlineStreamSection> sections, boolean loading, String status) {
+        runOnUiThread(() -> {
+            streamSections = sections == null ? new ArrayList<>() : sections;
+            focusedStreamSection = updatedFocusedStreamSection(streamSections);
+            streamMetadataLoadingChannelIds.clear();
+            streamMetadataLoadedChannelIds.clear();
+            streamLoaded = true;
+            streamLoading = loading;
+            streamLoadStatus = status == null ? "" : status;
+            prefetchOnlineStreamSections(streamSections);
+            if (currentTab == Tab.HOME) {
+                renderCurrentTab();
             }
         });
+    }
+
+    private void finishStreamRefresh(boolean displayed, Exception error) {
+        streamLoaded = true;
+        streamLoading = false;
+        if (streamSections.isEmpty() && !displayed) {
+            streamLoadStatus = error == null
+                    ? "온라인 추천을 불러오지 못했습니다."
+                    : "온라인 추천을 불러오지 못했습니다: " + safeMessage(error);
+        } else {
+            streamLoadStatus = "";
+        }
+        if (currentTab == Tab.HOME) {
+            renderCurrentTab();
+        }
     }
 
     private void prefetchOnlineStreamSections(List<OnlineStreamSection> sections) {
@@ -7655,11 +7753,11 @@ public final class MainActivity extends Activity {
                     scheduled++;
                     sectionCount++;
                 }
-                if (scheduled >= 10 || sectionCount >= 2) {
+                if (scheduled >= 12 || sectionCount >= 3) {
                     break;
                 }
             }
-            if (scheduled >= 10) {
+            if (scheduled >= 12) {
                 return;
             }
         }
@@ -7938,6 +8036,7 @@ public final class MainActivity extends Activity {
         }
     }
 
+    @TargetApi(Build.VERSION_CODES.Q)
     private void requestRecoverableDelete(RecoverableSecurityException exception) {
         try {
             startIntentSenderForResult(
@@ -7959,13 +8058,7 @@ public final class MainActivity extends Activity {
         }
 
         Uri uri = data.getData();
-        int flags = data.getFlags()
-                & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-        try {
-            getContentResolver().takePersistableUriPermission(uri, flags);
-        } catch (SecurityException ignored) {
-            // Some providers grant temporary access only; extraction can still use it in this session.
-        }
+        persistOutputTreePermission(uri, data.getFlags());
         String selectedTreeUri = uri.toString();
         if (DefaultMediaPaths.isDefaultTreeUriFor(selectedMediaType(), selectedTreeUri)) {
             outputTreeUri = null;
@@ -7976,6 +8069,25 @@ public final class MainActivity extends Activity {
             getPreferences().edit().putString(PREF_OUTPUT_TREE, outputTreeUri).apply();
         }
         updateFolderLabel();
+    }
+
+    private void persistOutputTreePermission(Uri uri, int intentFlags) {
+        boolean grantRead = (intentFlags & Intent.FLAG_GRANT_READ_URI_PERMISSION) != 0;
+        boolean grantWrite = (intentFlags & Intent.FLAG_GRANT_WRITE_URI_PERMISSION) != 0;
+        try {
+            if (grantRead && grantWrite) {
+                getContentResolver().takePersistableUriPermission(
+                        uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                );
+            } else if (grantRead) {
+                getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } else if (grantWrite) {
+                getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            }
+        } catch (SecurityException ignored) {
+            // Some providers grant temporary access only; extraction can still use it in this session.
+        }
     }
 
     private void resetOutputFolder() {
