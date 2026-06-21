@@ -168,6 +168,10 @@ public final class MainActivity extends Activity {
     private static final float NOW_PLAYING_PREVIEW_FADE_RANGE = 0.52f;
     private static final int STREAM_DISPLAY_VIDEO_COUNT = 40;
     private static final int STREAM_BACKGROUND_CANDIDATE_COUNT = 400;
+    private static final int STREAM_SECTION_PREFETCH_TOTAL = 24;
+    private static final int STREAM_SECTION_PREFETCH_PER_CHANNEL = 4;
+    private static final int STREAM_DETAIL_PREFETCH_COUNT = 20;
+    private static final int STREAM_PLAYBACK_PREFETCH_RADIUS = 3;
     private static final String[] SUPPORTED_VIDEO_URL_MARKERS = {
             "youtube.com/",
             "youtu.be/",
@@ -463,7 +467,7 @@ public final class MainActivity extends Activity {
             boolean keepPreviewDuringQueueLoad = !incomingHasQueue
                     && incomingPreparing
                     && activeStation != null
-                    && playbackTrackId >= 0L;
+                    && playbackTrackId != -1L;
             playbackHasQueue = incomingHasQueue || keepPreviewDuringQueueLoad;
             playbackPlaying = intent.getBooleanExtra(PlaybackService.EXTRA_PLAYING, false);
             playbackPreparing = incomingPreparing;
@@ -498,7 +502,7 @@ public final class MainActivity extends Activity {
             sleepTimerRemainingMs = intent.getLongExtra(PlaybackService.EXTRA_SLEEP_TIMER_REMAINING_MS, 0L);
             sleepTimerPaused = intent.getBooleanExtra(PlaybackService.EXTRA_SLEEP_TIMER_PAUSED, false);
             if (!keepPreviewDuringQueueLoad) {
-                updateQueuePreviewFromIds(intent.getLongArrayExtra(PlaybackService.EXTRA_QUEUE_TRACK_IDS));
+                updateQueuePreviewFromIntent(intent);
             }
             if (!playbackHasQueue && !keepPreviewDuringQueueLoad) {
                 activeStation = null;
@@ -1442,7 +1446,7 @@ public final class MainActivity extends Activity {
             root.addView(empty, marginBottom(18));
             return;
         }
-        prefetchOnlineStreamVideos(videos, 8);
+        prefetchOnlineStreamVideos(videos, STREAM_DETAIL_PREFETCH_COUNT);
         for (int index = 0; index < videos.size(); index++) {
             OnlineStreamVideo video = videos.get(index);
             int sourceIndex = streamVideoIndex(section, video);
@@ -1588,6 +1592,12 @@ public final class MainActivity extends Activity {
         row.setPadding(dp(8), dp(8), dp(8), dp(8));
         row.setBackground(rounded(color(R.color.ytet_panel_alt), 8));
         row.setOnClickListener(view -> playOnlineStream(section, index));
+        row.setOnTouchListener((view, event) -> {
+            if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                scheduleOnlineStreamPrefetch(video);
+            }
+            return false;
+        });
 
         LinearLayout.LayoutParams thumbParams = new LinearLayout.LayoutParams(dp(102), dp(58));
         thumbParams.setMargins(0, 0, dp(12), 0);
@@ -5014,6 +5024,7 @@ public final class MainActivity extends Activity {
             return;
         }
         int safeIndex = Math.max(0, Math.min(startIndex, queue.size() - 1));
+        prefetchOnlineStreamAround(section, safeIndex, STREAM_PLAYBACK_PREFETCH_RADIUS);
         MusicStation station = new MusicStation(
                 "stream-" + section.channelId(),
                 section.channelTitle(),
@@ -7521,6 +7532,64 @@ public final class MainActivity extends Activity {
         loadQueuePreview(ids);
     }
 
+    private void updateQueuePreviewFromIntent(Intent intent) {
+        long[] ids = intent.getLongArrayExtra(PlaybackService.EXTRA_QUEUE_TRACK_IDS);
+        if (ids == null) {
+            return;
+        }
+        List<DeviceAudioTrack> tracks = queuePreviewTracksFromIntent(intent, ids);
+        if (tracks.size() == ids.length && !tracks.isEmpty()) {
+            playbackQueueTrackIds = ids.clone();
+            activeQueuePreview = tracks;
+            return;
+        }
+        updateQueuePreviewFromIds(ids);
+    }
+
+    private List<DeviceAudioTrack> queuePreviewTracksFromIntent(Intent intent, long[] ids) {
+        List<DeviceAudioTrack> tracks = new ArrayList<>();
+        String[] titles = intent.getStringArrayExtra(PlaybackService.EXTRA_QUEUE_TITLES);
+        String[] artists = intent.getStringArrayExtra(PlaybackService.EXTRA_QUEUE_ARTISTS);
+        String[] albums = intent.getStringArrayExtra(PlaybackService.EXTRA_QUEUE_ALBUMS);
+        String[] urls = intent.getStringArrayExtra(PlaybackService.EXTRA_QUEUE_URLS);
+        String[] thumbnails = intent.getStringArrayExtra(PlaybackService.EXTRA_QUEUE_THUMBNAILS);
+        long[] durations = intent.getLongArrayExtra(PlaybackService.EXTRA_QUEUE_DURATIONS);
+        if (titles == null || artists == null || albums == null || urls == null || thumbnails == null
+                || titles.length < ids.length
+                || artists.length < ids.length
+                || albums.length < ids.length
+                || urls.length < ids.length
+                || thumbnails.length < ids.length) {
+            return tracks;
+        }
+        for (int index = 0; index < ids.length; index++) {
+            String url = valueOrDefault(urls[index], "");
+            if (url.isEmpty()) {
+                return new ArrayList<>();
+            }
+            String title = valueOrDefault(titles[index], "온라인 스트림");
+            String artist = valueOrDefault(artists[index], "알 수 없는 아티스트");
+            String album = valueOrDefault(albums[index], playbackMix);
+            tracks.add(new DeviceAudioTrack(
+                    ids[index],
+                    title,
+                    artist,
+                    album,
+                    title,
+                    isSupportedVideoUrl(url) ? "온라인 스트림" : playbackFolder,
+                    url,
+                    valueOrDefault(thumbnails[index], ""),
+                    0L,
+                    0,
+                    System.currentTimeMillis(),
+                    durations != null && index < durations.length ? Math.max(0L, durations[index]) : 0L,
+                    0L,
+                    artist
+            ));
+        }
+        return tracks;
+    }
+
     private void loadQueuePreview(long[] ids) {
         if (queuePreviewLoading || ids.length == 0) {
             return;
@@ -7753,12 +7822,35 @@ public final class MainActivity extends Activity {
                     scheduled++;
                     sectionCount++;
                 }
-                if (scheduled >= 12 || sectionCount >= 3) {
+                if (scheduled >= STREAM_SECTION_PREFETCH_TOTAL
+                        || sectionCount >= STREAM_SECTION_PREFETCH_PER_CHANNEL) {
                     break;
                 }
             }
-            if (scheduled >= 12) {
+            if (scheduled >= STREAM_SECTION_PREFETCH_TOTAL) {
                 return;
+            }
+        }
+    }
+
+    private void prefetchOnlineStreamAround(OnlineStreamSection section, int centerIndex, int radius) {
+        if (section == null || radius < 0) {
+            return;
+        }
+        List<OnlineStreamVideo> videos = section.videos();
+        if (videos.isEmpty()) {
+            return;
+        }
+        int center = Math.max(0, Math.min(centerIndex, videos.size() - 1));
+        scheduleOnlineStreamPrefetch(videos.get(center));
+        for (int offset = 1; offset <= radius; offset++) {
+            int next = center + offset;
+            if (next < videos.size()) {
+                scheduleOnlineStreamPrefetch(videos.get(next));
+            }
+            int previous = center - offset;
+            if (previous >= 0) {
+                scheduleOnlineStreamPrefetch(videos.get(previous));
             }
         }
     }
@@ -7791,6 +7883,7 @@ public final class MainActivity extends Activity {
             try {
                 OnlineStreamResolver.resolve(appContext, url);
             } catch (Exception ignored) {
+            } finally {
                 streamResolvePrefetchUrls.remove(url);
             }
         });
@@ -9557,7 +9650,9 @@ public final class MainActivity extends Activity {
             float expandedTop = expandedTranslationY();
             float current = sheet.getTranslationY();
             if (startedExpanded) {
-                if (current > expandedTop + dp(72)) {
+                if (current > collapsed + dp(44)) {
+                    dismissQueueDialogAnimated();
+                } else if (current > expandedTop + dp(72)) {
                     setExpanded(false, true);
                 } else {
                     setExpanded(true, true);
@@ -9628,7 +9723,7 @@ public final class MainActivity extends Activity {
                 }
                 if (dragging) {
                     float dy = event.getRawY() - downY;
-                    float maxTranslation = startedExpanded ? collapsedTranslationY() : dismissedTranslationY();
+                    float maxTranslation = dismissedTranslationY();
                     float minTranslation = expandedTranslationY();
                     float next = Math.max(minTranslation, Math.min(maxTranslation, startTranslationY + dy));
                     sheet.setTranslationY(next);

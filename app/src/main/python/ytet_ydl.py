@@ -351,15 +351,49 @@ def stream_video_key(item):
 def stream_video_view_count(entry):
     if not isinstance(entry, dict):
         return 0
-    for key in ("view_count", "viewCount", "views"):
+    for key in ("view_count", "viewCount", "views", "viewCountInt"):
         count = as_int(entry.get(key))
         if count > 0:
             return count
-    for key in ("view_count_text", "viewCountText", "short_view_count_text"):
-        count = compact_view_count(entry.get(key))
+    for key in (
+        "view_count_text",
+        "viewCountText",
+        "short_view_count_text",
+        "shortViewCountText",
+        "viewsText",
+        "viewCountTextShort",
+    ):
+        count = compact_view_count(compact_text(entry.get(key)))
         if count > 0:
             return count
     return 0
+
+
+def compact_text(value):
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, dict):
+        for key in ("simpleText", "text", "content"):
+            text = compact_text(value.get(key))
+            if text:
+                return text
+        runs = value.get("runs")
+        if isinstance(runs, list):
+            return "".join(compact_text(item) for item in runs)
+        accessibility = value.get("accessibility")
+        if isinstance(accessibility, dict):
+            text = compact_text(accessibility.get("accessibilityData"))
+            if text:
+                return text
+        label = value.get("label")
+        return compact_text(label)
+    if isinstance(value, list):
+        return "".join(compact_text(item) for item in value)
+    return str(value)
 
 
 def compact_view_count(value):

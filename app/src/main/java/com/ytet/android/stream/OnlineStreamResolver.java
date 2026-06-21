@@ -13,7 +13,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public final class OnlineStreamResolver {
     private static final long CACHE_TTL_MS = 12L * 60L * 1000L;
-    private static final int MAX_CACHE_SIZE = 48;
+    private static final int MAX_CACHE_SIZE = 96;
     private static final Map<String, CacheEntry> RESOLVED_CACHE = new ConcurrentHashMap<>();
     private static final Map<String, Object> IN_FLIGHT_LOCKS = new ConcurrentHashMap<>();
 

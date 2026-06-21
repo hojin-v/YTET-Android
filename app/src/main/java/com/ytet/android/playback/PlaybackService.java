@@ -34,6 +34,9 @@ import com.ytet.android.stream.MusicStation;
 import com.ytet.android.stream.OnlineStreamResolver;
 import com.ytet.android.ui.MainActivity;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -94,6 +97,12 @@ public final class PlaybackService extends Service {
     public static final String EXTRA_SHUFFLE_ENABLED = "com.ytet.android.extra.PLAYBACK_SHUFFLE_ENABLED";
     public static final String EXTRA_REPEAT_MODE = "com.ytet.android.extra.PLAYBACK_REPEAT_MODE";
     public static final String EXTRA_QUEUE_TRACK_IDS = "com.ytet.android.extra.PLAYBACK_QUEUE_TRACK_IDS";
+    public static final String EXTRA_QUEUE_TITLES = "com.ytet.android.extra.PLAYBACK_QUEUE_TITLES";
+    public static final String EXTRA_QUEUE_ARTISTS = "com.ytet.android.extra.PLAYBACK_QUEUE_ARTISTS";
+    public static final String EXTRA_QUEUE_ALBUMS = "com.ytet.android.extra.PLAYBACK_QUEUE_ALBUMS";
+    public static final String EXTRA_QUEUE_URLS = "com.ytet.android.extra.PLAYBACK_QUEUE_URLS";
+    public static final String EXTRA_QUEUE_THUMBNAILS = "com.ytet.android.extra.PLAYBACK_QUEUE_THUMBNAILS";
+    public static final String EXTRA_QUEUE_DURATIONS = "com.ytet.android.extra.PLAYBACK_QUEUE_DURATIONS";
     public static final String EXTRA_SLEEP_TIMER_MINUTES = "com.ytet.android.extra.PLAYBACK_SLEEP_TIMER_MINUTES";
     public static final String EXTRA_SLEEP_TIMER_END_AT_MS = "com.ytet.android.extra.PLAYBACK_SLEEP_TIMER_END_AT_MS";
     public static final String EXTRA_SLEEP_TIMER_REMAINING_MS = "com.ytet.android.extra.PLAYBACK_SLEEP_TIMER_REMAINING_MS";
@@ -123,6 +132,8 @@ public final class PlaybackService extends Service {
     private static final String PREF_PLAYBACK_MIX_SUBTITLE = "playback_mix_subtitle";
     private static final String PREF_PLAYBACK_SHUFFLE = "playback_shuffle";
     private static final String PREF_PLAYBACK_REPEAT = "playback_repeat";
+    private static final String PREF_PLAYBACK_QUEUE_SNAPSHOT = "playback_queue_snapshot";
+    private static final String PREF_PLAYBACK_ORIGINAL_QUEUE_SNAPSHOT = "playback_original_queue_snapshot";
 
     private final ArrayList<DeviceAudioTrack> queue = new ArrayList<>();
     private final ArrayList<DeviceAudioTrack> originalQueue = new ArrayList<>();
@@ -1276,10 +1287,16 @@ public final class PlaybackService extends Service {
     private boolean restoreQueueAsync(int startId) {
         SharedPreferences prefs = playbackPreferences();
         long[] ids = persistedQueueIds(prefs);
-        if (ids.length == 0) {
+        List<DeviceAudioTrack> snapshotTracks = persistedQueueSnapshot(prefs, PREF_PLAYBACK_QUEUE_SNAPSHOT);
+        boolean restoreFromSnapshot = hasRemoteQueueItems(snapshotTracks);
+        if (ids.length == 0 && !restoreFromSnapshot) {
             return false;
         }
         long[] originalIds = persistedQueueIds(prefs, PREF_PLAYBACK_ORIGINAL_QUEUE_IDS);
+        List<DeviceAudioTrack> originalSnapshotTracks = persistedQueueSnapshot(
+                prefs,
+                PREF_PLAYBACK_ORIGINAL_QUEUE_SNAPSHOT
+        );
 
         int version = ++queueLoadVersion;
         int restoredIndex = Math.max(0, prefs.getInt(PREF_PLAYBACK_QUEUE_INDEX, 0));
@@ -1302,10 +1319,16 @@ public final class PlaybackService extends Service {
             List<DeviceAudioTrack> loadedTracks;
             List<DeviceAudioTrack> originalTracks;
             try {
-                loadedTracks = musicLibrary.loadTracksByIds(this, ids);
-                originalTracks = originalIds.length == 0
-                        ? new ArrayList<>(loadedTracks)
-                        : musicLibrary.loadTracksByIds(this, originalIds);
+                loadedTracks = restoreFromSnapshot
+                        ? new ArrayList<>(snapshotTracks)
+                        : musicLibrary.loadTracksByIds(this, ids);
+                if (restoreFromSnapshot && !originalSnapshotTracks.isEmpty()) {
+                    originalTracks = new ArrayList<>(originalSnapshotTracks);
+                } else {
+                    originalTracks = originalIds.length == 0
+                            ? new ArrayList<>(loadedTracks)
+                            : musicLibrary.loadTracksByIds(this, originalIds);
+                }
             } catch (Exception exception) {
                 mainHandler.post(() -> finishRestoredQueueLoad(
                         version,
@@ -1416,6 +1439,8 @@ public final class PlaybackService extends Service {
         playbackPreferences().edit()
                 .putString(PREF_PLAYBACK_QUEUE_IDS, serializedQueueIds())
                 .putString(PREF_PLAYBACK_ORIGINAL_QUEUE_IDS, serializedOriginalQueueIds())
+                .putString(PREF_PLAYBACK_QUEUE_SNAPSHOT, serializedTrackSnapshot(queue))
+                .putString(PREF_PLAYBACK_ORIGINAL_QUEUE_SNAPSHOT, serializedTrackSnapshot(originalQueue))
                 .putInt(PREF_PLAYBACK_QUEUE_INDEX, queueIndex)
                 .putLong(PREF_PLAYBACK_TRACK_ID, track == null ? -1L : track.id())
                 .putString(PREF_PLAYBACK_MIX_TITLE, mixTitle)
@@ -1429,6 +1454,8 @@ public final class PlaybackService extends Service {
         playbackPreferences().edit()
                 .remove(PREF_PLAYBACK_QUEUE_IDS)
                 .remove(PREF_PLAYBACK_ORIGINAL_QUEUE_IDS)
+                .remove(PREF_PLAYBACK_QUEUE_SNAPSHOT)
+                .remove(PREF_PLAYBACK_ORIGINAL_QUEUE_SNAPSHOT)
                 .remove(PREF_PLAYBACK_QUEUE_INDEX)
                 .remove(PREF_PLAYBACK_TRACK_ID)
                 .remove(PREF_PLAYBACK_MIX_TITLE)
@@ -1456,6 +1483,84 @@ public final class PlaybackService extends Service {
             builder.append(tracks.get(index).id());
         }
         return builder.toString();
+    }
+
+    private String serializedTrackSnapshot(List<DeviceAudioTrack> tracks) {
+        JSONArray items = new JSONArray();
+        for (DeviceAudioTrack track : tracks == null ? new ArrayList<DeviceAudioTrack>() : tracks) {
+            if (track == null) {
+                continue;
+            }
+            JSONObject item = new JSONObject();
+            try {
+                item.put("id", track.id());
+                item.put("title", track.title());
+                item.put("artist", track.artist());
+                item.put("representative_artist", track.representativeArtist());
+                item.put("album", track.album());
+                item.put("display_name", track.displayName());
+                item.put("folder", track.folder());
+                item.put("content_uri", track.contentUri());
+                item.put("album_art_uri", track.albumArtUri());
+                item.put("album_id", track.albumId());
+                item.put("track_number", track.trackNumber());
+                item.put("date_added_ms", track.dateAddedMs());
+                item.put("duration_ms", track.durationMs());
+                item.put("size_bytes", track.sizeBytes());
+                items.put(item);
+            } catch (Exception ignored) {
+            }
+        }
+        return items.toString();
+    }
+
+    private List<DeviceAudioTrack> persistedQueueSnapshot(SharedPreferences prefs, String key) {
+        List<DeviceAudioTrack> tracks = new ArrayList<>();
+        String serialized = prefs.getString(key, "");
+        if (serialized == null || serialized.trim().isEmpty()) {
+            return tracks;
+        }
+        try {
+            JSONArray items = new JSONArray(serialized);
+            for (int index = 0; index < items.length(); index++) {
+                JSONObject item = items.optJSONObject(index);
+                if (item == null) {
+                    continue;
+                }
+                String contentUri = item.optString("content_uri", "");
+                if (contentUri.trim().isEmpty()) {
+                    continue;
+                }
+                tracks.add(new DeviceAudioTrack(
+                        item.optLong("id", remoteId(contentUri)),
+                        item.optString("title", ""),
+                        item.optString("artist", ""),
+                        item.optString("album", ""),
+                        item.optString("display_name", ""),
+                        item.optString("folder", ""),
+                        contentUri,
+                        item.optString("album_art_uri", ""),
+                        Math.max(0L, item.optLong("album_id", 0L)),
+                        Math.max(0, item.optInt("track_number", 0)),
+                        Math.max(0L, item.optLong("date_added_ms", 0L)),
+                        Math.max(0L, item.optLong("duration_ms", 0L)),
+                        Math.max(0L, item.optLong("size_bytes", 0L)),
+                        item.optString("representative_artist", "")
+                ));
+            }
+        } catch (Exception ignored) {
+            return new ArrayList<>();
+        }
+        return tracks;
+    }
+
+    private boolean hasRemoteQueueItems(List<DeviceAudioTrack> tracks) {
+        for (DeviceAudioTrack track : tracks == null ? new ArrayList<DeviceAudioTrack>() : tracks) {
+            if (track != null && (track.id() < 0L || isHttpUri(track.contentUri()))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private long[] persistedQueueIds(SharedPreferences prefs) {
@@ -1889,6 +1994,12 @@ public final class PlaybackService extends Service {
         intent.putExtra(EXTRA_SHUFFLE_ENABLED, shuffleEnabled);
         intent.putExtra(EXTRA_REPEAT_MODE, repeatMode);
         intent.putExtra(EXTRA_QUEUE_TRACK_IDS, queueTrackIds());
+        intent.putExtra(EXTRA_QUEUE_TITLES, queueTitles());
+        intent.putExtra(EXTRA_QUEUE_ARTISTS, queueArtists());
+        intent.putExtra(EXTRA_QUEUE_ALBUMS, queueAlbums());
+        intent.putExtra(EXTRA_QUEUE_URLS, queueUrls());
+        intent.putExtra(EXTRA_QUEUE_THUMBNAILS, queueThumbnails());
+        intent.putExtra(EXTRA_QUEUE_DURATIONS, queueDurations());
         intent.putExtra(EXTRA_SLEEP_TIMER_END_AT_MS, sleepTimerEndAtMs);
         intent.putExtra(EXTRA_SLEEP_TIMER_REMAINING_MS, sleepTimerRemainingMs());
         intent.putExtra(EXTRA_SLEEP_TIMER_PAUSED, sleepTimerPaused);
@@ -1902,6 +2013,54 @@ public final class PlaybackService extends Service {
             ids[index] = queue.get(index).id();
         }
         return ids;
+    }
+
+    private String[] queueTitles() {
+        String[] values = new String[queue.size()];
+        for (int index = 0; index < queue.size(); index++) {
+            values[index] = queue.get(index).title();
+        }
+        return values;
+    }
+
+    private String[] queueArtists() {
+        String[] values = new String[queue.size()];
+        for (int index = 0; index < queue.size(); index++) {
+            values[index] = queue.get(index).artist();
+        }
+        return values;
+    }
+
+    private String[] queueAlbums() {
+        String[] values = new String[queue.size()];
+        for (int index = 0; index < queue.size(); index++) {
+            values[index] = queue.get(index).album();
+        }
+        return values;
+    }
+
+    private String[] queueUrls() {
+        String[] values = new String[queue.size()];
+        for (int index = 0; index < queue.size(); index++) {
+            values[index] = queue.get(index).contentUri();
+        }
+        return values;
+    }
+
+    private String[] queueThumbnails() {
+        String[] values = new String[queue.size()];
+        for (int index = 0; index < queue.size(); index++) {
+            values[index] = queue.get(index).albumArtUri();
+        }
+        return values;
+    }
+
+    private long[] queueDurations() {
+        long[] values = new long[queue.size()];
+        for (int index = 0; index < queue.size(); index++) {
+            values[index] = queue.get(index).durationMs();
+        }
+        return values;
     }
 
     private void scheduleStateTick() {

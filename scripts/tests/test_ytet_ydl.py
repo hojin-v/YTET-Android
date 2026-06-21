@@ -335,6 +335,21 @@ class YtetYdlStreamCatalogTest(unittest.TestCase):
         self.assertEqual(12_000, videos[0]["view_count"])
         self.assertEqual(1, videos[0]["popular_rank"])
 
+    def test_stream_view_count_reads_nested_youtube_text(self):
+        self.assertEqual(25_000, ytet_ydl.stream_video_view_count({
+            "shortViewCountText": {
+                "runs": [
+                    {"text": "조회수 "},
+                    {"text": "2.5만회"},
+                ],
+            },
+        }))
+        self.assertEqual(1_200_000, ytet_ydl.stream_video_view_count({
+            "viewCountText": {
+                "simpleText": "1.2M views",
+            },
+        }))
+
     def test_merge_enriches_latest_entries_with_popular_metadata(self):
         latest = [{
             "id": "abc",
