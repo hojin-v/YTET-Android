@@ -226,6 +226,8 @@ public final class MainActivity extends Activity {
     private boolean renderedNowPlayingIdle = true;
     private String renderedNowPlayingTitle = "";
     private String renderedNowPlayingMeta = "";
+    private String renderedNowPlayingAlbumArtUri = "";
+    private boolean renderedNowPlayingCoverPending;
     private long renderedNowPlayingPreviewTrackId = Long.MIN_VALUE;
     private int renderedNowPlayingPreviewDirection = NOW_PLAYING_TRANSITION_NONE;
     private boolean nowPlayingContentInitialized;
@@ -306,6 +308,7 @@ public final class MainActivity extends Activity {
     private String playbackThemeAlbumArtUri = "";
     private String playbackThemeLoadingUri = "";
     private int playbackThemeColor = 0xFF17181D;
+    private boolean playbackCoverPending;
     private String playbackMix = "로컬 음악";
     private long playbackDurationMs;
     private long playbackPositionMs;
@@ -501,6 +504,7 @@ public final class MainActivity extends Activity {
                 playbackAlbum = valueOrDefault(intent.getStringExtra(PlaybackService.EXTRA_ALBUM), "앨범 정보 없음");
                 playbackFolder = valueOrDefault(intent.getStringExtra(PlaybackService.EXTRA_FOLDER), "알 수 없는 폴더");
                 playbackAlbumArtUri = valueOrDefault(intent.getStringExtra(PlaybackService.EXTRA_ALBUM_ART_URI), "");
+                playbackCoverPending = false;
                 playbackDurationMs = intent.getLongExtra(PlaybackService.EXTRA_DURATION_MS, 0L);
                 playbackPositionMs = intent.getLongExtra(PlaybackService.EXTRA_POSITION_MS, 0L);
                 playbackQueueIndex = intent.getIntExtra(PlaybackService.EXTRA_QUEUE_INDEX, -1);
@@ -5338,11 +5342,12 @@ public final class MainActivity extends Activity {
         playbackArtist = valueOrDefault(firstTrack.artist(), "알 수 없는 아티스트");
         playbackAlbum = valueOrDefault(firstTrack.album(), "앨범 정보 없음");
         playbackAlbumArtUri = "";
+        playbackCoverPending = true;
         playbackQueueIndex = -1;
         playbackQueueSize = sourceTracks.size();
         playbackThemeAlbumArtUri = "";
         playbackThemeLoadingUri = "";
-        playbackThemeColor = fallbackPlayerThemeColor(false);
+        playbackThemeColor = color(R.color.ytet_background);
         playbackTitle = firstTrack.title();
         playbackMeta = playbackArtist + " · " + playbackAlbum;
         setStreamingStatus("준비 중: " + firstTrack.title());
@@ -5767,6 +5772,8 @@ public final class MainActivity extends Activity {
             renderedNowPlayingTrackId = -1L;
             renderedNowPlayingTitle = "";
             renderedNowPlayingMeta = "";
+            renderedNowPlayingAlbumArtUri = "";
+            renderedNowPlayingCoverPending = false;
             if (nowPlayingProgress != null) {
                 nowPlayingProgress.setProgress(0L, 0L, false);
             }
@@ -5785,11 +5792,15 @@ public final class MainActivity extends Activity {
                 ? "기기 음악을 스캔하면 재생할 수 있습니다."
                 : playbackPreparing || playbackError ? streamStatus : miniPlaybackMeta();
         long renderTrackId = idle ? -1L : playbackTrackId;
+        String renderAlbumArtUri = idle ? "" : valueOrDefault(playbackAlbumArtUri, "");
+        boolean renderCoverPending = !idle && playbackCoverPending;
         boolean contentChanged = !nowPlayingContentInitialized
                 || renderedNowPlayingIdle != idle
                 || renderedNowPlayingTrackId != renderTrackId
                 || !TextUtils.equals(renderedNowPlayingTitle, title)
-                || !TextUtils.equals(renderedNowPlayingMeta, meta);
+                || !TextUtils.equals(renderedNowPlayingMeta, meta)
+                || !TextUtils.equals(renderedNowPlayingAlbumArtUri, renderAlbumArtUri)
+                || renderedNowPlayingCoverPending != renderCoverPending;
 
         updatePlaybackThemeColor(idle);
         nowPlayingBar.setBackground(nowPlayingBarBackground(idle));
@@ -5805,6 +5816,8 @@ public final class MainActivity extends Activity {
         renderedNowPlayingTrackId = renderTrackId;
         renderedNowPlayingTitle = title;
         renderedNowPlayingMeta = meta;
+        renderedNowPlayingAlbumArtUri = renderAlbumArtUri;
+        renderedNowPlayingCoverPending = renderCoverPending;
         nowPlayingContentInitialized = true;
 
         boolean waitingToPlay = playbackPlaying || playbackWillPlay;
@@ -5955,6 +5968,11 @@ public final class MainActivity extends Activity {
     }
 
     private View nowPlayingCoverView(boolean idle) {
+        if (!idle && playbackCoverPending) {
+            View placeholder = new View(this);
+            placeholder.setBackground(rounded(color(R.color.ytet_panel_alt), 8));
+            return placeholder;
+        }
         return nowPlayingCoverView(
                 idle,
                 playbackAlbumArtUri,
@@ -6001,6 +6019,7 @@ public final class MainActivity extends Activity {
         playbackArtist = valueOrDefault(track.artist(), "알 수 없는 아티스트");
         playbackAlbum = valueOrDefault(track.album(), "앨범 정보 없음");
         playbackAlbumArtUri = valueOrDefault(track.albumArtUri(), "");
+        playbackCoverPending = false;
         updatePlaybackThemeColor(false);
     }
 
@@ -6817,6 +6836,7 @@ public final class MainActivity extends Activity {
                 + "|" + playbackArtist
                 + "|" + playbackAlbum
                 + "|" + playbackAlbumArtUri
+                + "|" + playbackCoverPending
                 + "|" + playbackThemeColor
                 + "|" + playbackQueueIndex
                 + "|" + playbackQueueSize
@@ -7070,6 +7090,11 @@ public final class MainActivity extends Activity {
     }
 
     private View coverArtView() {
+        if (playbackCoverPending) {
+            View placeholder = new View(this);
+            placeholder.setBackground(rounded(color(R.color.ytet_panel_alt), 8));
+            return placeholder;
+        }
         if (playbackAlbumArtUri != null && !playbackAlbumArtUri.trim().isEmpty()) {
             if (isHttpUrl(playbackAlbumArtUri)) {
                 return onlineImageView(
