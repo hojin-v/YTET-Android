@@ -173,9 +173,11 @@ public final class MainActivity extends Activity {
     private static final int STREAM_SECTION_PREFETCH_PER_CHANNEL = 4;
     private static final int STREAM_DETAIL_PREFETCH_COUNT = 20;
     private static final int STREAM_PLAYBACK_PREFETCH_RADIUS = 3;
-    private static final int LIBRARY_SHUFFLE_FAB_COLLAPSED_WIDTH_DP = 58;
-    private static final int LIBRARY_SHUFFLE_FAB_EXPANDED_WIDTH_DP = 176;
-    private static final int LIBRARY_SHUFFLE_FAB_HEIGHT_DP = 56;
+    private static final int LIBRARY_SHUFFLE_FAB_COLLAPSED_WIDTH_DP = 52;
+    private static final int LIBRARY_SHUFFLE_FAB_EXPANDED_WIDTH_DP = 136;
+    private static final int LIBRARY_SHUFFLE_FAB_HEIGHT_DP = 52;
+    private static final int LIBRARY_SHUFFLE_FAB_ICON_DP = 28;
+    private static final int LIBRARY_SHUFFLE_FAB_LABEL_WIDTH_DP = 72;
     private static final String[] SUPPORTED_VIDEO_URL_MARKERS = {
             "youtube.com/",
             "youtu.be/",
@@ -324,6 +326,7 @@ public final class MainActivity extends Activity {
     private boolean sleepTimerControlsVisible;
     private boolean suppressPlayerDragDismiss;
     private boolean playerDragDismissActive;
+    private boolean playerDismissAnimating;
     private String extractorUrl = "";
     private MediaType extractorMediaType = MediaType.AUDIO;
     private String extractorOption = AudioFormat.M4A.value();
@@ -679,7 +682,7 @@ public final class MainActivity extends Activity {
             return true;
         }
         if (playerDialog != null && playerDialog.isShowing()) {
-            playerDialog.dismiss();
+            dismissExpandedPlayerAnimated();
             return true;
         }
         if (updateDialog != null && updateDialog.isShowing()) {
@@ -953,7 +956,6 @@ public final class MainActivity extends Activity {
         LinearLayout button = new LinearLayout(this);
         button.setOrientation(LinearLayout.HORIZONTAL);
         button.setGravity(Gravity.CENTER);
-        button.setPadding(dp(16), 0, dp(18), 0);
         button.setBackground(rounded(Color.WHITE, LIBRARY_SHUFFLE_FAB_HEIGHT_DP / 2));
         button.setClickable(true);
         button.setFocusable(true);
@@ -967,17 +969,20 @@ public final class MainActivity extends Activity {
         icon.setImageResource(R.drawable.ic_shuffle);
         icon.setColorFilter(Color.BLACK);
         icon.setScaleType(ImageView.ScaleType.CENTER);
-        LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(dp(28), dp(28));
+        LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(
+                dp(LIBRARY_SHUFFLE_FAB_ICON_DP),
+                dp(LIBRARY_SHUFFLE_FAB_ICON_DP)
+        );
         button.addView(icon, iconParams);
 
         libraryShuffleFabLabel = text("모두 셔플", 15, android.R.color.black, true);
         libraryShuffleFabLabel.setSingleLine(true);
-        libraryShuffleFabLabel.setGravity(Gravity.CENTER_VERTICAL);
+        libraryShuffleFabLabel.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
         LinearLayout.LayoutParams labelParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
+                dp(LIBRARY_SHUFFLE_FAB_LABEL_WIDTH_DP),
                 LinearLayout.LayoutParams.MATCH_PARENT
         );
-        labelParams.setMargins(dp(12), 0, 0, 0);
+        labelParams.setMargins(dp(8), 0, 0, 0);
         button.addView(libraryShuffleFabLabel, labelParams);
         applyLibraryShuffleFabProgress(1f);
         return button;
@@ -2373,9 +2378,16 @@ public final class MainActivity extends Activity {
         params.width = Math.round(collapsedWidth + (expandedWidth - collapsedWidth) * clamped);
         params.height = dp(LIBRARY_SHUFFLE_FAB_HEIGHT_DP);
         libraryShuffleFab.setLayoutParams(params);
+        int padding = Math.round(dp(12) + dp(2) * clamped);
+        libraryShuffleFab.setPadding(padding, 0, padding, 0);
         if (libraryShuffleFabLabel != null) {
+            LinearLayout.LayoutParams labelParams = (LinearLayout.LayoutParams) libraryShuffleFabLabel.getLayoutParams();
+            labelParams.width = Math.round(dp(LIBRARY_SHUFFLE_FAB_LABEL_WIDTH_DP) * clamped);
+            labelParams.setMargins(Math.round(dp(8) * clamped), 0, 0, 0);
+            libraryShuffleFabLabel.setLayoutParams(labelParams);
             libraryShuffleFabLabel.setAlpha(clamped);
-            libraryShuffleFabLabel.setVisibility(clamped <= 0.02f ? View.INVISIBLE : View.VISIBLE);
+            libraryShuffleFabLabel.setScaleX(0.94f + 0.06f * clamped);
+            libraryShuffleFabLabel.setVisibility(clamped <= 0.02f ? View.GONE : View.VISIBLE);
         }
     }
 
@@ -6554,13 +6566,97 @@ public final class MainActivity extends Activity {
                 expandedPlaybackProgressText = null;
                 expandedSleepTimerRemainingText = null;
                 renderedExpandedPlayerSignature = "";
+                playerDismissAnimating = false;
+                playerDragDismissActive = false;
+                suppressPlayerDragDismiss = false;
             });
         }
         applyExpandedPlayerWindow(playerDialog.getWindow());
-        playerDialog.setContentView(buildExpandedPlayerContent());
+        View content = buildExpandedPlayerContent();
+        playerDialog.setContentView(content);
         renderedExpandedPlayerSignature = expandedPlayerRenderSignature();
         playerDialog.show();
         applyExpandedPlayerWindow(playerDialog.getWindow());
+        animateExpandedPlayerOpen(content);
+    }
+
+    private void animateExpandedPlayerOpen(View content) {
+        if (content == null) {
+            playerDragDismissActive = false;
+            suppressPlayerDragDismiss = false;
+            return;
+        }
+        playerDismissAnimating = false;
+        playerDragDismissActive = true;
+        suppressPlayerDragDismiss = true;
+        content.animate().cancel();
+        content.setAlpha(0.82f);
+        content.setTranslationY(getResources().getDisplayMetrics().heightPixels);
+        content.post(() -> {
+            if (playerDialog == null || !playerDialog.isShowing()) {
+                playerDragDismissActive = false;
+                suppressPlayerDragDismiss = false;
+                return;
+            }
+            float startTranslation = Math.max(dp(320), content.getHeight() * 0.38f);
+            content.setTranslationY(startTranslation);
+            content.animate()
+                    .translationY(0f)
+                    .alpha(1f)
+                    .setDuration(250L)
+                    .setInterpolator(new DecelerateInterpolator())
+                    .withEndAction(() -> {
+                        content.setTranslationY(0f);
+                        content.setAlpha(1f);
+                        playerDragDismissActive = false;
+                        suppressPlayerDragDismiss = false;
+                    })
+                    .start();
+        });
+    }
+
+    private void dismissExpandedPlayerAnimated() {
+        if (playerDialog == null || !playerDialog.isShowing()) {
+            return;
+        }
+        if (playerDismissAnimating) {
+            return;
+        }
+        View content = expandedPlayerContentView();
+        if (content == null) {
+            playerDialog.dismiss();
+            return;
+        }
+        playerDismissAnimating = true;
+        playerDragDismissActive = true;
+        suppressPlayerDragDismiss = true;
+        content.animate().cancel();
+        content.animate()
+                .translationY(Math.max(content.getHeight(), dp(320)))
+                .alpha(0.82f)
+                .setDuration(220L)
+                .setInterpolator(new DecelerateInterpolator())
+                .withEndAction(() -> {
+                    if (playerDialog != null) {
+                        playerDialog.dismiss();
+                    }
+                })
+                .start();
+    }
+
+    private View expandedPlayerContentView() {
+        Window window = playerDialog == null ? null : playerDialog.getWindow();
+        if (window == null) {
+            return null;
+        }
+        View contentRoot = window.getDecorView().findViewById(android.R.id.content);
+        if (contentRoot instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) contentRoot;
+            if (group.getChildCount() > 0) {
+                return group.getChildAt(0);
+            }
+        }
+        return contentRoot;
     }
 
     private void updateExpandedPlayer() {
@@ -6675,11 +6771,7 @@ public final class MainActivity extends Activity {
         top.setOrientation(LinearLayout.HORIZONTAL);
         top.setGravity(Gravity.CENTER_VERTICAL);
         ImageButton close = playerIconButton(R.drawable.ic_keyboard_arrow_down, "플레이어 닫기", false, true);
-        close.setOnClickListener(view -> {
-            if (playerDialog != null) {
-                playerDialog.dismiss();
-            }
-        });
+        close.setOnClickListener(view -> dismissExpandedPlayerAnimated());
         top.addView(close, new LinearLayout.LayoutParams(dp(44), dp(42)));
         TextView mix = text("재생 중", 13, R.color.ytet_muted, true);
         mix.setGravity(Gravity.CENTER);
