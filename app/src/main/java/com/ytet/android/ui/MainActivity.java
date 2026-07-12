@@ -3,6 +3,7 @@ package com.ytet.android.ui;
 import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
 import android.animation.ObjectAnimator;
+import android.animation.ValueAnimator;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
@@ -172,6 +173,9 @@ public final class MainActivity extends Activity {
     private static final int STREAM_SECTION_PREFETCH_PER_CHANNEL = 4;
     private static final int STREAM_DETAIL_PREFETCH_COUNT = 20;
     private static final int STREAM_PLAYBACK_PREFETCH_RADIUS = 3;
+    private static final int LIBRARY_SHUFFLE_FAB_COLLAPSED_WIDTH_DP = 58;
+    private static final int LIBRARY_SHUFFLE_FAB_EXPANDED_WIDTH_DP = 176;
+    private static final int LIBRARY_SHUFFLE_FAB_HEIGHT_DP = 56;
     private static final String[] SUPPORTED_VIDEO_URL_MARKERS = {
             "youtube.com/",
             "youtu.be/",
@@ -195,6 +199,10 @@ public final class MainActivity extends Activity {
     private LibraryRecyclerAdapter libraryRecyclerAdapter;
     private Parcelable libraryRecyclerState;
     private boolean libraryRecyclerGridMode;
+    private LinearLayout libraryShuffleFab;
+    private TextView libraryShuffleFabLabel;
+    private ValueAnimator libraryShuffleFabAnimator;
+    private boolean libraryShuffleFabExpanded = true;
     private int mainNavigationInset;
     private FrameLayout nowPlayingBar;
     private FrameLayout nowPlayingInfoFrame;
@@ -779,6 +787,12 @@ public final class MainActivity extends Activity {
         libraryRecyclerView.setBackgroundColor(color(R.color.ytet_background));
         libraryRecyclerView.setOverScrollMode(View.OVER_SCROLL_NEVER);
         libraryRecyclerView.setItemAnimator(null);
+        libraryRecyclerView.addOnScrollListener(new RecyclerView.OnScrollListener() {
+            @Override
+            public void onScrolled(RecyclerView recyclerView, int dx, int dy) {
+                updateLibraryShuffleFabForScroll(dy);
+            }
+        });
         contentFrame.addView(libraryRecyclerView, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT
@@ -828,6 +842,9 @@ public final class MainActivity extends Activity {
                 FrameLayout.LayoutParams.WRAP_CONTENT,
                 Gravity.BOTTOM
         ));
+        libraryShuffleFab = buildLibraryShuffleFab();
+        libraryShuffleFab.setVisibility(View.GONE);
+        app.addView(libraryShuffleFab, libraryShuffleFabLayoutParams(0));
         updateMainContentBottomPadding(0);
         applyMainContentInsets(app);
 
@@ -932,6 +949,40 @@ public final class MainActivity extends Activity {
         return bar;
     }
 
+    private LinearLayout buildLibraryShuffleFab() {
+        LinearLayout button = new LinearLayout(this);
+        button.setOrientation(LinearLayout.HORIZONTAL);
+        button.setGravity(Gravity.CENTER);
+        button.setPadding(dp(16), 0, dp(18), 0);
+        button.setBackground(rounded(Color.WHITE, LIBRARY_SHUFFLE_FAB_HEIGHT_DP / 2));
+        button.setClickable(true);
+        button.setFocusable(true);
+        button.setContentDescription("모두 셔플");
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            button.setElevation(dp(8));
+        }
+        button.setOnClickListener(view -> playAllLibraryShuffle());
+
+        ImageView icon = new ImageView(this);
+        icon.setImageResource(R.drawable.ic_shuffle);
+        icon.setColorFilter(Color.BLACK);
+        icon.setScaleType(ImageView.ScaleType.CENTER);
+        LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(dp(28), dp(28));
+        button.addView(icon, iconParams);
+
+        libraryShuffleFabLabel = text("모두 셔플", 15, android.R.color.black, true);
+        libraryShuffleFabLabel.setSingleLine(true);
+        libraryShuffleFabLabel.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams labelParams = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.MATCH_PARENT
+        );
+        labelParams.setMargins(dp(12), 0, 0, 0);
+        button.addView(libraryShuffleFabLabel, labelParams);
+        applyLibraryShuffleFabProgress(1f);
+        return button;
+    }
+
     private LinearLayout buildBottomTabs() {
         LinearLayout tabs = new LinearLayout(this);
         tabs.setOrientation(LinearLayout.HORIZONTAL);
@@ -1024,11 +1075,13 @@ public final class MainActivity extends Activity {
             renderLibraryRecyclerTab();
             updateTabStyles();
             updateNowPlayingBar();
+            updateLibraryShuffleFabVisibility(true);
             updateLibraryPullIndicator(libraryLoading ? libraryPullRefreshTriggerDistance() : libraryPullDistance, libraryLoading || libraryPullReady);
             updateExtractorScrollMode();
             return;
         }
 
+        updateLibraryShuffleFabVisibility(false);
         libraryRecyclerView.setVisibility(View.GONE);
         contentScrollView.setVisibility(View.VISIBLE);
         contentScrollView.removeAllViews();
@@ -2221,6 +2274,108 @@ public final class MainActivity extends Activity {
                     libraryRecyclerView.getLayoutManager().onRestoreInstanceState(state);
                 }
             });
+        }
+    }
+
+    private void updateLibraryShuffleFabVisibility(boolean animate) {
+        if (libraryShuffleFab == null) {
+            return;
+        }
+        boolean visible = shouldShowLibraryShuffleFab();
+        if (!visible) {
+            if (libraryShuffleFabAnimator != null) {
+                libraryShuffleFabAnimator.cancel();
+            }
+            libraryShuffleFab.setVisibility(View.GONE);
+            return;
+        }
+        if (libraryShuffleFab.getVisibility() != View.VISIBLE) {
+            libraryShuffleFab.setVisibility(View.VISIBLE);
+            libraryShuffleFab.setAlpha(animate ? 0f : 1f);
+            libraryShuffleFab.setScaleX(animate ? 0.94f : 1f);
+            libraryShuffleFab.setScaleY(animate ? 0.94f : 1f);
+            setLibraryShuffleFabExpanded(true, false);
+            if (animate) {
+                libraryShuffleFab.animate()
+                        .alpha(1f)
+                        .scaleX(1f)
+                        .scaleY(1f)
+                        .setDuration(160L)
+                        .setInterpolator(new DecelerateInterpolator())
+                        .start();
+            }
+        }
+    }
+
+    private boolean shouldShowLibraryShuffleFab() {
+        return currentTab == Tab.LIBRARY
+                && focusedLibraryGroup == null
+                && libraryFilter == LibraryFilter.ALL
+                && libraryLoaded
+                && !libraryTracks.isEmpty();
+    }
+
+    private void updateLibraryShuffleFabForScroll(int dy) {
+        if (libraryShuffleFab == null || libraryShuffleFab.getVisibility() != View.VISIBLE || dy == 0) {
+            return;
+        }
+        if (dy > 0) {
+            setLibraryShuffleFabExpanded(false, true);
+        } else {
+            setLibraryShuffleFabExpanded(true, true);
+        }
+    }
+
+    private void setLibraryShuffleFabExpanded(boolean expanded, boolean animate) {
+        if (libraryShuffleFab == null) {
+            libraryShuffleFabExpanded = expanded;
+            return;
+        }
+        if (libraryShuffleFabExpanded == expanded && animate) {
+            return;
+        }
+        if (libraryShuffleFabAnimator != null) {
+            libraryShuffleFabAnimator.cancel();
+            libraryShuffleFabAnimator = null;
+        }
+        float target = expanded ? 1f : 0f;
+        libraryShuffleFabExpanded = expanded;
+        if (!animate) {
+            applyLibraryShuffleFabProgress(target);
+            updateLibraryShuffleFabLayout(mainNavigationInset);
+            return;
+        }
+        int currentWidth = libraryShuffleFab.getWidth() > 0
+                ? libraryShuffleFab.getWidth()
+                : dp(expanded ? LIBRARY_SHUFFLE_FAB_COLLAPSED_WIDTH_DP : LIBRARY_SHUFFLE_FAB_EXPANDED_WIDTH_DP);
+        int collapsedWidth = dp(LIBRARY_SHUFFLE_FAB_COLLAPSED_WIDTH_DP);
+        int expandedWidth = dp(LIBRARY_SHUFFLE_FAB_EXPANDED_WIDTH_DP);
+        float start = (currentWidth - collapsedWidth) / (float) Math.max(1, expandedWidth - collapsedWidth);
+        start = Math.max(0f, Math.min(1f, start));
+        libraryShuffleFabAnimator = ValueAnimator.ofFloat(start, target);
+        libraryShuffleFabAnimator.setDuration(220L);
+        libraryShuffleFabAnimator.setInterpolator(new DecelerateInterpolator());
+        libraryShuffleFabAnimator.addUpdateListener(animator -> applyLibraryShuffleFabProgress((float) animator.getAnimatedValue()));
+        libraryShuffleFabAnimator.start();
+    }
+
+    private void applyLibraryShuffleFabProgress(float progress) {
+        if (libraryShuffleFab == null) {
+            return;
+        }
+        float clamped = Math.max(0f, Math.min(1f, progress));
+        int collapsedWidth = dp(LIBRARY_SHUFFLE_FAB_COLLAPSED_WIDTH_DP);
+        int expandedWidth = dp(LIBRARY_SHUFFLE_FAB_EXPANDED_WIDTH_DP);
+        ViewGroup.LayoutParams params = libraryShuffleFab.getLayoutParams();
+        if (params == null) {
+            params = libraryShuffleFabLayoutParams(mainNavigationInset);
+        }
+        params.width = Math.round(collapsedWidth + (expandedWidth - collapsedWidth) * clamped);
+        params.height = dp(LIBRARY_SHUFFLE_FAB_HEIGHT_DP);
+        libraryShuffleFab.setLayoutParams(params);
+        if (libraryShuffleFabLabel != null) {
+            libraryShuffleFabLabel.setAlpha(clamped);
+            libraryShuffleFabLabel.setVisibility(clamped <= 0.02f ? View.INVISIBLE : View.VISIBLE);
         }
     }
 
@@ -5138,6 +5293,38 @@ public final class MainActivity extends Activity {
         startPlayback(PlaybackService.playQueueIntent(this, station, queue, startIndex));
     }
 
+    private void playAllLibraryShuffle() {
+        List<DeviceAudioTrack> queue = cleanTrackList(libraryTracks);
+        if (queue.isEmpty()) {
+            toast("재생할 음악이 없습니다.");
+            return;
+        }
+        Collections.shuffle(queue);
+        MusicStation station = new MusicStation(
+                "library-all-shuffle",
+                "전체 음악",
+                "내 음악",
+                "모두 셔플",
+                queue.size() + "곡 재생",
+                MusicStation.MixType.ALL,
+                "",
+                color(R.color.ytet_accent)
+        );
+        activeStation = station;
+        activeQueuePreview = new ArrayList<>(queue);
+        applyPreviewTrackTheme(queue.get(0));
+        playbackHasQueue = true;
+        playbackPlaying = false;
+        playbackPreparing = true;
+        playbackWillPlay = true;
+        playbackError = false;
+        playbackTitle = station.title();
+        playbackMeta = station.subtitle();
+        setStreamingStatus("준비 중: " + station.title());
+        updateNowPlayingBar();
+        startPlayback(PlaybackService.playQueueIntent(this, station, queue, 0));
+    }
+
     private int indexOfTrack(List<DeviceAudioTrack> tracks, DeviceAudioTrack target) {
         if (tracks == null || target == null) {
             return -1;
@@ -5892,6 +6079,31 @@ public final class MainActivity extends Activity {
         if (libraryRecyclerView != null) {
             libraryRecyclerView.setPadding(0, 0, 0, bottomChromeBaseHeight() + navigationInset + dp(8));
         }
+        updateLibraryShuffleFabLayout(navigationInset);
+    }
+
+    private FrameLayout.LayoutParams libraryShuffleFabLayoutParams(int navigationInset) {
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
+                dp(libraryShuffleFabExpanded
+                        ? LIBRARY_SHUFFLE_FAB_EXPANDED_WIDTH_DP
+                        : LIBRARY_SHUFFLE_FAB_COLLAPSED_WIDTH_DP),
+                dp(LIBRARY_SHUFFLE_FAB_HEIGHT_DP),
+                Gravity.BOTTOM | Gravity.END
+        );
+        params.setMargins(0, 0, dp(22), bottomChromeBaseHeight() + navigationInset + dp(24));
+        return params;
+    }
+
+    private void updateLibraryShuffleFabLayout(int navigationInset) {
+        if (libraryShuffleFab == null) {
+            return;
+        }
+        FrameLayout.LayoutParams params = libraryShuffleFabLayoutParams(navigationInset);
+        ViewGroup.LayoutParams current = libraryShuffleFab.getLayoutParams();
+        if (current instanceof FrameLayout.LayoutParams) {
+            params.width = current.width;
+        }
+        libraryShuffleFab.setLayoutParams(params);
     }
 
     private int bottomChromeBaseHeight() {
