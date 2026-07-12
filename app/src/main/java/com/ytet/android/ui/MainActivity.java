@@ -6688,6 +6688,9 @@ public final class MainActivity extends Activity {
         if (playerDialog == null) {
             playerDialog = new Dialog(this, R.style.Theme_Ytet_PlayerDialog);
             playerDialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+            playerDialog.setCancelable(false);
+            playerDialog.setCanceledOnTouchOutside(false);
+            registerPlayerDialogBackHandlers(playerDialog);
             playerDialog.setOnDismissListener(dialog -> {
                 expandedPlaybackSeekBar = null;
                 expandedPlaybackProgressText = null;
@@ -6705,6 +6708,34 @@ public final class MainActivity extends Activity {
         playerDialog.show();
         applyExpandedPlayerWindow(playerDialog.getWindow());
         animateExpandedPlayerOpen(content);
+    }
+
+    private void registerPlayerDialogBackHandlers(Dialog dialog) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerPlayerDialogBackCallback(dialog);
+        }
+        registerPlayerDialogBackKeyListener(dialog);
+    }
+
+    @TargetApi(Build.VERSION_CODES.TIRAMISU)
+    private void registerPlayerDialogBackCallback(Dialog dialog) {
+        dialog.getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                OnBackInvokedDispatcher.PRIORITY_OVERLAY,
+                this::dismissExpandedPlayerAnimated
+        );
+    }
+
+    @SuppressLint("GestureBackNavigation")
+    private void registerPlayerDialogBackKeyListener(Dialog dialog) {
+        dialog.setOnKeyListener((target, keyCode, event) -> {
+            if (keyCode != KeyEvent.KEYCODE_BACK) {
+                return false;
+            }
+            if (event.getAction() == KeyEvent.ACTION_UP) {
+                dismissExpandedPlayerAnimated();
+            }
+            return true;
+        });
     }
 
     private void animateExpandedPlayerOpen(View content) {
@@ -7476,11 +7507,7 @@ public final class MainActivity extends Activity {
             queueDialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
             queueDialog.setCancelable(false);
             queueDialog.setCanceledOnTouchOutside(false);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                registerQueueDialogBackCallback(queueDialog);
-            } else {
-                registerLegacyQueueDialogBackKeyListener(queueDialog);
-            }
+            registerQueueDialogBackHandlers(queueDialog);
             queueDialog.setOnDismissListener(dialog -> {
                 queueSheetLayout = null;
                 queueRecyclerAdapter = null;
@@ -7510,16 +7537,23 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private void registerQueueDialogBackHandlers(Dialog dialog) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerQueueDialogBackCallback(dialog);
+        }
+        registerQueueDialogBackKeyListener(dialog);
+    }
+
     @TargetApi(Build.VERSION_CODES.TIRAMISU)
     private void registerQueueDialogBackCallback(Dialog dialog) {
         dialog.getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
-                OnBackInvokedDispatcher.PRIORITY_DEFAULT,
+                OnBackInvokedDispatcher.PRIORITY_OVERLAY,
                 this::collapseOrDismissQueueDialog
         );
     }
 
     @SuppressLint("GestureBackNavigation")
-    private void registerLegacyQueueDialogBackKeyListener(Dialog dialog) {
+    private void registerQueueDialogBackKeyListener(Dialog dialog) {
         dialog.setOnKeyListener((target, keyCode, event) -> {
             if (keyCode != KeyEvent.KEYCODE_BACK) {
                 return false;
