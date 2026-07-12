@@ -5325,18 +5325,33 @@ public final class MainActivity extends Activity {
         );
         activeStation = station;
         activeQueuePreview = new ArrayList<>(queue);
-        applyPreviewTrackTheme(queue.get(0));
+        DeviceAudioTrack firstTrack = queue.get(0);
+        applyPreviewTrackTheme(firstTrack);
         playbackHasQueue = true;
         playbackPlaying = false;
         playbackPreparing = true;
         playbackWillPlay = true;
         playbackError = false;
-        playbackTitle = station.title();
-        playbackMeta = station.subtitle();
-        setStreamingStatus("준비 중: " + station.title());
+        playbackTitle = firstTrack.title();
+        playbackMeta = firstTrack.artist() + " · " + firstTrack.album();
+        setStreamingStatus("준비 중: " + firstTrack.title());
         updateNowPlayingBar();
-        startPlayback(PlaybackService.playQueueIntent(this, station, queue, 0));
         showExpandedPlayer();
+        startPlaybackAfterExpandedPlayerFrame(station, queue, 0);
+    }
+
+    private void startPlaybackAfterExpandedPlayerFrame(
+            MusicStation station,
+            List<DeviceAudioTrack> queue,
+            int startIndex
+    ) {
+        Runnable start = () -> startPlayback(PlaybackService.playQueueIntent(this, station, queue, startIndex));
+        View content = expandedPlayerContentView();
+        if (content == null) {
+            mainHandler.post(start);
+            return;
+        }
+        content.postOnAnimation(() -> content.postOnAnimation(start));
     }
 
     private int indexOfTrack(List<DeviceAudioTrack> tracks, DeviceAudioTrack target) {
@@ -6592,10 +6607,12 @@ public final class MainActivity extends Activity {
         playerDragDismissActive = true;
         suppressPlayerDragDismiss = true;
         content.animate().cancel();
+        content.setLayerType(View.LAYER_TYPE_HARDWARE, null);
         content.setAlpha(0.82f);
         content.setTranslationY(getResources().getDisplayMetrics().heightPixels);
         content.post(() -> {
             if (playerDialog == null || !playerDialog.isShowing()) {
+                content.setLayerType(View.LAYER_TYPE_NONE, null);
                 playerDragDismissActive = false;
                 suppressPlayerDragDismiss = false;
                 return;
@@ -6610,6 +6627,7 @@ public final class MainActivity extends Activity {
                     .withEndAction(() -> {
                         content.setTranslationY(0f);
                         content.setAlpha(1f);
+                        content.setLayerType(View.LAYER_TYPE_NONE, null);
                         playerDragDismissActive = false;
                         suppressPlayerDragDismiss = false;
                     })
@@ -6633,12 +6651,14 @@ public final class MainActivity extends Activity {
         playerDragDismissActive = true;
         suppressPlayerDragDismiss = true;
         content.animate().cancel();
+        content.setLayerType(View.LAYER_TYPE_HARDWARE, null);
         content.animate()
                 .translationY(Math.max(content.getHeight(), dp(320)))
                 .alpha(0.82f)
                 .setDuration(220L)
                 .setInterpolator(new DecelerateInterpolator())
                 .withEndAction(() -> {
+                    content.setLayerType(View.LAYER_TYPE_NONE, null);
                     if (playerDialog != null) {
                         playerDialog.dismiss();
                     }
@@ -10596,6 +10616,7 @@ public final class MainActivity extends Activity {
         private boolean draggingDown;
         private boolean draggingQueueUp;
         private boolean playerSurfaceStyle;
+        private boolean dragRounded;
 
         DragDismissLayout(Context context) {
             super(context);
@@ -10680,6 +10701,7 @@ public final class MainActivity extends Activity {
             draggingQueueUp = false;
             playerDragDismissActive = false;
             animate().cancel();
+            setLayerType(View.LAYER_TYPE_NONE, null);
             setAlpha(1f);
             setTranslationY(0f);
             setDragRounded(false);
@@ -10718,6 +10740,7 @@ public final class MainActivity extends Activity {
             if (getParent() != null) {
                 getParent().requestDisallowInterceptTouchEvent(true);
             }
+            setLayerType(View.LAYER_TYPE_HARDWARE, null);
             setDragRounded(true);
             updateDragPosition(event);
         }
@@ -10736,7 +10759,6 @@ public final class MainActivity extends Activity {
             float translation = Math.max(0f, Math.min(getHeight(), dy));
             setTranslationY(translation);
             setAlpha(1f - Math.min(0.18f, translation / Math.max(1f, getHeight()) * 0.18f));
-            setDragRounded(translation > 0f);
         }
 
         private void finishDragging(MotionEvent event, boolean canceled) {
@@ -10782,6 +10804,7 @@ public final class MainActivity extends Activity {
                         playerDragDismissActive = false;
                         suppressPlayerDragDismiss = false;
                         setDragRounded(false);
+                        setLayerType(View.LAYER_TYPE_NONE, null);
                     })
                     .start();
         }
@@ -10802,6 +10825,7 @@ public final class MainActivity extends Activity {
                         setTranslationY(0f);
                         setAlpha(1f);
                         setDragRounded(false);
+                        setLayerType(View.LAYER_TYPE_NONE, null);
                         playerDragDismissActive = false;
                         suppressPlayerDragDismiss = false;
                         dismissTopPlayerSurface();
@@ -10855,6 +10879,10 @@ public final class MainActivity extends Activity {
         }
 
         private void setDragRounded(boolean rounded) {
+            if (dragRounded == rounded) {
+                return;
+            }
+            dragRounded = rounded;
             if (playerSurfaceStyle) {
                 setBackground(expandedPlayerBackground(rounded));
                 setClipToOutline(rounded);
