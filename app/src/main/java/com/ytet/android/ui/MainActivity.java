@@ -327,6 +327,7 @@ public final class MainActivity extends Activity {
     private boolean suppressPlayerDragDismiss;
     private boolean playerDragDismissActive;
     private boolean playerDismissAnimating;
+    private int libraryShufflePlaybackRequestId;
     private String extractorUrl = "";
     private MediaType extractorMediaType = MediaType.AUDIO;
     private String extractorOption = AudioFormat.M4A.value();
@@ -5307,25 +5308,77 @@ public final class MainActivity extends Activity {
     }
 
     private void playAllLibraryShuffle() {
-        List<DeviceAudioTrack> queue = cleanTrackList(libraryTracks);
-        if (queue.isEmpty()) {
+        if (libraryTracks.isEmpty()) {
             toast("재생할 음악이 없습니다.");
             return;
         }
-        Collections.shuffle(queue);
+        int requestId = ++libraryShufflePlaybackRequestId;
         MusicStation station = new MusicStation(
                 "library-all-shuffle",
                 "전체 음악",
                 "내 음악",
                 "모두 셔플",
-                queue.size() + "곡 재생",
+                libraryTracks.size() + "곡 재생",
                 MusicStation.MixType.ALL,
                 "",
                 color(R.color.ytet_accent)
         );
         activeStation = station;
-        activeQueuePreview = new ArrayList<>(queue);
+        activeQueuePreview = new ArrayList<>();
+        playbackHasQueue = true;
+        playbackPlaying = false;
+        playbackPreparing = true;
+        playbackWillPlay = true;
+        playbackError = false;
+        playbackTrackId = -1L;
+        playbackArtist = station.subtitle();
+        playbackAlbum = "";
+        playbackAlbumArtUri = "";
+        playbackQueueIndex = -1;
+        playbackQueueSize = libraryTracks.size();
+        playbackThemeAlbumArtUri = "";
+        playbackThemeLoadingUri = "";
+        playbackThemeColor = fallbackPlayerThemeColor(false);
+        playbackTitle = station.title();
+        playbackMeta = "셔플 준비 중";
+        setStreamingStatus("셔플 준비 중");
+        updateNowPlayingBar();
+        showExpandedPlayer();
+        prepareAllLibraryShuffleAfterExpandedPlayerFrame(requestId, station);
+    }
+
+    private void prepareAllLibraryShuffleAfterExpandedPlayerFrame(int requestId, MusicStation station) {
+        Runnable prepare = () -> libraryExecutor.execute(() -> {
+            List<DeviceAudioTrack> queue = cleanTrackList(libraryTracks);
+            Collections.shuffle(queue);
+            runOnUiThread(() -> startPreparedAllLibraryShuffle(requestId, station, queue));
+        });
+        View content = expandedPlayerContentView();
+        if (content == null) {
+            mainHandler.post(prepare);
+            return;
+        }
+        content.postOnAnimation(() -> content.postOnAnimation(prepare));
+    }
+
+    private void startPreparedAllLibraryShuffle(
+            int requestId,
+            MusicStation station,
+            List<DeviceAudioTrack> queue
+    ) {
+        if (requestId != libraryShufflePlaybackRequestId || queue.isEmpty()) {
+            return;
+        }
+        if (playerDialog != null && playerDialog.isShowing() && playerDragDismissActive) {
+            mainHandler.postDelayed(
+                    () -> startPreparedAllLibraryShuffle(requestId, station, queue),
+                    260L
+            );
+            return;
+        }
         DeviceAudioTrack firstTrack = queue.get(0);
+        activeStation = station;
+        activeQueuePreview = new ArrayList<>(queue);
         applyPreviewTrackTheme(firstTrack);
         playbackHasQueue = true;
         playbackPlaying = false;
@@ -5334,24 +5387,36 @@ public final class MainActivity extends Activity {
         playbackError = false;
         playbackTitle = firstTrack.title();
         playbackMeta = firstTrack.artist() + " · " + firstTrack.album();
+        playbackQueueIndex = 0;
+        playbackQueueSize = queue.size();
         setStreamingStatus("준비 중: " + firstTrack.title());
         updateNowPlayingBar();
-        showExpandedPlayer();
-        startPlaybackAfterExpandedPlayerFrame(station, queue, 0);
+        updateExpandedPlayerAfterOpen();
+        startPlaybackAfterExpandedPlayerOpen(station, queue, 0);
     }
 
-    private void startPlaybackAfterExpandedPlayerFrame(
+    private void updateExpandedPlayerAfterOpen() {
+        if (playerDialog == null || !playerDialog.isShowing()) {
+            return;
+        }
+        if (playerDragDismissActive) {
+            mainHandler.postDelayed(this::updateExpandedPlayer, 260L);
+        } else {
+            updateExpandedPlayer();
+        }
+    }
+
+    private void startPlaybackAfterExpandedPlayerOpen(
             MusicStation station,
             List<DeviceAudioTrack> queue,
             int startIndex
     ) {
         Runnable start = () -> startPlayback(PlaybackService.playQueueIntent(this, station, queue, startIndex));
-        View content = expandedPlayerContentView();
-        if (content == null) {
+        if (playerDialog != null && playerDialog.isShowing() && playerDragDismissActive) {
+            mainHandler.postDelayed(start, 260L);
+        } else {
             mainHandler.post(start);
-            return;
         }
-        content.postOnAnimation(() -> content.postOnAnimation(start));
     }
 
     private int indexOfTrack(List<DeviceAudioTrack> tracks, DeviceAudioTrack target) {
