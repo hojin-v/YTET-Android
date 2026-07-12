@@ -118,6 +118,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Random;
 import java.util.Set;
 import java.io.File;
 import java.io.InputStream;
@@ -328,6 +329,7 @@ public final class MainActivity extends Activity {
     private boolean playerDragDismissActive;
     private boolean playerDismissAnimating;
     private int libraryShufflePlaybackRequestId;
+    private final Random libraryShuffleRandom = new Random();
     private String extractorUrl = "";
     private MediaType extractorMediaType = MediaType.AUDIO;
     private String extractorOption = AudioFormat.M4A.value();
@@ -5308,17 +5310,19 @@ public final class MainActivity extends Activity {
     }
 
     private void playAllLibraryShuffle() {
-        if (libraryTracks.isEmpty()) {
+        List<DeviceAudioTrack> sourceTracks = cleanTrackList(libraryTracks);
+        if (sourceTracks.isEmpty()) {
             toast("재생할 음악이 없습니다.");
             return;
         }
         int requestId = ++libraryShufflePlaybackRequestId;
+        DeviceAudioTrack firstTrack = sourceTracks.get(libraryShuffleRandom.nextInt(sourceTracks.size()));
         MusicStation station = new MusicStation(
                 "library-all-shuffle",
                 "전체 음악",
                 "내 음악",
                 "모두 셔플",
-                libraryTracks.size() + "곡 재생",
+                sourceTracks.size() + "곡 재생",
                 MusicStation.MixType.ALL,
                 "",
                 color(R.color.ytet_accent)
@@ -5330,27 +5334,33 @@ public final class MainActivity extends Activity {
         playbackPreparing = true;
         playbackWillPlay = true;
         playbackError = false;
-        playbackTrackId = -1L;
-        playbackArtist = station.subtitle();
-        playbackAlbum = "";
+        playbackTrackId = firstTrack.id();
+        playbackArtist = valueOrDefault(firstTrack.artist(), "알 수 없는 아티스트");
+        playbackAlbum = valueOrDefault(firstTrack.album(), "앨범 정보 없음");
         playbackAlbumArtUri = "";
         playbackQueueIndex = -1;
-        playbackQueueSize = libraryTracks.size();
+        playbackQueueSize = sourceTracks.size();
         playbackThemeAlbumArtUri = "";
         playbackThemeLoadingUri = "";
         playbackThemeColor = fallbackPlayerThemeColor(false);
-        playbackTitle = station.title();
-        playbackMeta = "셔플 준비 중";
-        setStreamingStatus("셔플 준비 중");
+        playbackTitle = firstTrack.title();
+        playbackMeta = playbackArtist + " · " + playbackAlbum;
+        setStreamingStatus("준비 중: " + firstTrack.title());
         updateNowPlayingBar();
         showExpandedPlayer();
-        prepareAllLibraryShuffleAfterExpandedPlayerFrame(requestId, station);
+        prepareAllLibraryShuffleAfterExpandedPlayerFrame(requestId, station, sourceTracks, firstTrack);
     }
 
-    private void prepareAllLibraryShuffleAfterExpandedPlayerFrame(int requestId, MusicStation station) {
+    private void prepareAllLibraryShuffleAfterExpandedPlayerFrame(
+            int requestId,
+            MusicStation station,
+            List<DeviceAudioTrack> sourceTracks,
+            DeviceAudioTrack firstTrack
+    ) {
         Runnable prepare = () -> libraryExecutor.execute(() -> {
-            List<DeviceAudioTrack> queue = cleanTrackList(libraryTracks);
+            List<DeviceAudioTrack> queue = cleanTrackList(sourceTracks);
             Collections.shuffle(queue);
+            moveTrackToFront(queue, firstTrack);
             runOnUiThread(() -> startPreparedAllLibraryShuffle(requestId, station, queue));
         });
         View content = expandedPlayerContentView();
@@ -5359,6 +5369,22 @@ public final class MainActivity extends Activity {
             return;
         }
         content.postOnAnimation(() -> content.postOnAnimation(prepare));
+    }
+
+    private void moveTrackToFront(List<DeviceAudioTrack> queue, DeviceAudioTrack firstTrack) {
+        if (queue == null || queue.isEmpty() || firstTrack == null) {
+            return;
+        }
+        for (int index = 0; index < queue.size(); index++) {
+            DeviceAudioTrack track = queue.get(index);
+            if (track != null && track.id() == firstTrack.id()) {
+                if (index > 0) {
+                    queue.remove(index);
+                    queue.add(0, track);
+                }
+                return;
+            }
+        }
     }
 
     private void startPreparedAllLibraryShuffle(
