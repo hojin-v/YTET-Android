@@ -6796,8 +6796,8 @@ public final class MainActivity extends Activity {
         content.animate()
                 .translationY(Math.max(content.getHeight(), dp(320)))
                 .alpha(0.82f)
-                .setDuration(220L)
-                .setInterpolator(new DecelerateInterpolator())
+                .setDuration(340L)
+                .setInterpolator(new DecelerateInterpolator(1.35f))
                 .withEndAction(() -> {
                     content.setLayerType(View.LAYER_TYPE_NONE, null);
                     if (playerDialog != null) {
