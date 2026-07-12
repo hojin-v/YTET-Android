@@ -174,10 +174,10 @@ public final class MainActivity extends Activity {
     private static final int STREAM_DETAIL_PREFETCH_COUNT = 20;
     private static final int STREAM_PLAYBACK_PREFETCH_RADIUS = 3;
     private static final int LIBRARY_SHUFFLE_FAB_COLLAPSED_WIDTH_DP = 52;
-    private static final int LIBRARY_SHUFFLE_FAB_EXPANDED_WIDTH_DP = 136;
+    private static final int LIBRARY_SHUFFLE_FAB_EXPANDED_WIDTH_DP = 128;
     private static final int LIBRARY_SHUFFLE_FAB_HEIGHT_DP = 52;
     private static final int LIBRARY_SHUFFLE_FAB_ICON_DP = 28;
-    private static final int LIBRARY_SHUFFLE_FAB_LABEL_WIDTH_DP = 72;
+    private static final int LIBRARY_SHUFFLE_FAB_LABEL_WIDTH_DP = 68;
     private static final String[] SUPPORTED_VIDEO_URL_MARKERS = {
             "youtube.com/",
             "youtu.be/",
@@ -2378,8 +2378,9 @@ public final class MainActivity extends Activity {
         params.width = Math.round(collapsedWidth + (expandedWidth - collapsedWidth) * clamped);
         params.height = dp(LIBRARY_SHUFFLE_FAB_HEIGHT_DP);
         libraryShuffleFab.setLayoutParams(params);
-        int padding = Math.round(dp(12) + dp(2) * clamped);
-        libraryShuffleFab.setPadding(padding, 0, padding, 0);
+        int leftPadding = Math.round(dp(12) + dp(2) * clamped);
+        int rightPadding = Math.round(dp(12) - dp(4) * clamped);
+        libraryShuffleFab.setPadding(leftPadding, 0, rightPadding, 0);
         if (libraryShuffleFabLabel != null) {
             LinearLayout.LayoutParams labelParams = (LinearLayout.LayoutParams) libraryShuffleFabLabel.getLayoutParams();
             labelParams.width = Math.round(dp(LIBRARY_SHUFFLE_FAB_LABEL_WIDTH_DP) * clamped);
@@ -5335,6 +5336,7 @@ public final class MainActivity extends Activity {
         setStreamingStatus("준비 중: " + station.title());
         updateNowPlayingBar();
         startPlayback(PlaybackService.playQueueIntent(this, station, queue, 0));
+        showExpandedPlayer();
     }
 
     private int indexOfTrack(List<DeviceAudioTrack> tracks, DeviceAudioTrack target) {
