@@ -39,20 +39,6 @@ public final class OnlineStreamCache {
         return loadDisplaySections(cacheFile(context), channels, displayCount);
     }
 
-    /**
-     * Every cached video of one channel in channel order, newest known upload first.
-     *
-     * <p>Unlike {@link #loadDisplaySections} this keeps the harvested ordering instead of picking a
-     * varied sample, so the channel detail screen can sort the real list.</p>
-     */
-    public static List<OnlineStreamVideo> loadChannelVideos(
-            Context context,
-            OnlineStreamChannel channel,
-            int limit
-    ) throws Exception {
-        return loadChannelVideos(cacheFile(context), channel, limit);
-    }
-
     public static void mergeSections(Context context, List<OnlineStreamSection> sections) throws Exception {
         mergeSections(cacheFile(context), sections);
     }
@@ -106,9 +92,10 @@ public final class OnlineStreamCache {
                 continue;
             }
             List<OnlineStreamVideo> videos = new ArrayList<>();
-            for (CachedVideo video : selected) {
+            for (int index = 0; index < selected.size(); index++) {
+                CachedVideo video = selected.get(index);
                 video.lastDisplayedAt = now;
-                videos.add(video.toOnlineStreamVideo(channel.title()));
+                videos.add(video.toOnlineStreamVideo(index, channel.title()));
             }
             result.add(new OnlineStreamSection(
                     channel.id(),
@@ -123,48 +110,6 @@ public final class OnlineStreamCache {
         } catch (IOException ignored) {
         }
         return result;
-    }
-
-    static List<OnlineStreamVideo> loadChannelVideos(
-            File cacheFile,
-            OnlineStreamChannel channel,
-            int limit
-    ) throws Exception {
-        List<OnlineStreamVideo> videos = new ArrayList<>();
-        if (channel == null) {
-            return videos;
-        }
-        CachedChannel cached = readState(cacheFile).channels.get(channel.id());
-        if (cached == null) {
-            return videos;
-        }
-        List<CachedVideo> ordered = new ArrayList<>();
-        Set<String> seen = new HashSet<>();
-        for (CachedVideo video : cached.videos) {
-            String key = video.key();
-            if (!key.isEmpty() && seen.add(key)) {
-                ordered.add(video);
-            }
-        }
-        ordered.sort(OnlineStreamCache::compareChannelOrder);
-        int max = limit <= 0 ? ordered.size() : Math.min(limit, ordered.size());
-        for (int index = 0; index < max; index++) {
-            videos.add(ordered.get(index).toOnlineStreamVideo(channel.title()));
-        }
-        return videos;
-    }
-
-    private static int compareChannelOrder(CachedVideo first, CachedVideo second) {
-        int missingDate = Integer.compare(first.publishedRank > 0L ? 0 : 1, second.publishedRank > 0L ? 0 : 1);
-        if (missingDate != 0) {
-            return missingDate;
-        }
-        int publishedCompare = Long.compare(second.publishedRank, first.publishedRank);
-        if (publishedCompare != 0) {
-            return publishedCompare;
-        }
-        int sourceCompare = Integer.compare(first.sourceIndex, second.sourceIndex);
-        return sourceCompare != 0 ? sourceCompare : first.key().compareTo(second.key());
     }
 
     static void mergeSections(File cacheFile, List<OnlineStreamSection> sections) throws Exception {
@@ -204,8 +149,8 @@ public final class OnlineStreamCache {
         }
         List<CachedVideo> selected = selectVideos(cached, displayCount, now, random);
         List<OnlineStreamVideo> result = new ArrayList<>();
-        for (CachedVideo video : selected) {
-            result.add(video.toOnlineStreamVideo(""));
+        for (int index = 0; index < selected.size(); index++) {
+            result.add(selected.get(index).toOnlineStreamVideo(index, ""));
         }
         return result;
     }
@@ -306,7 +251,8 @@ public final class OnlineStreamCache {
         addVideos(selected, selectedKeys, popular, popularQuota);
 
         List<CachedVideo> latest = preferredPool(candidates, now);
-        latest.sort(OnlineStreamCache::compareChannelOrder);
+        latest.removeIf(video -> video.publishedRank <= 0L);
+        latest.sort((first, second) -> Long.compare(second.publishedRank, first.publishedRank));
         addVideos(selected, selectedKeys, latest, latestQuota);
 
         List<CachedVideo> rest = new ArrayList<>(candidates);
@@ -556,13 +502,12 @@ public final class OnlineStreamCache {
             durationMs = positive(incoming.durationMs, durationMs);
             viewCount = positive(incoming.viewCount, viewCount);
             publishedRank = positive(incoming.publishedRank, publishedRank);
-            // A fresh harvest carries the current channel position, including 0 for the newest upload.
-            sourceIndex = Math.max(0, incoming.sourceIndex);
+            sourceIndex = positive(incoming.sourceIndex, sourceIndex);
             popularRank = positive(incoming.popularRank, popularRank);
             lastSeenAt = now;
         }
 
-        private OnlineStreamVideo toOnlineStreamVideo(String fallbackChannelTitle) {
+        private OnlineStreamVideo toOnlineStreamVideo(int index, String fallbackChannelTitle) {
             return new OnlineStreamVideo(
                     id,
                     title,
@@ -572,7 +517,7 @@ public final class OnlineStreamCache {
                     durationMs,
                     viewCount,
                     publishedRank,
-                    sourceIndex,
+                    index,
                     popularRank
             );
         }

@@ -43,7 +43,6 @@ import android.provider.Settings;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.TextUtils;
-import android.util.LruCache;
 import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.KeyEvent;
@@ -174,11 +173,6 @@ public final class MainActivity extends Activity {
     private static final int STREAM_SECTION_PREFETCH_TOTAL = 24;
     private static final int STREAM_SECTION_PREFETCH_PER_CHANNEL = 4;
     private static final int STREAM_DETAIL_PREFETCH_COUNT = 20;
-    private static final int STREAM_CHANNEL_POOL_COUNT = 300;
-    private static final int STREAM_CHANNEL_DETAIL_COUNT = 60;
-    private static final int STREAM_CHANNEL_REFRESH_COUNT = 80;
-    private static final int STREAM_METADATA_BATCH_COUNT = 20;
-    private static final int REMOTE_IMAGE_CACHE_BYTES = 16 * 1024 * 1024;
     private static final int STREAM_PLAYBACK_PREFETCH_RADIUS = 3;
     private static final int LIBRARY_SHUFFLE_FAB_COLLAPSED_WIDTH_DP = 52;
     private static final int LIBRARY_SHUFFLE_FAB_EXPANDED_WIDTH_DP = 128;
@@ -197,12 +191,6 @@ public final class MainActivity extends Activity {
     private final ExecutorService streamExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService streamResolveExecutor = Executors.newFixedThreadPool(2);
     private final ExecutorService imageExecutor = Executors.newFixedThreadPool(3);
-    private final LruCache<String, Bitmap> remoteImageCache = new LruCache<String, Bitmap>(REMOTE_IMAGE_CACHE_BYTES) {
-        @Override
-        protected int sizeOf(String key, Bitmap value) {
-            return value.getByteCount();
-        }
-    };
     private final ExecutorService updateExecutor = Executors.newSingleThreadExecutor();
     private final Set<String> streamResolvePrefetchUrls = Collections.newSetFromMap(new ConcurrentHashMap<>());
     private final DeviceMusicLibrary deviceMusicLibrary = new DeviceMusicLibrary();
@@ -248,17 +236,6 @@ public final class MainActivity extends Activity {
     private float nowPlayingSwipeStartY;
     private boolean nowPlayingSwipeTracking;
     private boolean nowPlayingSwipeConsumed;
-    private boolean nowPlayingLongPressFired;
-    private final Runnable nowPlayingLongPressRunnable = () -> {
-        if (!nowPlayingSwipeTracking || nowPlayingSwipeConsumed) {
-            return;
-        }
-        nowPlayingLongPressFired = true;
-        if (nowPlayingInfoFrame != null) {
-            nowPlayingInfoFrame.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
-        }
-        showNowPlayingActions();
-    };
     private TabItem homeTabButton;
     private TabItem libraryTabButton;
     private TabItem extractorTabButton;
@@ -367,12 +344,9 @@ public final class MainActivity extends Activity {
     private List<DeviceAudioTrack> homeTracks = new ArrayList<>();
     private List<OnlineStreamSection> streamSections = new ArrayList<>();
     private OnlineStreamSection focusedStreamSection;
-    private List<OnlineStreamVideo> focusedStreamVideos = new ArrayList<>();
-    private String focusedStreamVideosChannelId = "";
-    private final Set<String> streamChannelRefreshingIds = new HashSet<>();
-    private StreamVideoSort streamVideoSort = StreamVideoSort.LATEST;
+    private StreamVideoSort streamVideoSort = StreamVideoSort.POPULAR;
     private final Set<String> streamMetadataLoadingChannelIds = new HashSet<>();
-    private final Set<String> streamMetadataRequestedUrls = new HashSet<>();
+    private final Set<String> streamMetadataLoadedChannelIds = new HashSet<>();
     private boolean libraryLoaded;
     private boolean libraryLoading;
     private String libraryStatus = "기기 음악 권한을 허용하면 앨범과 아티스트를 정리합니다.";
@@ -892,7 +866,6 @@ public final class MainActivity extends Activity {
         FrameLayout bar = new FrameLayout(this);
         bar.setBackground(nowPlayingBarBackground(true));
         bar.setOnClickListener(view -> showExpandedPlayer());
-        registerNowPlayingInfoTarget(bar);
 
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
@@ -1465,109 +1438,16 @@ public final class MainActivity extends Activity {
         List<OnlineStreamVideo> videos = section.videos();
         int previewCount = Math.min(3, videos.size());
         for (int index = 0; index < previewCount; index++) {
-            int startIndex = index;
-            panel.addView(
-                    streamVideoRow(section, videos.get(index), () -> playOnlineStream(section, videos, startIndex)),
-                    marginBottom(index == previewCount - 1 ? 0 : 8)
-            );
+            panel.addView(streamVideoRow(section, videos.get(index), index), marginBottom(index == previewCount - 1 ? 0 : 8));
         }
         return panel;
     }
 
     private void showStreamSectionDetail(OnlineStreamSection section) {
         focusedStreamSection = section;
-        streamVideoSort = StreamVideoSort.LATEST;
-        if (section == null || !TextUtils.equals(focusedStreamVideosChannelId, section.channelId())) {
-            focusedStreamVideos = section == null ? new ArrayList<>() : section.videos();
-            focusedStreamVideosChannelId = section == null ? "" : section.channelId();
-        }
-        loadFocusedStreamChannel(section);
+        streamVideoSort = StreamVideoSort.POPULAR;
         renderCurrentTab();
         scrollHomeToTop();
-    }
-
-    /**
-     * Fills the channel screen with every cached video of that channel and then refreshes the
-     * newest uploads, so the list is the channel list instead of the varied home sample.
-     */
-    private void loadFocusedStreamChannel(OnlineStreamSection section) {
-        if (section == null || streamChannelRefreshingIds.contains(section.channelId())) {
-            return;
-        }
-        OnlineStreamChannel channel = streamChannelFor(section);
-        if (channel == null) {
-            return;
-        }
-        streamChannelRefreshingIds.add(section.channelId());
-        Context appContext = getApplicationContext();
-        String channelId = section.channelId();
-        streamExecutor.execute(() -> {
-            publishFocusedStreamVideos(channelId, cachedChannelVideos(appContext, channel));
-            try {
-                List<OnlineStreamSection> refreshed = OnlineStreamClient.loadCandidateSections(
-                        appContext,
-                        Collections.singletonList(channel),
-                        STREAM_CHANNEL_REFRESH_COUNT
-                );
-                OnlineStreamCache.mergeSections(appContext, refreshed);
-            } catch (Exception ignored) {
-                // Cached videos stay on screen when the refresh fails.
-            }
-            List<OnlineStreamVideo> videos = cachedChannelVideos(appContext, channel);
-            runOnUiThread(() -> {
-                streamChannelRefreshingIds.remove(channelId);
-                applyFocusedStreamVideos(channelId, videos);
-            });
-        });
-    }
-
-    private List<OnlineStreamVideo> cachedChannelVideos(Context appContext, OnlineStreamChannel channel) {
-        try {
-            return OnlineStreamCache.loadChannelVideos(appContext, channel, STREAM_CHANNEL_POOL_COUNT);
-        } catch (Exception exception) {
-            return new ArrayList<>();
-        }
-    }
-
-    private void publishFocusedStreamVideos(String channelId, List<OnlineStreamVideo> videos) {
-        if (videos.isEmpty()) {
-            return;
-        }
-        runOnUiThread(() -> applyFocusedStreamVideos(channelId, videos));
-    }
-
-    private void applyFocusedStreamVideos(String channelId, List<OnlineStreamVideo> videos) {
-        if (focusedStreamSection == null
-                || !TextUtils.equals(focusedStreamSection.channelId(), channelId)) {
-            return;
-        }
-        if (!videos.isEmpty()) {
-            focusedStreamVideos = new ArrayList<>(videos);
-            focusedStreamVideosChannelId = channelId;
-        }
-        if (currentTab == Tab.HOME) {
-            renderCurrentTab();
-        }
-    }
-
-    private OnlineStreamChannel streamChannelFor(OnlineStreamSection section) {
-        if (section == null || section.channelUrl().trim().isEmpty()) {
-            return null;
-        }
-        try {
-            return new OnlineStreamChannel(section.channelId(), section.channelTitle(), section.channelUrl());
-        } catch (IllegalArgumentException exception) {
-            return null;
-        }
-    }
-
-    private List<OnlineStreamVideo> focusedStreamVideos(OnlineStreamSection section) {
-        if (section != null
-                && TextUtils.equals(focusedStreamVideosChannelId, section.channelId())
-                && !focusedStreamVideos.isEmpty()) {
-            return new ArrayList<>(focusedStreamVideos);
-        }
-        return section == null ? new ArrayList<>() : section.videos();
     }
 
     private void scrollHomeToTop() {
@@ -1589,12 +1469,7 @@ public final class MainActivity extends Activity {
     }
 
     private void buildStreamSectionDetail(LinearLayout root, OnlineStreamSection section) {
-        List<OnlineStreamVideo> pool = focusedStreamVideos(section);
-        List<OnlineStreamVideo> videos = sortedStreamVideos(pool);
-        if (videos.size() > STREAM_CHANNEL_DETAIL_COUNT) {
-            videos = new ArrayList<>(videos.subList(0, STREAM_CHANNEL_DETAIL_COUNT));
-        }
-        ensureStreamSectionMetadata(section, videos);
+        ensureStreamSectionMetadata(section);
 
         LinearLayout top = new LinearLayout(this);
         top.setOrientation(LinearLayout.HORIZONTAL);
@@ -1618,19 +1493,18 @@ public final class MainActivity extends Activity {
         title.setSingleLine(true);
         title.setEllipsize(TextUtils.TruncateAt.END);
         copy.addView(title, marginBottom(4));
-        copy.addView(muted(streamChannelCountLabel(pool.size(), videos.size()), 12), matchWrap());
+        copy.addView(muted(section.videos().size() + "개 비디오", 12), matchWrap());
         hero.addView(copy, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         LinearLayout.LayoutParams sortParams = new LinearLayout.LayoutParams(dp(104), dp(44));
         sortParams.setMargins(dp(12), 0, 0, 0);
         hero.addView(streamSortDropdownButton(), sortParams);
         root.addView(hero, marginBottom(12));
 
-        if (streamChannelRefreshingIds.contains(section.channelId())) {
-            root.addView(muted("채널의 최신 영상을 불러오는 중", 12), marginBottom(10));
-        } else if (streamMetadataLoadingChannelIds.contains(section.channelId())) {
-            root.addView(muted("조회수와 업로드일 정보를 불러오는 중", 12), marginBottom(10));
+        if (streamMetadataLoadingChannelIds.contains(section.channelId())) {
+            root.addView(muted("조회수 기준 정렬 정보를 불러오는 중", 12), marginBottom(10));
         }
 
+        List<OnlineStreamVideo> videos = sortedStreamVideos(section);
         if (videos.isEmpty()) {
             LinearLayout empty = panel();
             empty.addView(label("표시할 비디오가 없습니다."), matchWrap());
@@ -1638,133 +1512,63 @@ public final class MainActivity extends Activity {
             return;
         }
         prefetchOnlineStreamVideos(videos, STREAM_DETAIL_PREFETCH_COUNT);
-        List<OnlineStreamVideo> queueVideos = videos;
         for (int index = 0; index < videos.size(); index++) {
-            int startIndex = index;
-            root.addView(
-                    streamVideoRow(section, videos.get(index), () -> playOnlineStream(section, queueVideos, startIndex)),
-                    marginBottom(index == videos.size() - 1 ? 0 : 8)
-            );
+            OnlineStreamVideo video = videos.get(index);
+            int sourceIndex = streamVideoIndex(section, video);
+            root.addView(streamVideoRow(section, video, sourceIndex), marginBottom(index == videos.size() - 1 ? 0 : 8));
         }
     }
 
-    private String streamChannelCountLabel(int poolSize, int shownSize) {
-        if (poolSize > shownSize) {
-            return shownSize + "개 표시 · 보관 " + poolSize + "개";
-        }
-        return poolSize + "개 비디오";
-    }
-
-    /**
-     * Fills in view counts and upload dates for the videos that are actually on screen.
-     *
-     * <p>Each missing video needs its own request, so this stays bounded instead of walking the
-     * whole channel pool.</p>
-     */
-    private void ensureStreamSectionMetadata(OnlineStreamSection section, List<OnlineStreamVideo> videos) {
-        if (section == null || streamMetadataLoadingChannelIds.contains(section.channelId())) {
-            return;
-        }
-        List<OnlineStreamVideo> missing = new ArrayList<>();
-        for (OnlineStreamVideo video : videos == null ? new ArrayList<OnlineStreamVideo>() : videos) {
-            boolean incomplete = video.viewCount() <= 0L || video.publishedRank() <= 0L;
-            if (incomplete && !streamMetadataRequestedUrls.contains(video.watchUrl())) {
-                missing.add(video);
-            }
-            if (missing.size() >= STREAM_METADATA_BATCH_COUNT) {
-                break;
-            }
-        }
-        if (missing.isEmpty()) {
+    private void ensureStreamSectionMetadata(OnlineStreamSection section) {
+        if (section == null
+                || streamSectionHasMetadata(section)
+                || streamMetadataLoadedChannelIds.contains(section.channelId())
+                || streamMetadataLoadingChannelIds.contains(section.channelId())) {
             return;
         }
         streamMetadataLoadingChannelIds.add(section.channelId());
-        for (OnlineStreamVideo video : missing) {
-            streamMetadataRequestedUrls.add(video.watchUrl());
-        }
-        String channelId = section.channelId();
+        List<OnlineStreamVideo> videos = section.videos();
         streamExecutor.execute(() -> {
-            List<OnlineStreamVideo> enriched;
             try {
-                enriched = OnlineStreamClient.enrichVideos(this, missing);
+                List<OnlineStreamVideo> enriched = OnlineStreamClient.enrichVideos(this, videos);
+                runOnUiThread(() -> finishStreamSectionMetadataLoad(section, enriched));
             } catch (Exception exception) {
-                enriched = new ArrayList<>();
+                runOnUiThread(() -> {
+                    streamMetadataLoadingChannelIds.remove(section.channelId());
+                    streamMetadataLoadedChannelIds.add(section.channelId());
+                    if (focusedStreamSection != null
+                            && TextUtils.equals(focusedStreamSection.channelId(), section.channelId())) {
+                        renderCurrentTab();
+                    }
+                });
             }
-            List<OnlineStreamVideo> result = enriched;
-            runOnUiThread(() -> finishStreamSectionMetadataLoad(section, channelId, result));
         });
     }
 
-    private void finishStreamSectionMetadataLoad(
-            OnlineStreamSection section,
-            String channelId,
-            List<OnlineStreamVideo> enriched
-    ) {
-        streamMetadataLoadingChannelIds.remove(channelId);
+    private void finishStreamSectionMetadataLoad(OnlineStreamSection section, List<OnlineStreamVideo> enriched) {
+        streamMetadataLoadingChannelIds.remove(section.channelId());
+        streamMetadataLoadedChannelIds.add(section.channelId());
         if (enriched == null || enriched.isEmpty()) {
-            renderCurrentTabIfStreamFocused(channelId);
             return;
         }
-        Map<String, OnlineStreamVideo> byUrl = new LinkedHashMap<>();
-        for (OnlineStreamVideo video : enriched) {
-            byUrl.put(video.watchUrl(), video);
-        }
-        focusedStreamVideos = mergedStreamVideos(focusedStreamVideos, byUrl);
-        List<OnlineStreamSection> updatedSections = new ArrayList<>();
-        for (OnlineStreamSection existing : streamSections) {
-            updatedSections.add(TextUtils.equals(existing.channelId(), channelId)
-                    ? new OnlineStreamSection(
-                    existing.channelId(),
-                    existing.channelTitle(),
-                    existing.channelUrl(),
-                    existing.avatarUrl(),
-                    mergedStreamVideos(existing.videos(), byUrl))
-                    : existing);
-        }
-        streamSections = updatedSections;
-        renderCurrentTabIfStreamFocused(channelId);
-        cacheStreamSections(Collections.singletonList(new OnlineStreamSection(
+        OnlineStreamSection updated = new OnlineStreamSection(
                 section.channelId(),
                 section.channelTitle(),
                 section.channelUrl(),
                 section.avatarUrl(),
                 enriched
-        )));
-    }
-
-    private List<OnlineStreamVideo> mergedStreamVideos(
-            List<OnlineStreamVideo> videos,
-            Map<String, OnlineStreamVideo> replacements
-    ) {
-        List<OnlineStreamVideo> merged = new ArrayList<>();
-        for (OnlineStreamVideo video : videos) {
-            OnlineStreamVideo replacement = replacements.get(video.watchUrl());
-            if (replacement == null) {
-                merged.add(video);
-                continue;
-            }
-            merged.add(new OnlineStreamVideo(
-                    replacement.id(),
-                    replacement.title(),
-                    replacement.channelTitle(),
-                    video.watchUrl(),
-                    replacement.thumbnailUrl(),
-                    replacement.durationMs(),
-                    replacement.viewCount(),
-                    replacement.publishedRank(),
-                    video.sourceIndex(),
-                    video.popularRank()
-            ));
+        );
+        List<OnlineStreamSection> updatedSections = new ArrayList<>();
+        for (OnlineStreamSection existing : streamSections) {
+            updatedSections.add(TextUtils.equals(existing.channelId(), section.channelId()) ? updated : existing);
         }
-        return merged;
-    }
-
-    private void renderCurrentTabIfStreamFocused(String channelId) {
-        if (currentTab == Tab.HOME
-                && focusedStreamSection != null
-                && TextUtils.equals(focusedStreamSection.channelId(), channelId)) {
+        streamSections = updatedSections;
+        if (focusedStreamSection != null
+                && TextUtils.equals(focusedStreamSection.channelId(), section.channelId())) {
+            focusedStreamSection = updated;
             renderCurrentTab();
         }
+        cacheStreamSections(Collections.singletonList(updated));
     }
 
     private void cacheStreamSections(List<OnlineStreamSection> sections) {
@@ -1779,6 +1583,15 @@ public final class MainActivity extends Activity {
                 // Visible metadata is already updated; cache persistence must not undo the UI state.
             }
         });
+    }
+
+    private boolean streamSectionHasMetadata(OnlineStreamSection section) {
+        for (OnlineStreamVideo video : section.videos()) {
+            if (video.viewCount() <= 0L || video.publishedRank() <= 0L) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private View streamSortDropdownButton() {
@@ -1806,9 +1619,9 @@ public final class MainActivity extends Activity {
         menu.show();
     }
 
-    private List<OnlineStreamVideo> sortedStreamVideos(List<OnlineStreamVideo> pool) {
-        List<OnlineStreamVideo> videos = pool == null ? new ArrayList<>() : new ArrayList<>(pool);
-        videos.sort(this::compareStreamVideos);
+    private List<OnlineStreamVideo> sortedStreamVideos(OnlineStreamSection section) {
+        List<OnlineStreamVideo> videos = section == null ? new ArrayList<>() : section.videos();
+        videos.sort((first, second) -> compareStreamVideos(first, second));
         return videos;
     }
 
@@ -1816,26 +1629,34 @@ public final class MainActivity extends Activity {
         if (streamVideoSort == StreamVideoSort.POPULAR) {
             return OnlineStreamVideoSort.comparePopular(first, second);
         }
-        if (streamVideoSort == StreamVideoSort.VIEWS) {
-            return OnlineStreamVideoSort.compareMostViewed(first, second);
-        }
         if (streamVideoSort == StreamVideoSort.OLDEST) {
             return OnlineStreamVideoSort.compareOldest(first, second);
         }
         return OnlineStreamVideoSort.compareLatest(first, second);
     }
 
-    private View streamVideoRow(OnlineStreamSection section, OnlineStreamVideo video, Runnable playAction) {
+    private int streamVideoIndex(OnlineStreamSection section, OnlineStreamVideo target) {
+        if (section == null || target == null) {
+            return 0;
+        }
+        List<OnlineStreamVideo> videos = section.videos();
+        for (int index = 0; index < videos.size(); index++) {
+            OnlineStreamVideo video = videos.get(index);
+            if (TextUtils.equals(video.id(), target.id())
+                    || TextUtils.equals(video.watchUrl(), target.watchUrl())) {
+                return index;
+            }
+        }
+        return Math.max(0, Math.min(videos.size() - 1, target.sourceIndex()));
+    }
+
+    private View streamVideoRow(OnlineStreamSection section, OnlineStreamVideo video, int index) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(8), dp(8), dp(8), dp(8));
         row.setBackground(rounded(color(R.color.ytet_panel_alt), 8));
-        row.setOnClickListener(view -> playAction.run());
-        row.setOnLongClickListener(view -> {
-            showStreamVideoActions(section, video);
-            return true;
-        });
+        row.setOnClickListener(view -> playOnlineStream(section, index));
         row.setOnTouchListener((view, event) -> {
             if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
                 scheduleOnlineStreamPrefetch(video);
@@ -1853,52 +1674,12 @@ public final class MainActivity extends Activity {
         title.setMaxLines(2);
         title.setEllipsize(TextUtils.TruncateAt.END);
         copy.addView(title, marginBottom(4));
-        TextView meta = muted(streamVideoMetaLabel(video), 12);
+        TextView meta = muted(video.channelTitle(), 12);
         meta.setSingleLine(true);
         meta.setEllipsize(TextUtils.TruncateAt.END);
         copy.addView(meta, matchWrap());
         row.addView(copy, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         return row;
-    }
-
-    private String streamVideoMetaLabel(OnlineStreamVideo video) {
-        StringBuilder label = new StringBuilder(video.channelTitle());
-        String views = streamViewCountLabel(video.viewCount());
-        if (!views.isEmpty()) {
-            label.append(" · ").append(views);
-        }
-        String published = streamPublishedLabel(video.publishedRank());
-        if (!published.isEmpty()) {
-            label.append(" · ").append(published);
-        }
-        if (video.durationMs() > 0L) {
-            label.append(" · ").append(MusicLibrary.formatDuration(video.durationMs()));
-        }
-        return label.toString();
-    }
-
-    private String streamViewCountLabel(long viewCount) {
-        if (viewCount <= 0L) {
-            return "";
-        }
-        if (viewCount >= 100_000_000L) {
-            return String.format(Locale.KOREA, "조회수 %.1f억", viewCount / 100_000_000.0);
-        }
-        if (viewCount >= 10_000L) {
-            return String.format(Locale.KOREA, "조회수 %.1f만", viewCount / 10_000.0);
-        }
-        if (viewCount >= 1_000L) {
-            return String.format(Locale.KOREA, "조회수 %.1f천", viewCount / 1_000.0);
-        }
-        return "조회수 " + viewCount;
-    }
-
-    private String streamPublishedLabel(long publishedRank) {
-        String value = publishedRank <= 0L ? "" : Long.toString(publishedRank);
-        if (value.length() != 8) {
-            return "";
-        }
-        return value.substring(0, 4) + "." + value.substring(4, 6) + "." + value.substring(6, 8);
     }
 
     private View stationCard(MusicStation station, List<DeviceAudioTrack> sourceTracks) {
@@ -3280,11 +3061,9 @@ public final class MainActivity extends Activity {
     }
 
     private LibraryGroup playlistGroup(UserPlaylists.Playlist playlist) {
-        List<DeviceAudioTrack> tracks = tracksForPlaylist(playlist);
+        List<DeviceAudioTrack> tracks = tracksForIds(playlist == null ? new ArrayList<>() : playlist.trackIds());
         String title = playlist == null ? "재생목록" : playlist.title();
-        String subtitle = tracks.isEmpty()
-                ? "곡 없음"
-                : tracks.size() + "곡 · " + totalDurationLabel(tracks);
+        String subtitle = tracks.size() + "곡 · " + totalDurationLabel(tracks);
         return new LibraryGroup(
                 PLAYLIST_GROUP_PREFIX + (playlist == null ? "" : playlist.id()),
                 title,
@@ -3294,46 +3073,19 @@ public final class MainActivity extends Activity {
         );
     }
 
-    /**
-     * Playlist songs in saved order.
-     *
-     * <p>Local entries follow the scanned library so edited tags stay in sync, and fall back to the
-     * saved copy when the file is outside the current library source. Stream entries are rebuilt
-     * from the saved metadata.</p>
-     */
-    private List<DeviceAudioTrack> tracksForPlaylist(UserPlaylists.Playlist playlist) {
+    private List<DeviceAudioTrack> tracksForIds(List<Long> ids) {
+        Map<Long, DeviceAudioTrack> byId = tracksById(libraryTracks);
         List<DeviceAudioTrack> tracks = new ArrayList<>();
-        if (playlist == null) {
+        if (ids == null) {
             return tracks;
         }
-        Map<Long, DeviceAudioTrack> byId = tracksById(libraryTracks);
-        for (UserPlaylists.Entry entry : playlist.entries()) {
-            if (entry.online()) {
-                tracks.add(entry.toTrack());
-                continue;
-            }
-            DeviceAudioTrack track = byId.get(entry.trackId());
+        for (Long id : ids) {
+            DeviceAudioTrack track = id == null ? null : byId.get(id);
             if (track != null) {
                 tracks.add(track);
-            } else if (!entry.uri().isEmpty()) {
-                tracks.add(entry.toTrack());
             }
         }
         return tracks;
-    }
-
-    private List<UserPlaylists.Entry> playlistEntriesForTracks(List<DeviceAudioTrack> tracks) {
-        List<UserPlaylists.Entry> entries = new ArrayList<>();
-        if (tracks == null) {
-            return entries;
-        }
-        for (DeviceAudioTrack track : tracks) {
-            UserPlaylists.Entry entry = UserPlaylists.Entry.of(track);
-            if (entry != null && entry.valid()) {
-                entries.add(entry);
-            }
-        }
-        return entries;
     }
 
     private Map<Long, DeviceAudioTrack> tracksById(List<DeviceAudioTrack> tracks) {
@@ -3347,6 +3099,19 @@ public final class MainActivity extends Activity {
             }
         }
         return byId;
+    }
+
+    private List<Long> trackIdsForTracks(List<DeviceAudioTrack> tracks) {
+        List<Long> ids = new ArrayList<>();
+        if (tracks == null) {
+            return ids;
+        }
+        for (DeviceAudioTrack track : tracks) {
+            if (track != null) {
+                ids.add(track.id());
+            }
+        }
+        return ids;
     }
 
     private List<LibraryGroup> libraryGroupsForTracks(List<DeviceAudioTrack> tracks, LibraryFilter filter) {
@@ -3762,11 +3527,6 @@ public final class MainActivity extends Activity {
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT
         ));
-        if (isPlaylistGroup(group)) {
-            FrameLayout.LayoutParams moreParams = new FrameLayout.LayoutParams(dp(36), dp(36), Gravity.TOP | Gravity.END);
-            moreParams.setMargins(0, dp(6), dp(6), 0);
-            coverFrame.addView(playlistMoreButton(group), moreParams);
-        }
         card.addView(coverFrame, marginBottom(10));
 
         TextView title = text(group.title, 14, R.color.ytet_text, true);
@@ -3779,70 +3539,6 @@ public final class MainActivity extends Activity {
         subtitle.setEllipsize(TextUtils.TruncateAt.END);
         card.addView(subtitle, matchWrap());
         return card;
-    }
-
-    private boolean isPlaylistGroup(LibraryGroup group) {
-        return group != null && group.key.startsWith(PLAYLIST_GROUP_PREFIX);
-    }
-
-    private ImageButton playlistMoreButton(LibraryGroup group) {
-        ImageButton more = playerIconButton(R.drawable.ic_more_vert, "재생목록 관리", false, true);
-        more.setPadding(dp(9), dp(9), dp(9), dp(9));
-        more.setOnClickListener(view -> showPlaylistMenu(view, group));
-        return more;
-    }
-
-    private void showPlaylistMenu(View anchor, LibraryGroup group) {
-        PopupMenu menu = new PopupMenu(this, anchor);
-        menu.getMenu().add(0, 0, 0, "재생");
-        menu.getMenu().add(0, 1, 1, "셔플 재생");
-        menu.getMenu().add(0, 2, 2, "수정");
-        menu.getMenu().add(0, 3, 3, "삭제");
-        menu.setOnMenuItemClickListener(item -> {
-            switch (item.getItemId()) {
-                case 0:
-                    playPlaylistGroup(group, false);
-                    return true;
-                case 1:
-                    playPlaylistGroup(group, true);
-                    return true;
-                case 2:
-                    showEditPlaylistDialog(group);
-                    return true;
-                default:
-                    confirmDeletePlaylist(group);
-                    return true;
-            }
-        });
-        menu.show();
-    }
-
-    private void removeTrackFromPlaylist(LibraryGroup group, DeviceAudioTrack track) {
-        String playlistId = playlistIdFromGroupKey(group == null ? "" : group.key);
-        UserPlaylists.Entry entry = UserPlaylists.Entry.of(track);
-        if (playlistId.isEmpty() || entry == null || !entry.valid()) {
-            return;
-        }
-        UserPlaylists.Playlist updated = UserPlaylists.removeEntry(this, playlistId, entry.key());
-        if (updated == null) {
-            toast("재생목록을 찾을 수 없습니다.");
-            return;
-        }
-        if (focusedLibraryGroup != null && TextUtils.equals(focusedLibraryGroup.key, group.key)) {
-            focusedLibraryGroup = playlistGroup(updated);
-        }
-        toast(track.title() + "을(를) 뺐습니다.");
-        markPlaylistDataChanged();
-        renderLibraryDependentTabs();
-    }
-
-    private void playPlaylistGroup(LibraryGroup group, boolean shuffle) {
-        if (group == null || group.tracks.isEmpty()) {
-            toast("재생목록이 비어 있습니다.");
-            return;
-        }
-        focusedLibraryGroupFilter = LibraryFilter.PLAYLIST;
-        playLibraryGroup(group, 0, shuffle);
     }
 
     private View libraryGroupRow(LibraryGroup group) {
@@ -3872,11 +3568,6 @@ public final class MainActivity extends Activity {
         subtitle.setEllipsize(TextUtils.TruncateAt.END);
         info.addView(subtitle, matchWrap());
         row.addView(info, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        if (isPlaylistGroup(group)) {
-            LinearLayout.LayoutParams moreParams = new LinearLayout.LayoutParams(dp(42), dp(42));
-            moreParams.setMargins(dp(8), 0, 0, 0);
-            row.addView(playlistMoreButton(group), moreParams);
-        }
         return row;
     }
 
@@ -3982,15 +3673,9 @@ public final class MainActivity extends Activity {
         View play = actionButtonWithIcon("재생", R.drawable.ic_play_arrow, true);
         play.setOnClickListener(view -> playLibraryGroup(group, 0, false));
         actions.addView(play, weightedControlParams(1, 10));
-        boolean playlistDetail = detailFilter == LibraryFilter.PLAYLIST;
         View shuffle = actionButtonWithIcon("셔플", R.drawable.ic_shuffle, false);
         shuffle.setOnClickListener(view -> playLibraryGroup(group, 0, true));
-        actions.addView(shuffle, weightedControlParams(1, playlistDetail ? 10 : 0));
-        if (playlistDetail) {
-            View edit = actionButtonWithIcon("편집", R.drawable.ic_drag_handle, false);
-            edit.setOnClickListener(view -> showEditPlaylistDialog(group));
-            actions.addView(edit, weightedControlParams(1, 0));
-        }
+        actions.addView(shuffle, weightedControlParams(1, 0));
         root.addView(actions, marginBottom(22));
 
         if (artistDetail && artistDetailMode == ArtistDetailMode.ALBUMS) {
@@ -4000,7 +3685,7 @@ public final class MainActivity extends Activity {
 
         if (group.tracks.isEmpty()) {
             root.addView(muted(detailFilter == LibraryFilter.PLAYLIST
-                    ? "수록곡이 없습니다. 곡이나 스트림을 길게 눌러 이 재생목록에 저장할 수 있습니다."
+                    ? "수록곡이 없습니다. 곡을 길게 눌러 이 재생목록에 저장할 수 있습니다."
                     : "수록곡이 없습니다.", 13), matchWrap());
             return;
         }
@@ -4093,11 +3778,7 @@ public final class MainActivity extends Activity {
         });
         row.setOnLongClickListener(view -> {
             selectLibraryTrack(track);
-            if (isPlaylistGroup(group)) {
-                showTrackActionSheet(track, "이 재생목록에서 빼기", () -> removeTrackFromPlaylist(group, track));
-            } else {
-                showTrackQuickActions(track);
-            }
+            showTrackQuickActions(track);
             return true;
         });
 
@@ -4255,26 +3936,18 @@ public final class MainActivity extends Activity {
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.HORIZONTAL);
         panel.setGravity(Gravity.CENTER_VERTICAL);
-        panel.setPadding(dp(14), dp(12), dp(14), dp(12));
-        panel.setBackground(rounded(color(R.color.ytet_panel), 12));
-        panel.setClickable(true);
-        panel.setFocusable(true);
-        panel.setOnClickListener(view -> showCreatePlaylistDialog(new ArrayList<>()));
-
-        ImageView icon = new ImageView(this);
-        Drawable drawable = getDrawable(R.drawable.ic_playlist_save);
-        if (drawable != null) {
-            drawable = drawable.mutate();
-            drawable.setTint(color(R.color.ytet_accent));
-            icon.setImageDrawable(drawable);
-        }
-        panel.addView(icon, marginRight(14, dp(30), dp(30)));
+        panel.setPadding(dp(12), dp(10), dp(12), dp(10));
+        panel.setBackground(rounded(color(R.color.ytet_panel), 10));
 
         LinearLayout copy = new LinearLayout(this);
         copy.setOrientation(LinearLayout.VERTICAL);
-        copy.addView(text("새 재생목록 만들기", 15, R.color.ytet_text, true), marginBottom(3));
-        copy.addView(muted("곡을 길게 누르면 재생목록에 담을 수 있습니다.", 12), matchWrap());
+        copy.addView(text("새 재생목록", 15, R.color.ytet_text, true), marginBottom(2));
+        copy.addView(muted("곡이나 앨범을 직접 묶어 관리", 12), matchWrap());
         panel.addView(copy, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+
+        Button create = detailActionButton("생성");
+        create.setOnClickListener(view -> showCreatePlaylistDialog(new ArrayList<>()));
+        panel.addView(create, new LinearLayout.LayoutParams(dp(76), dp(38)));
         return panel;
     }
 
@@ -4299,12 +3972,9 @@ public final class MainActivity extends Activity {
                 toast("재생목록 이름을 입력해 주세요.");
                 return;
             }
-            List<UserPlaylists.Entry> entries = playlistEntriesForTracks(tracksToAdd);
-            UserPlaylists.Playlist playlist = UserPlaylists.create(this, title, entries);
+            UserPlaylists.Playlist playlist = UserPlaylists.create(this, title, trackIdsForTracks(tracksToAdd));
             dialog.dismiss();
-            toast(entries.isEmpty()
-                    ? playlist.title() + " 재생목록을 만들었습니다."
-                    : playlist.title() + "에 " + playlist.size() + "곡을 저장했습니다.");
+            toast(playlist.title() + " 재생목록을 만들었습니다.");
             markPlaylistDataChanged();
             renderLibraryDependentTabs();
         });
@@ -4335,15 +4005,14 @@ public final class MainActivity extends Activity {
             toast("재생목록을 찾을 수 없습니다.");
             return;
         }
-        List<DeviceAudioTrack> editableTracks = new ArrayList<>(tracksForPlaylist(playlist));
+        List<DeviceAudioTrack> editableTracks = new ArrayList<>(tracksForIds(playlist.trackIds()));
         LinearLayout body = dialogBody("재생목록 수정");
         EditText nameInput = metadataEditField("재생목록 이름", playlist.title());
         body.addView(metadataEditLabel("재생목록 이름"), marginBottom(4));
         body.addView(nameInput, marginBottom(12));
 
-        TextView trackLabel = metadataEditLabel("수록곡 " + editableTracks.size() + "개");
-        body.addView(trackLabel, marginBottom(2));
-        body.addView(muted("위아래 버튼으로 순서를 바꾸고, X로 재생목록에서 뺍니다.", 11), marginBottom(8));
+        TextView trackLabel = metadataEditLabel("수록곡");
+        body.addView(trackLabel, marginBottom(6));
         ScrollView scroll = new ScrollView(this);
         LinearLayout trackList = new LinearLayout(this);
         trackList.setOrientation(LinearLayout.VERTICAL);
@@ -4373,7 +4042,7 @@ public final class MainActivity extends Activity {
                 return;
             }
             UserPlaylists.rename(this, playlist.id(), title);
-            UserPlaylists.updateEntries(this, playlist.id(), playlistEntriesForTracks(editableTracks));
+            UserPlaylists.updateTracks(this, playlist.id(), trackIdsForTracks(editableTracks));
             UserPlaylists.Playlist updated = UserPlaylists.find(this, playlist.id());
             if (updated != null) {
                 focusedLibraryGroup = playlistGroup(updated);
@@ -4394,22 +4063,16 @@ public final class MainActivity extends Activity {
     private void renderPlaylistEditTracks(LinearLayout root, List<DeviceAudioTrack> tracks, Runnable rerender) {
         root.removeAllViews();
         if (tracks.isEmpty()) {
-            root.addView(muted("수록곡이 없습니다. 곡을 길게 눌러 이 재생목록에 저장할 수 있습니다.", 13), matchWrap());
+            root.addView(muted("수록곡이 없습니다.", 13), matchWrap());
             return;
         }
-        for (int index = 0; index < tracks.size(); index++) {
-            DeviceAudioTrack track = tracks.get(index);
-            int position = index;
+        for (DeviceAudioTrack track : new ArrayList<>(tracks)) {
             LinearLayout row = new LinearLayout(this);
             row.setOrientation(LinearLayout.HORIZONTAL);
             row.setGravity(Gravity.CENTER_VERTICAL);
-            row.setPadding(dp(8), dp(8), dp(4), dp(8));
+            row.setPadding(dp(8), dp(8), dp(8), dp(8));
             row.setBackground(rounded(color(R.color.ytet_panel), 8));
-
-            TextView number = muted(Integer.toString(index + 1), 12);
-            number.setGravity(Gravity.CENTER);
-            row.addView(number, new LinearLayout.LayoutParams(dp(22), LinearLayout.LayoutParams.WRAP_CONTENT));
-            row.addView(trackCoverView(track), marginRight(10, dp(40), dp(40)));
+            row.addView(trackCoverView(track), marginRight(10, dp(42), dp(42)));
 
             LinearLayout copy = new LinearLayout(this);
             copy.setOrientation(LinearLayout.VERTICAL);
@@ -4417,55 +4080,20 @@ public final class MainActivity extends Activity {
             title.setSingleLine(true);
             title.setEllipsize(TextUtils.TruncateAt.END);
             copy.addView(title, marginBottom(3));
-            TextView meta = muted(playlistEditMetaLabel(track), 12);
+            TextView meta = muted(track.artist() + " · " + MusicLibrary.formatDuration(track.durationMs()), 12);
             meta.setSingleLine(true);
             meta.setEllipsize(TextUtils.TruncateAt.END);
             copy.addView(meta, matchWrap());
             row.addView(copy, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
 
-            ImageButton moveUp = playerIconButton(R.drawable.ic_keyboard_arrow_down, "위로 이동", false, index > 0);
-            moveUp.setRotation(180f);
-            moveUp.setPadding(dp(6), dp(6), dp(6), dp(6));
-            moveUp.setOnClickListener(view -> {
-                if (position > 0) {
-                    tracks.add(position - 1, tracks.remove(position));
-                    rerender.run();
-                }
-            });
-            row.addView(moveUp, new LinearLayout.LayoutParams(dp(34), dp(34)));
-
-            ImageButton moveDown = playerIconButton(
-                    R.drawable.ic_keyboard_arrow_down,
-                    "아래로 이동",
-                    false,
-                    index < tracks.size() - 1
-            );
-            moveDown.setPadding(dp(6), dp(6), dp(6), dp(6));
-            moveDown.setOnClickListener(view -> {
-                if (position < tracks.size() - 1) {
-                    tracks.add(position + 1, tracks.remove(position));
-                    rerender.run();
-                }
-            });
-            row.addView(moveDown, new LinearLayout.LayoutParams(dp(34), dp(34)));
-
-            ImageButton remove = playerIconButton(R.drawable.ic_close, "재생목록에서 빼기", false, true);
-            remove.setPadding(dp(7), dp(7), dp(7), dp(7));
+            Button remove = detailActionButton("제거");
             remove.setOnClickListener(view -> {
-                tracks.remove(position);
+                tracks.remove(track);
                 rerender.run();
             });
-            row.addView(remove, new LinearLayout.LayoutParams(dp(34), dp(34)));
+            row.addView(remove, new LinearLayout.LayoutParams(dp(68), dp(36)));
             root.addView(row, marginBottom(8));
         }
-    }
-
-    private String playlistEditMetaLabel(DeviceAudioTrack track) {
-        String meta = isOnlineTrack(track) ? track.artist() + " · 온라인" : track.artist();
-        if (track.durationMs() > 0L) {
-            meta += " · " + MusicLibrary.formatDuration(track.durationMs());
-        }
-        return meta;
     }
 
     private void confirmDeletePlaylist(LibraryGroup group) {
@@ -4559,32 +4187,7 @@ public final class MainActivity extends Activity {
         playbackMeta = station.subtitle();
         setStreamingStatus("준비 중: " + station.title());
         updateNowPlayingBar();
-        startPlayback(playQueueIntentFor(station, group.tracks, safeIndex));
-    }
-
-    /**
-     * Queue intent for a track list.
-     *
-     * <p>Playlists can mix local files with stream videos, and stream videos only survive the trip
-     * to the service when their metadata rides along with the intent.</p>
-     */
-    private Intent playQueueIntentFor(MusicStation station, List<DeviceAudioTrack> tracks, int startIndex) {
-        if (containsOnlineTrack(tracks)) {
-            return PlaybackService.playOnlineQueueIntent(this, station, tracks, startIndex);
-        }
-        return PlaybackService.playQueueIntent(this, station, tracks, startIndex);
-    }
-
-    private boolean containsOnlineTrack(List<DeviceAudioTrack> tracks) {
-        if (tracks == null) {
-            return false;
-        }
-        for (DeviceAudioTrack track : tracks) {
-            if (isOnlineTrack(track)) {
-                return true;
-            }
-        }
-        return false;
+        startPlayback(PlaybackService.playQueueIntent(this, station, group.tracks, safeIndex));
     }
 
     private boolean trackMatchesQuery(DeviceAudioTrack track, String query) {
@@ -4815,18 +4418,8 @@ public final class MainActivity extends Activity {
     }
 
     private void loadRemoteImage(ImageView target, String imageUrl, int maxBitmapDimension) {
-        String cacheKey = imageUrl + "|" + maxBitmapDimension;
-        Bitmap cached = remoteImageCache.get(cacheKey);
-        if (cached != null) {
-            target.setImageBitmap(cached);
-            target.setAlpha(1f);
-            return;
-        }
         imageExecutor.execute(() -> {
             Bitmap bitmap = loadRemoteBitmap(imageUrl, maxBitmapDimension);
-            if (bitmap != null) {
-                remoteImageCache.put(cacheKey, bitmap);
-            }
             runOnUiThread(() -> {
                 if (bitmap == null || target == null || !TextUtils.equals(String.valueOf(target.getTag()), imageUrl)) {
                     return;
@@ -4932,62 +4525,22 @@ public final class MainActivity extends Activity {
     }
 
     private void showTrackQuickActions(DeviceAudioTrack track) {
-        showTrackActionSheet(track, null, null);
-    }
-
-    /** Song sheet for a single track, with an optional "take it out of this list" action. */
-    private void showTrackActionSheet(DeviceAudioTrack track, String removeLabel, Runnable removeAction) {
         if (track == null) {
             return;
         }
         List<DeviceAudioTrack> tracks = new ArrayList<>();
         tracks.add(track);
-        showQuickActions(
-                track.title(),
-                trackSheetMetaLabel(track),
-                track,
-                tracks,
-                track,
-                removeLabel,
-                removeAction
-        );
-    }
-
-    private String trackSheetMetaLabel(DeviceAudioTrack track) {
-        String meta = track.artist();
-        if (!isOnlineTrack(track) && !isUnknownAlbum(track.album())) {
-            meta += " · " + track.album();
-        }
-        if (track.durationMs() > 0L) {
-            meta += " · " + MusicLibrary.formatDuration(track.durationMs());
-        }
-        return meta;
+        showQuickActions(track.title(), track.artist() + " · " + MusicLibrary.formatDuration(track.durationMs()), track, tracks);
     }
 
     private void showLibraryGroupQuickActions(LibraryGroup group) {
         if (group == null || group.tracks.isEmpty()) {
             return;
         }
-        showQuickActions(group.title, group.subtitle, group.coverTrack, group.tracks, null, null, null);
+        showQuickActions(group.title, group.subtitle, group.coverTrack, group.tracks);
     }
 
-    private void showStreamVideoActions(OnlineStreamSection section, OnlineStreamVideo video) {
-        DeviceAudioTrack track = onlineTrack(section == null ? "" : section.channelTitle(), video);
-        if (track == null) {
-            return;
-        }
-        showTrackActionSheet(track, null, null);
-    }
-
-    private void showQuickActions(
-            String titleText,
-            String metaText,
-            DeviceAudioTrack coverTrack,
-            List<DeviceAudioTrack> tracks,
-            DeviceAudioTrack singleTrack,
-            String removeLabel,
-            Runnable removeAction
-    ) {
+    private void showQuickActions(String titleText, String metaText, DeviceAudioTrack coverTrack, List<DeviceAudioTrack> tracks) {
         if (tracks == null || tracks.isEmpty()) {
             return;
         }
@@ -5023,40 +4576,18 @@ public final class MainActivity extends Activity {
         divider.setBackgroundColor(0x22FFFFFF);
         body.addView(divider, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 1));
 
-        LinearLayout actions = new LinearLayout(this);
-        actions.setOrientation(LinearLayout.VERTICAL);
-        actions.addView(trackQuickActionRow(R.drawable.ic_queue_play_next, "다음 곡으로 재생", () -> {
+        body.addView(trackQuickActionRow(R.drawable.ic_queue_play_next, "다음 곡으로 재생", () -> {
             dialog.dismiss();
             playTracksNext(tracks);
         }), matchWrap());
-        actions.addView(trackQuickActionRow(R.drawable.ic_queue_add, "현재 재생목록에 추가", () -> {
+        body.addView(trackQuickActionRow(R.drawable.ic_queue_add, "현재 재생목록에 추가", () -> {
             dialog.dismiss();
             addTracksToCurrentQueue(tracks);
         }), matchWrap());
-        actions.addView(trackQuickActionRow(R.drawable.ic_playlist_save, "재생목록에 저장", () -> {
+        body.addView(trackQuickActionRow(R.drawable.ic_playlist_save, "재생목록에 저장", () -> {
             dialog.dismiss();
             showPlaylistPickerDialog(tracks);
         }), matchWrap());
-        if (removeAction != null) {
-            String label = removeLabel == null || removeLabel.trim().isEmpty() ? "목록에서 빼기" : removeLabel;
-            actions.addView(trackQuickActionRow(R.drawable.ic_close, label, () -> {
-                dialog.dismiss();
-                removeAction.run();
-            }), matchWrap());
-        }
-        addTrackNavigationRows(actions, singleTrack, dialog);
-
-        ScrollView scroll = new ScrollView(this);
-        scroll.setOverScrollMode(View.OVER_SCROLL_NEVER);
-        scroll.addView(actions, matchWrap());
-        int maxSheetHeight = Math.round(getResources().getDisplayMetrics().heightPixels * 0.52f);
-        int sheetHeight = actions.getChildCount() > 5
-                ? maxSheetHeight
-                : LinearLayout.LayoutParams.WRAP_CONTENT;
-        body.addView(scroll, new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                sheetHeight
-        ));
 
         dialog.setContentView(body);
         dialog.show();
@@ -5066,162 +4597,6 @@ public final class MainActivity extends Activity {
             window.setGravity(Gravity.BOTTOM);
             window.setDimAmount(0.56f);
             window.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.WRAP_CONTENT);
-        }
-    }
-
-    /** Rows that jump from one song to the artist, album or source channel it belongs to. */
-    private void addTrackNavigationRows(LinearLayout actions, DeviceAudioTrack track, Dialog dialog) {
-        if (track == null) {
-            return;
-        }
-        if (isOnlineTrack(track)) {
-            OnlineStreamSection section = streamSectionForTrack(track);
-            if (section != null) {
-                actions.addView(trackQuickActionRow(R.drawable.ic_tab_stream_outline, "채널 스트림 열기", () -> {
-                    dialog.dismiss();
-                    openStreamSectionFromPlayer(section);
-                }), matchWrap());
-            }
-            actions.addView(trackQuickActionRow(R.drawable.ic_more_vert, "곡 정보", () -> {
-                dialog.dismiss();
-                showOnlineTrackDetails(track);
-            }), matchWrap());
-            return;
-        }
-        if (hasLibraryGroupForTrack(track, LibraryFilter.ARTIST)) {
-            actions.addView(trackQuickActionRow(R.drawable.ic_tab_library_outline, "아티스트로 이동", () -> {
-                dialog.dismiss();
-                openLibraryDetailForTrack(track, LibraryFilter.ARTIST);
-            }), matchWrap());
-        }
-        if (hasLibraryGroupForTrack(track, LibraryFilter.ALBUM)) {
-            actions.addView(trackQuickActionRow(R.drawable.ic_grid_view, "앨범으로 이동", () -> {
-                dialog.dismiss();
-                openLibraryDetailForTrack(track, LibraryFilter.ALBUM);
-            }), matchWrap());
-        }
-        DeviceAudioTrack libraryTrack = findLibraryTrackById(track.id());
-        if (libraryTrack != null) {
-            actions.addView(trackQuickActionRow(R.drawable.ic_more_vert, "곡 정보", () -> {
-                dialog.dismiss();
-                showTrackDetails(libraryTrack);
-            }), matchWrap());
-        }
-    }
-
-    private boolean isOnlineTrack(DeviceAudioTrack track) {
-        return track != null && isSupportedVideoUrl(track.contentUri());
-    }
-
-    private List<DeviceAudioTrack> libraryTracksForGroupOf(DeviceAudioTrack track, LibraryFilter filter) {
-        List<DeviceAudioTrack> tracks = new ArrayList<>();
-        if (track == null || filter == null) {
-            return tracks;
-        }
-        String key = libraryGroupKey(track, filter);
-        for (DeviceAudioTrack candidate : libraryTracks) {
-            if (key.equals(libraryGroupKey(candidate, filter))) {
-                tracks.add(candidate);
-            }
-        }
-        return tracks;
-    }
-
-    private boolean hasLibraryGroupForTrack(DeviceAudioTrack track, LibraryFilter filter) {
-        return !libraryTracksForGroupOf(track, filter).isEmpty();
-    }
-
-    /** Opens the album or artist screen of a song and leaves the player behind. */
-    private void openLibraryDetailForTrack(DeviceAudioTrack track, LibraryFilter filter) {
-        List<DeviceAudioTrack> tracks = libraryTracksForGroupOf(track, filter);
-        if (tracks.isEmpty()) {
-            toast(filter == LibraryFilter.ARTIST
-                    ? "보관함에서 이 아티스트를 찾지 못했습니다."
-                    : "보관함에서 이 앨범을 찾지 못했습니다.");
-            return;
-        }
-        String key = libraryGroupKey(track, filter);
-        LibraryGroup group = libraryGroup(key, libraryGroupTitle(track, filter), tracks, filter);
-        closePlaybackDialogs();
-        libraryFilter = filter;
-        focusedLibraryGroup = group;
-        focusedLibraryGroupFilter = filter;
-        focusedParentArtistGroup = null;
-        artistDetailMode = filter == LibraryFilter.ARTIST && distinctAlbumCount(tracks) > 1
-                ? ArtistDetailMode.ALBUMS
-                : ArtistDetailMode.ALL;
-        selectedTrack = track;
-        currentTab = Tab.LIBRARY;
-        invalidateLibraryContentCache();
-        renderCurrentTab();
-    }
-
-    private OnlineStreamSection streamSectionForTrack(DeviceAudioTrack track) {
-        if (track == null) {
-            return null;
-        }
-        for (OnlineStreamSection section : streamSections) {
-            if (TextUtils.equals(section.channelTitle(), track.artist())
-                    || TextUtils.equals(section.channelTitle(), track.album())) {
-                return section;
-            }
-        }
-        return null;
-    }
-
-    private void openStreamSectionFromPlayer(OnlineStreamSection section) {
-        closePlaybackDialogs();
-        currentTab = Tab.HOME;
-        showStreamSectionDetail(section);
-    }
-
-    private void closePlaybackDialogs() {
-        if (queueDialog != null && queueDialog.isShowing()) {
-            queueDialog.dismiss();
-        }
-        if (playerDialog != null && playerDialog.isShowing()) {
-            playerDialog.dismiss();
-        }
-    }
-
-    private void showOnlineTrackDetails(DeviceAudioTrack track) {
-        LinearLayout body = dialogBody("곡 정보");
-        body.addView(trackDetailItem("제목", track.title()), marginBottom(10));
-        body.addView(trackDetailItem("채널", track.artist()), marginBottom(10));
-        if (track.durationMs() > 0L) {
-            body.addView(trackDetailItem("재생시간", MusicLibrary.formatDuration(track.durationMs())), marginBottom(10));
-        }
-        body.addView(trackDetailItem("원본", track.contentUri()), marginBottom(14));
-
-        AlertDialog dialog = new AlertDialog.Builder(this)
-                .setView(body)
-                .create();
-        LinearLayout actions = new LinearLayout(this);
-        actions.setOrientation(LinearLayout.HORIZONTAL);
-        actions.setGravity(Gravity.END);
-        Button open = detailActionButton("YouTube");
-        open.setOnClickListener(view -> {
-            dialog.dismiss();
-            openExternalUrl(track.contentUri());
-        });
-        Button close = detailActionButton("닫기");
-        close.setOnClickListener(view -> dialog.dismiss());
-        actions.addView(open, fixedButtonParams(88, 38, 8));
-        actions.addView(close, fixedButtonParams(76, 38, 0));
-        body.addView(actions, matchWrap());
-        dialog.show();
-        styleDetailDialog(dialog);
-    }
-
-    private void openExternalUrl(String url) {
-        String clean = url == null ? "" : url.trim();
-        if (clean.isEmpty()) {
-            return;
-        }
-        try {
-            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(clean)));
-        } catch (Exception exception) {
-            toast("링크를 열 수 있는 앱이 없습니다.");
         }
     }
 
@@ -5253,11 +4628,7 @@ public final class MainActivity extends Activity {
             return;
         }
         updateLocalQueuePreview(queueTracks, true);
-        startPlayback(PlaybackService.queueEditIntentWithMetadata(
-                this,
-                PlaybackService.ACTION_PLAY_NEXT,
-                queueTracks
-        ));
+        startPlayback(PlaybackService.queueEditIntent(this, PlaybackService.ACTION_PLAY_NEXT, queueTracks));
         toast(queueTracks.size() == 1 ? "다음 곡으로 추가했습니다." : queueTracks.size() + "곡을 다음 곡으로 추가했습니다.");
     }
 
@@ -5268,11 +4639,7 @@ public final class MainActivity extends Activity {
             return;
         }
         updateLocalQueuePreview(queueTracks, false);
-        startPlayback(PlaybackService.queueEditIntentWithMetadata(
-                this,
-                PlaybackService.ACTION_ADD_TO_QUEUE,
-                queueTracks
-        ));
+        startPlayback(PlaybackService.queueEditIntent(this, PlaybackService.ACTION_ADD_TO_QUEUE, queueTracks));
         toast(queueTracks.size() == 1 ? "현재 재생목록에 추가했습니다." : queueTracks.size() + "곡을 현재 재생목록에 추가했습니다.");
     }
 
@@ -5339,7 +4706,6 @@ public final class MainActivity extends Activity {
             return;
         }
         List<UserPlaylists.Playlist> playlists = UserPlaylists.list(this);
-        List<UserPlaylists.Entry> entries = playlistEntriesForTracks(tracks);
         AlertDialog dialog = new AlertDialog.Builder(this).create();
         LinearLayout body = dialogBody("재생목록에 저장");
         body.addView(muted(tracks.size() == 1
@@ -5361,9 +4727,10 @@ public final class MainActivity extends Activity {
             LinearLayout list = new LinearLayout(this);
             list.setOrientation(LinearLayout.VERTICAL);
             for (UserPlaylists.Playlist playlist : playlists) {
+                LibraryGroup group = playlistGroup(playlist);
                 list.addView(playlistPickerRow(
                         playlist.title(),
-                        playlistPickerSubtitle(playlist, entries),
+                        group.subtitle,
                         () -> {
                             dialog.dismiss();
                             saveTracksToPlaylist(playlist, tracks);
@@ -5421,41 +4788,16 @@ public final class MainActivity extends Activity {
         return row;
     }
 
-    /** Subtitle that tells whether the songs being saved are already in that playlist. */
-    private String playlistPickerSubtitle(UserPlaylists.Playlist playlist, List<UserPlaylists.Entry> entries) {
-        int saved = 0;
-        for (UserPlaylists.Entry entry : entries) {
-            if (playlist.contains(entry)) {
-                saved++;
-            }
-        }
-        String base = playlist.size() + "곡";
-        if (saved <= 0) {
-            return base;
-        }
-        if (saved == entries.size()) {
-            return base + " · 이미 저장됨";
-        }
-        return base + " · " + saved + "곡 이미 저장됨";
-    }
-
     private void saveTracksToPlaylist(UserPlaylists.Playlist playlist, List<DeviceAudioTrack> tracks) {
         if (playlist == null) {
             return;
         }
-        List<UserPlaylists.Entry> entries = playlistEntriesForTracks(tracks);
-        int before = playlist.size();
-        UserPlaylists.Playlist updated = UserPlaylists.addEntries(this, playlist.id(), entries);
+        UserPlaylists.Playlist updated = UserPlaylists.addTracks(this, playlist.id(), trackIdsForTracks(tracks));
         if (updated == null) {
             toast("재생목록을 찾을 수 없습니다.");
             return;
         }
-        int added = updated.size() - before;
-        if (added <= 0) {
-            toast("이미 " + updated.title() + "에 있는 곡입니다.");
-            return;
-        }
-        toast(updated.title() + "에 " + added + "곡을 저장했습니다.");
+        toast(updated.title() + "에 저장했습니다.");
         markPlaylistDataChanged();
         renderLibraryDependentTabs();
     }
@@ -5847,17 +5189,17 @@ public final class MainActivity extends Activity {
         playbackMeta = station.subtitle();
         setStreamingStatus("준비 중: " + station.title());
         updateNowPlayingBar();
-        startPlayback(playQueueIntentFor(station, queue, 0));
+        startPlayback(PlaybackService.playQueueIntent(this, station, queue));
     }
 
-    private void playOnlineStream(OnlineStreamSection section, List<OnlineStreamVideo> videos, int startIndex) {
-        List<DeviceAudioTrack> queue = onlineTracks(section, videos);
+    private void playOnlineStream(OnlineStreamSection section, int startIndex) {
+        List<DeviceAudioTrack> queue = onlineTracks(section);
         if (queue.isEmpty()) {
             toast("재생할 온라인 영상이 없습니다.");
             return;
         }
         int safeIndex = Math.max(0, Math.min(startIndex, queue.size() - 1));
-        prefetchOnlineStreamAround(videos, safeIndex, STREAM_PLAYBACK_PREFETCH_RADIUS);
+        prefetchOnlineStreamAround(section, safeIndex, STREAM_PLAYBACK_PREFETCH_RADIUS);
         MusicStation station = new MusicStation(
                 "stream-" + section.channelId(),
                 section.channelTitle(),
@@ -5883,40 +5225,33 @@ public final class MainActivity extends Activity {
         startPlayback(PlaybackService.playOnlineQueueIntent(this, station, queue, safeIndex));
     }
 
-    private List<DeviceAudioTrack> onlineTracks(OnlineStreamSection section, List<OnlineStreamVideo> videos) {
+    private List<DeviceAudioTrack> onlineTracks(OnlineStreamSection section) {
         List<DeviceAudioTrack> tracks = new ArrayList<>();
-        if (section == null || videos == null) {
+        if (section == null) {
             return tracks;
         }
-        for (OnlineStreamVideo video : videos) {
-            DeviceAudioTrack track = onlineTrack(section.channelTitle(), video);
-            if (track != null) {
-                tracks.add(track);
+        for (OnlineStreamVideo video : section.videos()) {
+            if (video.watchUrl().trim().isEmpty()) {
+                continue;
             }
+            tracks.add(new DeviceAudioTrack(
+                    video.playbackId(),
+                    video.title(),
+                    video.channelTitle(),
+                    section.channelTitle(),
+                    video.title(),
+                    "온라인 스트림",
+                    video.watchUrl(),
+                    video.thumbnailUrl(),
+                    0L,
+                    0,
+                    System.currentTimeMillis(),
+                    video.durationMs(),
+                    0L,
+                    video.channelTitle()
+            ));
         }
         return tracks;
-    }
-
-    private DeviceAudioTrack onlineTrack(String channelTitle, OnlineStreamVideo video) {
-        if (video == null || video.watchUrl().trim().isEmpty()) {
-            return null;
-        }
-        return new DeviceAudioTrack(
-                video.playbackId(),
-                video.title(),
-                video.channelTitle(),
-                channelTitle == null || channelTitle.trim().isEmpty() ? video.channelTitle() : channelTitle,
-                video.title(),
-                "온라인 스트림",
-                video.watchUrl(),
-                video.thumbnailUrl(),
-                0L,
-                0,
-                System.currentTimeMillis(),
-                video.durationMs(),
-                0L,
-                video.channelTitle()
-        );
     }
 
     private void playTrack(DeviceAudioTrack track) {
@@ -5938,7 +5273,7 @@ public final class MainActivity extends Activity {
         List<DeviceAudioTrack> queue = new ArrayList<>();
         queue.add(track);
         activeQueuePreview = new ArrayList<>(queue);
-        startPlayback(playQueueIntentFor(station, queue, 0));
+        startPlayback(PlaybackService.playQueueIntent(this, station, queue));
     }
 
     private void playVisibleLibraryTrack(DeviceAudioTrack track) {
@@ -5975,7 +5310,7 @@ public final class MainActivity extends Activity {
         playbackMeta = queue.get(startIndex).artist() + " · " + queue.get(startIndex).album();
         setStreamingStatus("준비 중: " + queue.get(startIndex).title());
         updateNowPlayingBar();
-        startPlayback(playQueueIntentFor(station, queue, startIndex));
+        startPlayback(PlaybackService.playQueueIntent(this, station, queue, startIndex));
     }
 
     private void playAllLibraryShuffle() {
@@ -6107,7 +5442,7 @@ public final class MainActivity extends Activity {
             List<DeviceAudioTrack> queue,
             int startIndex
     ) {
-        Runnable start = () -> startPlayback(playQueueIntentFor(station, queue, startIndex));
+        Runnable start = () -> startPlayback(PlaybackService.playQueueIntent(this, station, queue, startIndex));
         if (playerDialog != null && playerDialog.isShowing() && playerDragDismissActive) {
             mainHandler.postDelayed(start, 260L);
         } else {
@@ -6174,20 +5509,6 @@ public final class MainActivity extends Activity {
         }
     }
 
-    /**
-     * The mini bar swallows its own touches for the swipe gesture, so the long press that opens the
-     * song sheet is timed here instead of through a long click listener.
-     */
-    private void scheduleNowPlayingLongPress() {
-        cancelNowPlayingLongPress();
-        nowPlayingLongPressFired = false;
-        mainHandler.postDelayed(nowPlayingLongPressRunnable, ViewConfiguration.getLongPressTimeout());
-    }
-
-    private void cancelNowPlayingLongPress() {
-        mainHandler.removeCallbacks(nowPlayingLongPressRunnable);
-    }
-
     private boolean handleNowPlayingInfoTouch(View view, MotionEvent event) {
         int action = event.getActionMasked();
         if (action == MotionEvent.ACTION_DOWN) {
@@ -6195,7 +5516,6 @@ public final class MainActivity extends Activity {
             nowPlayingSwipeStartY = event.getRawY();
             nowPlayingSwipeTracking = true;
             nowPlayingSwipeConsumed = false;
-            scheduleNowPlayingLongPress();
             cancelNowPlayingContentAnimations();
             hideNowPlayingSwipePreview();
             return true;
@@ -6211,7 +5531,6 @@ public final class MainActivity extends Activity {
                     && Math.abs(dx) > slop
                     && Math.abs(dx) > Math.abs(dy) * 1.2f) {
                 nowPlayingSwipeConsumed = true;
-                cancelNowPlayingLongPress();
                 view.getParent().requestDisallowInterceptTouchEvent(true);
             }
             if (nowPlayingSwipeConsumed) {
@@ -6227,14 +5546,7 @@ public final class MainActivity extends Activity {
         }
         if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
             nowPlayingSwipeTracking = false;
-            cancelNowPlayingLongPress();
             view.getParent().requestDisallowInterceptTouchEvent(false);
-            if (nowPlayingLongPressFired) {
-                nowPlayingLongPressFired = false;
-                nowPlayingSwipeConsumed = false;
-                snapNowPlayingInfoFrame();
-                return true;
-            }
             if (nowPlayingSwipeConsumed && action == MotionEvent.ACTION_UP) {
                 int direction = dx < 0f ? NOW_PLAYING_TRANSITION_NEXT : NOW_PLAYING_TRANSITION_PREVIOUS;
                 boolean canMove = direction == NOW_PLAYING_TRANSITION_PREVIOUS ? hasPreviousTrack() : hasNextTrack();
@@ -7632,16 +6944,10 @@ public final class MainActivity extends Activity {
         top.addView(spacer, new LinearLayout.LayoutParams(dp(44), dp(42)));
         content.addView(top, marginBottomPx(layout.topGap));
 
-        View cover = coverArtView();
-        registerNowPlayingInfoTarget(cover);
-        content.addView(cover, coverParams(layout.coverHeight, layout.coverBottom));
+        content.addView(coverArtView(), coverParams(layout.coverHeight, layout.coverBottom));
         content.addView(sleepTimerStatusSlot(), marginBottomPx(layout.sleepStatusBottom));
-        TextView playerTitle = marqueeText(playbackTitle, layout.titleTextSp, R.color.ytet_text, true);
-        registerNowPlayingInfoTarget(playerTitle);
-        content.addView(playerTitle, marginBottomPx(layout.titleBottom));
-        TextView playerArtist = marqueeText(playbackArtist, 14, R.color.ytet_muted, false);
-        registerNowPlayingInfoTarget(playerArtist);
-        content.addView(playerArtist, marginBottomPx(layout.artistBottom));
+        content.addView(marqueeText(playbackTitle, layout.titleTextSp, R.color.ytet_text, true), marginBottomPx(layout.titleBottom));
+        content.addView(marqueeText(playbackArtist, 14, R.color.ytet_muted, false), marginBottomPx(layout.artistBottom));
         content.addView(marqueeText(albumQueuePositionText(), 12, R.color.ytet_muted, false), marginBottomPx(layout.albumBottom));
 
         PlaybackSeekBarView progress = new PlaybackSeekBarView(this);
@@ -7764,68 +7070,6 @@ public final class MainActivity extends Activity {
                 layout.queueHandleHeight
         ));
         return frame;
-    }
-
-    /**
-     * Long press on the cover or the title opens the song sheet.
-     *
-     * <p>The player has no room for another button, so the song info and the jump to its artist,
-     * album or channel live behind a long press instead.</p>
-     */
-    private void registerNowPlayingInfoTarget(View target) {
-        if (target == null) {
-            return;
-        }
-        target.setLongClickable(true);
-        target.setOnLongClickListener(view -> {
-            view.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
-            showNowPlayingActions();
-            return true;
-        });
-    }
-
-    private void showNowPlayingActions() {
-        DeviceAudioTrack track = nowPlayingTrack();
-        if (track == null) {
-            toast("재생 중인 곡 정보가 없습니다.");
-            return;
-        }
-        int queueIndex = safeQueueIndex(activeQueuePreview);
-        Runnable removeFromQueue = activeQueuePreview.size() > 1 && queueIndex >= 0
-                ? () -> removeQueueTrack(track, queueIndex)
-                : null;
-        showTrackActionSheet(track, "현재 재생목록에서 빼기", removeFromQueue);
-    }
-
-    /** The playing song, rebuilt from the broadcast state when the queue preview is empty. */
-    private DeviceAudioTrack nowPlayingTrack() {
-        DeviceAudioTrack current = currentQueueTrack();
-        if (current != null) {
-            return current;
-        }
-        if (playbackTrackId == -1L && valueOrDefault(playbackTitle, "").isEmpty()) {
-            return null;
-        }
-        DeviceAudioTrack libraryTrack = findLibraryTrackById(playbackTrackId);
-        if (libraryTrack != null) {
-            return libraryTrack;
-        }
-        return new DeviceAudioTrack(
-                playbackTrackId,
-                playbackTitle,
-                playbackArtist,
-                playbackAlbum,
-                playbackTitle,
-                playbackFolder,
-                "",
-                playbackAlbumArtUri,
-                0L,
-                0,
-                0L,
-                playbackDurationMs,
-                0L,
-                playbackArtist
-        );
     }
 
     private View playerQueuePullHandle() {
@@ -8075,50 +7319,18 @@ public final class MainActivity extends Activity {
             row.addView(drag, new LinearLayout.LayoutParams(dp(44), dp(48)));
         }
         if (clickable) {
-            row.setOnClickListener(view -> playQueueTrack(track, currentQueueRowIndex(index, dragHolder)));
+            row.setOnClickListener(view -> {
+                int targetIndex = index;
+                if (dragHolder != null && queueRecyclerAdapter != null) {
+                    int adapterPosition = dragHolder.getBindingAdapterPosition();
+                    if (adapterPosition != RecyclerView.NO_POSITION) {
+                        targetIndex = queueRecyclerAdapter.queueIndexForAdapterPosition(adapterPosition);
+                    }
+                }
+                playQueueTrack(track, targetIndex);
+            });
         }
-        row.setOnLongClickListener(view -> {
-            int targetIndex = currentQueueRowIndex(index, dragHolder);
-            showTrackActionSheet(track, "현재 재생목록에서 빼기", () -> removeQueueTrack(track, targetIndex));
-            return true;
-        });
         return row;
-    }
-
-    private int currentQueueRowIndex(int fallbackIndex, QueueRecyclerViewHolder dragHolder) {
-        if (dragHolder != null && queueRecyclerAdapter != null) {
-            int adapterPosition = dragHolder.getBindingAdapterPosition();
-            if (adapterPosition != RecyclerView.NO_POSITION) {
-                return queueRecyclerAdapter.queueIndexForAdapterPosition(adapterPosition);
-            }
-        }
-        return fallbackIndex;
-    }
-
-    /** Drops one song from the queue that is playing right now. */
-    private void removeQueueTrack(DeviceAudioTrack track, int index) {
-        if (track == null) {
-            return;
-        }
-        if (activeQueuePreview.size() <= 1) {
-            toast("재생목록에 곡이 하나뿐입니다.");
-            return;
-        }
-        startPlayback(PlaybackService.removeFromQueueIntent(this, index, track.id(), track.contentUri()));
-        List<DeviceAudioTrack> preview = new ArrayList<>(activeQueuePreview);
-        if (index >= 0 && index < preview.size() && preview.get(index).id() == track.id()) {
-            preview.remove(index);
-            if (index < playbackQueueIndex) {
-                playbackQueueIndex--;
-            } else if (index == playbackQueueIndex && playbackQueueIndex >= preview.size()) {
-                playbackQueueIndex = Math.max(0, preview.size() - 1);
-            }
-            activeQueuePreview = preview;
-            playbackQueueSize = preview.size();
-            updateExpandedPlayer();
-            updateQueueDialog();
-        }
-        toast("재생목록에서 뺐습니다.");
     }
 
     private boolean isCurrentQueueItem(DeviceAudioTrack track, int queueIndex, int sourceIndex) {
@@ -8492,7 +7704,6 @@ public final class MainActivity extends Activity {
         copy.addView(queuePlayerMeta, matchWrap());
         current.addView(copy, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         registerQueueSheetGestureTarget(current);
-        registerNowPlayingInfoTarget(current);
         panel.addView(current, marginBottom(6));
 
         LinearLayout controls = new LinearLayout(this);
@@ -8646,7 +7857,7 @@ public final class MainActivity extends Activity {
                 toast("저장할 재생목록이 없습니다.");
                 return;
             }
-            showPlaylistPickerDialog(tracks);
+            showCreatePlaylistDialog(tracks);
         });
         return button;
     }
@@ -9048,6 +8259,7 @@ public final class MainActivity extends Activity {
             streamSections = sections == null ? new ArrayList<>() : sections;
             focusedStreamSection = updatedFocusedStreamSection(streamSections);
             streamMetadataLoadingChannelIds.clear();
+            streamMetadataLoadedChannelIds.clear();
             streamLoaded = true;
             streamLoading = loading;
             streamLoadStatus = status == null ? "" : status;
@@ -9097,8 +8309,12 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private void prefetchOnlineStreamAround(List<OnlineStreamVideo> videos, int centerIndex, int radius) {
-        if (videos == null || videos.isEmpty() || radius < 0) {
+    private void prefetchOnlineStreamAround(OnlineStreamSection section, int centerIndex, int radius) {
+        if (section == null || radius < 0) {
+            return;
+        }
+        List<OnlineStreamVideo> videos = section.videos();
+        if (videos.isEmpty()) {
             return;
         }
         int center = Math.max(0, Math.min(centerIndex, videos.size() - 1));
@@ -12352,7 +11568,6 @@ public final class MainActivity extends Activity {
 
     private enum StreamVideoSort {
         POPULAR("인기순"),
-        VIEWS("조회순"),
         LATEST("최신순"),
         OLDEST("오래된순");
 
