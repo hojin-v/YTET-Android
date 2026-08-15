@@ -320,6 +320,41 @@ class YtetYdlStreamCatalogTest(unittest.TestCase):
         self.assertIn("https://www.youtube.com/@leeplay.official/videos?view=0&sort=p&flow=grid", urls)
         self.assertIn("https://www.youtube.com/@leeplay.official/videos?sort=p", urls)
 
+    def test_stream_channel_requests_approximate_upload_dates(self):
+        captured = {}
+
+        class RecordingYoutubeDL(FakeYoutubeDL):
+            def __init__(self, options):
+                super().__init__(options)
+                captured.update(options)
+
+            def extract_info(self, url, download=False):
+                return {"entries": []}
+
+        original = ytet_ydl.YoutubeDL
+        ytet_ydl.YoutubeDL = RecordingYoutubeDL
+        try:
+            ytet_ydl.stream_channels(json.dumps([{
+                "id": "channel",
+                "title": "Channel",
+                "url": "https://www.youtube.com/@channel",
+            }]), 3)
+        finally:
+            ytet_ydl.YoutubeDL = original
+
+        self.assertEqual(
+            {"youtubetab": {"approximate_date": [""]}},
+            captured.get("extractor_args"),
+        )
+
+    def test_stream_video_published_rank_reads_approximate_timestamp(self):
+        self.assertEqual(20260101, ytet_ydl.stream_video_published_rank({"upload_date": "20260101"}))
+        self.assertEqual(
+            20260101,
+            ytet_ydl.stream_video_published_rank({"timestamp": 1767225600}),
+        )
+        self.assertEqual(0, ytet_ydl.stream_video_published_rank({"title": "no date"}))
+
     def test_stream_channel_videos_marks_popular_rank_and_view_count(self):
         videos = ytet_ydl.stream_channel_videos({
             "entries": [{

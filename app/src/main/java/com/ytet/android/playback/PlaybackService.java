@@ -65,6 +65,7 @@ public final class PlaybackService extends Service {
     public static final String ACTION_PLAY_NEXT = "com.ytet.android.action.PLAYBACK_PLAY_NEXT";
     public static final String ACTION_ADD_TO_QUEUE = "com.ytet.android.action.PLAYBACK_ADD_TO_QUEUE";
     public static final String ACTION_REORDER_QUEUE = "com.ytet.android.action.PLAYBACK_REORDER_QUEUE";
+    public static final String ACTION_REMOVE_FROM_QUEUE = "com.ytet.android.action.PLAYBACK_REMOVE_FROM_QUEUE";
     public static final String ACTION_SET_SLEEP_TIMER = "com.ytet.android.action.PLAYBACK_SET_SLEEP_TIMER";
     public static final String ACTION_CANCEL_SLEEP_TIMER = "com.ytet.android.action.PLAYBACK_CANCEL_SLEEP_TIMER";
     public static final String ACTION_TOGGLE_SLEEP_TIMER_PAUSE = "com.ytet.android.action.PLAYBACK_TOGGLE_SLEEP_TIMER_PAUSE";
@@ -121,6 +122,8 @@ public final class PlaybackService extends Service {
     private static final String EXTRA_START_INDEX = "com.ytet.android.extra.START_INDEX";
     private static final String EXTRA_QUEUE_SOURCE_INDICES = "com.ytet.android.extra.QUEUE_SOURCE_INDICES";
     private static final String EXTRA_CURRENT_QUEUE_SOURCE_INDEX = "com.ytet.android.extra.CURRENT_QUEUE_SOURCE_INDEX";
+    private static final String EXTRA_REMOVE_INDEX = "com.ytet.android.extra.REMOVE_INDEX";
+    private static final String EXTRA_REMOVE_TRACK_URI = "com.ytet.android.extra.REMOVE_TRACK_URI";
     private static final String CHANNEL_ID = "ytet_playback";
     private static final int NOTIFICATION_ID = 4211;
     private static final String PREFS = "ytet_android";
@@ -228,32 +231,17 @@ public final class PlaybackService extends Service {
         intent.setAction(ACTION_PLAY_ONLINE_QUEUE);
         intent.putExtra(EXTRA_MIX_TITLE, station == null ? "스트림" : station.title());
         intent.putExtra(EXTRA_MIX_SUBTITLE, station == null ? "온라인 재생" : station.subtitle());
-        intent.putExtra(EXTRA_SHUFFLE_ENABLED, false);
+        intent.putExtra(EXTRA_SHUFFLE_ENABLED, station != null
+                && station.mixType() != MusicStation.MixType.TRACK
+                && tracks != null
+                && tracks.size() > 1);
         int count = tracks == null ? 0 : tracks.size();
         long[] ids = new long[count];
-        String[] titles = new String[count];
-        String[] artists = new String[count];
-        String[] albums = new String[count];
-        String[] urls = new String[count];
-        String[] thumbnails = new String[count];
-        long[] durations = new long[count];
         for (int index = 0; index < count; index++) {
-            DeviceAudioTrack track = tracks.get(index);
-            ids[index] = track.id();
-            titles[index] = track.title();
-            artists[index] = track.artist();
-            albums[index] = track.album();
-            urls[index] = track.contentUri();
-            thumbnails[index] = track.albumArtUri();
-            durations[index] = track.durationMs();
+            ids[index] = tracks.get(index).id();
         }
         intent.putExtra(EXTRA_TRACK_IDS, ids);
-        intent.putExtra(EXTRA_ONLINE_TITLES, titles);
-        intent.putExtra(EXTRA_ONLINE_ARTISTS, artists);
-        intent.putExtra(EXTRA_ONLINE_ALBUMS, albums);
-        intent.putExtra(EXTRA_ONLINE_URLS, urls);
-        intent.putExtra(EXTRA_ONLINE_THUMBNAILS, thumbnails);
-        intent.putExtra(EXTRA_ONLINE_DURATIONS, durations);
+        putTrackMetadata(intent, tracks);
         intent.putExtra(EXTRA_START_INDEX, Math.max(0, startIndex));
         return intent;
     }
@@ -288,6 +276,52 @@ public final class PlaybackService extends Service {
         }
         intent.putExtra(EXTRA_TRACK_IDS, ids);
         return intent;
+    }
+
+    /**
+     * Queue edit that carries the track metadata inline.
+     *
+     * <p>Online stream videos have no MediaStore row, so an id only edit would silently drop
+     * them.</p>
+     */
+    public static Intent queueEditIntentWithMetadata(Context context, String action, List<DeviceAudioTrack> tracks) {
+        Intent intent = queueEditIntent(context, action, tracks);
+        putTrackMetadata(intent, tracks);
+        return intent;
+    }
+
+    public static Intent removeFromQueueIntent(Context context, int index, long trackId, String contentUri) {
+        Intent intent = new Intent(context, PlaybackService.class);
+        intent.setAction(ACTION_REMOVE_FROM_QUEUE);
+        intent.putExtra(EXTRA_REMOVE_INDEX, Math.max(0, index));
+        intent.putExtra(EXTRA_TRACK_IDS, new long[]{trackId});
+        intent.putExtra(EXTRA_REMOVE_TRACK_URI, contentUri == null ? "" : contentUri);
+        return intent;
+    }
+
+    private static void putTrackMetadata(Intent intent, List<DeviceAudioTrack> tracks) {
+        int count = tracks == null ? 0 : tracks.size();
+        String[] titles = new String[count];
+        String[] artists = new String[count];
+        String[] albums = new String[count];
+        String[] urls = new String[count];
+        String[] thumbnails = new String[count];
+        long[] durations = new long[count];
+        for (int index = 0; index < count; index++) {
+            DeviceAudioTrack track = tracks.get(index);
+            titles[index] = track.title();
+            artists[index] = track.artist();
+            albums[index] = track.album();
+            urls[index] = track.contentUri();
+            thumbnails[index] = track.albumArtUri();
+            durations[index] = track.durationMs();
+        }
+        intent.putExtra(EXTRA_ONLINE_TITLES, titles);
+        intent.putExtra(EXTRA_ONLINE_ARTISTS, artists);
+        intent.putExtra(EXTRA_ONLINE_ALBUMS, albums);
+        intent.putExtra(EXTRA_ONLINE_URLS, urls);
+        intent.putExtra(EXTRA_ONLINE_THUMBNAILS, thumbnails);
+        intent.putExtra(EXTRA_ONLINE_DURATIONS, durations);
     }
 
     public static Intent reorderQueueIntent(Context context, List<DeviceAudioTrack> tracks) {
@@ -412,6 +446,13 @@ public final class PlaybackService extends Service {
                     intent.getLongArrayExtra(EXTRA_TRACK_IDS),
                     intent.getIntArrayExtra(EXTRA_QUEUE_SOURCE_INDICES),
                     intent.getIntExtra(EXTRA_CURRENT_QUEUE_SOURCE_INDEX, -1)
+            );
+        } else if (ACTION_REMOVE_FROM_QUEUE.equals(action)) {
+            long[] removeIds = intent.getLongArrayExtra(EXTRA_TRACK_IDS);
+            removeQueueItem(
+                    intent.getIntExtra(EXTRA_REMOVE_INDEX, -1),
+                    removeIds == null || removeIds.length == 0 ? Long.MIN_VALUE : removeIds[0],
+                    safeExtra(intent, EXTRA_REMOVE_TRACK_URI, "")
             );
         } else if (ACTION_SET_SLEEP_TIMER.equals(action)) {
             setSleepTimer(intent.getIntExtra(EXTRA_SLEEP_TIMER_MINUTES, 0));
@@ -588,6 +629,11 @@ public final class PlaybackService extends Service {
         if (ids == null || ids.length == 0) {
             return;
         }
+        List<DeviceAudioTrack> inlineTracks = tracksFromIntentMetadata(intent, ids);
+        if (!inlineTracks.isEmpty()) {
+            finishQueueEdit(queueLoadVersion, inlineTracks, playNext);
+            return;
+        }
         int version = queueLoadVersion;
         queueExecutor.execute(() -> {
             List<DeviceAudioTrack> loadedTracks;
@@ -633,6 +679,122 @@ public final class PlaybackService extends Service {
         updateTransportState();
         showNotification();
         broadcastState();
+    }
+
+    /**
+     * Builds queue tracks from the intent metadata.
+     *
+     * <p>Only used when the edit contains a stream video: MediaStore stays the better source for
+     * local files because it also carries folder, album id and cover art.</p>
+     */
+    private List<DeviceAudioTrack> tracksFromIntentMetadata(Intent intent, long[] ids) {
+        List<DeviceAudioTrack> tracks = new ArrayList<>();
+        String[] urls = intent.getStringArrayExtra(EXTRA_ONLINE_URLS);
+        if (urls == null || urls.length != ids.length || !hasHttpUri(urls)) {
+            return tracks;
+        }
+        String[] titles = intent.getStringArrayExtra(EXTRA_ONLINE_TITLES);
+        String[] artists = intent.getStringArrayExtra(EXTRA_ONLINE_ARTISTS);
+        String[] albums = intent.getStringArrayExtra(EXTRA_ONLINE_ALBUMS);
+        String[] thumbnails = intent.getStringArrayExtra(EXTRA_ONLINE_THUMBNAILS);
+        long[] durations = intent.getLongArrayExtra(EXTRA_ONLINE_DURATIONS);
+        for (int index = 0; index < ids.length; index++) {
+            String url = safeArrayValue(urls, index);
+            if (url.trim().isEmpty()) {
+                return new ArrayList<>();
+            }
+            String title = safeArrayValue(titles, index);
+            String artist = safeArrayValue(artists, index);
+            tracks.add(new DeviceAudioTrack(
+                    ids[index],
+                    title.isEmpty() ? "제목 없음" : title,
+                    artist,
+                    safeArrayValue(albums, index),
+                    title.isEmpty() ? "제목 없음" : title,
+                    isHttpUri(url) ? "온라인 스트림" : "",
+                    url,
+                    safeArrayValue(thumbnails, index),
+                    0L,
+                    0,
+                    System.currentTimeMillis(),
+                    durations != null && index < durations.length ? Math.max(0L, durations[index]) : 0L,
+                    0L,
+                    artist
+            ));
+        }
+        return tracks;
+    }
+
+    private void removeQueueItem(int index, long trackId, String contentUri) {
+        if (queue.isEmpty()) {
+            broadcastState();
+            return;
+        }
+        int target = index;
+        if (target < 0 || target >= queue.size() || !matchesQueueItem(queue.get(target), trackId, contentUri)) {
+            target = indexOfQueueItem(trackId, contentUri);
+        }
+        if (target < 0) {
+            broadcastState();
+            return;
+        }
+        if (queue.size() == 1) {
+            stopPlayback();
+            return;
+        }
+        DeviceAudioTrack removed = queue.remove(target);
+        int originalIndex = indexOfTrack(originalQueue, removed);
+        if (originalIndex >= 0) {
+            originalQueue.remove(originalIndex);
+        }
+        if (target != queueIndex) {
+            if (target < queueIndex) {
+                queueIndex--;
+            }
+            shuffleEnabled = shuffleEnabled && queue.size() > 1;
+            persistPlaybackSnapshot();
+            updateTransportState();
+            showNotification();
+            broadcastState();
+            return;
+        }
+
+        boolean shouldKeepPlaying = playing || startWhenPrepared;
+        if (queueIndex >= queue.size()) {
+            queueIndex = repeatMode == REPEAT_ALL ? 0 : queue.size() - 1;
+        }
+        failedTrackSkips = 0;
+        shuffleEnabled = shuffleEnabled && queue.size() > 1;
+        prepareCurrentTrack(shouldKeepPlaying);
+    }
+
+    private boolean hasHttpUri(String[] urls) {
+        for (String url : urls) {
+            if (isHttpUri(url)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean matchesQueueItem(DeviceAudioTrack track, long trackId, String contentUri) {
+        if (track == null) {
+            return false;
+        }
+        String uri = contentUri == null ? "" : contentUri.trim();
+        if (!uri.isEmpty()) {
+            return uri.equals(track.contentUri());
+        }
+        return trackId != Long.MIN_VALUE && track.id() == trackId;
+    }
+
+    private int indexOfQueueItem(long trackId, String contentUri) {
+        for (int index = 0; index < queue.size(); index++) {
+            if (matchesQueueItem(queue.get(index), trackId, contentUri)) {
+                return index;
+            }
+        }
+        return -1;
     }
 
     private void reorderQueue(long[] orderedIds, int[] sourceIndices, int currentSourceIndex) {

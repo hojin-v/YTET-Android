@@ -73,6 +73,9 @@ def stream_channel_sections(channels, harvest_limit, output_limit, varied):
     sections = []
     options = {
         "cachedir": False,
+        # "approximate_date" makes the channel tab return the "3주 전" upload text as a timestamp,
+        # so 최신순/오래된순 can sort without a per-video metadata request.
+        "extractor_args": {"youtubetab": {"approximate_date": [""]}},
         "extract_flat": "in_playlist",
         "ignoreerrors": True,
         "logger": logger,

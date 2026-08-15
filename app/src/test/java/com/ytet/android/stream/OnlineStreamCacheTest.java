@@ -73,6 +73,66 @@ public final class OnlineStreamCacheTest {
         assertEquals(40, sections.get(0).videos().size());
     }
 
+    @Test
+    public void selectDisplayVideosKeepsTheChannelRankOfEachVideo() {
+        List<OnlineStreamVideo> videos = new ArrayList<>();
+        for (int index = 0; index < 12; index++) {
+            videos.add(new OnlineStreamVideo(
+                    "video-" + index,
+                    "video-" + index,
+                    "Channel",
+                    "https://www.youtube.com/watch?v=video-" + index,
+                    "",
+                    180_000L,
+                    100L + index,
+                    0L,
+                    index,
+                    0
+            ));
+        }
+
+        List<OnlineStreamVideo> display = OnlineStreamCache.selectDisplayVideos(
+                videos,
+                6,
+                1_800_000_000_000L,
+                new Random(11)
+        );
+
+        assertEquals(6, display.size());
+        for (OnlineStreamVideo video : display) {
+            int expectedRank = Integer.parseInt(video.id().substring("video-".length()));
+            assertEquals(expectedRank, video.sourceIndex());
+        }
+    }
+
+    @Test
+    public void selectDisplayVideosPicksTheNewestChannelVideosWithoutUploadDates() {
+        List<OnlineStreamVideo> videos = new ArrayList<>();
+        for (int index = 0; index < 40; index++) {
+            videos.add(new OnlineStreamVideo(
+                    "video-" + index,
+                    "video-" + index,
+                    "Channel",
+                    "https://www.youtube.com/watch?v=video-" + index,
+                    "",
+                    180_000L,
+                    0L,
+                    0L,
+                    index,
+                    0
+            ));
+        }
+
+        List<OnlineStreamVideo> display = OnlineStreamCache.selectDisplayVideos(
+                videos,
+                8,
+                1_800_000_000_000L,
+                new Random(3)
+        );
+
+        assertTrue(containsVideo(display, "video-0"));
+    }
+
     private static boolean containsVideo(List<OnlineStreamVideo> videos, String id) {
         for (OnlineStreamVideo video : videos) {
             if (id.equals(video.id())) {
