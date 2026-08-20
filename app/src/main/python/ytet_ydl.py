@@ -8,8 +8,19 @@ from difflib import SequenceMatcher
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from yt_dlp import YoutubeDL
-from yt_dlp.utils import DownloadError
+YoutubeDL = None
+DownloadError = None
+
+
+def _ensure_yt_dlp():
+    """yt-dlp를 지연 임포트한다. 런타임 오버라이드가 sys.path에 적용된 뒤 호출되어야 한다."""
+    global YoutubeDL, DownloadError
+    if YoutubeDL is not None:
+        return
+    from yt_dlp import YoutubeDL as _YDL
+    from yt_dlp.utils import DownloadError as _DE
+    YoutubeDL = _YDL
+    DownloadError = _DE
 
 
 SUBTITLE_LANGUAGES = ["ko", "ko-KR", "en", "en-US", "en-GB"]
@@ -69,6 +80,7 @@ def stream_channel_candidates(channels_json, per_channel=400):
 
 
 def stream_channel_sections(channels, harvest_limit, output_limit, varied):
+    _ensure_yt_dlp()
     logger = YtetLogger()
     sections = []
     options = {
@@ -143,6 +155,7 @@ def stream_channel_display_limit(per_channel):
 
 
 def enrich_stream_videos(videos_json):
+    _ensure_yt_dlp()
     videos = json.loads(videos_json or "[]")
     logger = YtetLogger()
     options = {
@@ -453,6 +466,7 @@ def strip_video_suffix(title):
 
 
 def resolve_stream(url):
+    _ensure_yt_dlp()
     url = str(url or "").strip()
     if not url:
         raise YtetExtractionError("재생할 YouTube URL이 없습니다.")
@@ -550,6 +564,7 @@ def extract(
         if old_android_sdk is not None:
             android_sdk = old_android_sdk
 
+    _ensure_yt_dlp()
     os.makedirs(workspace, exist_ok=True)
     logger = YtetLogger()
     media_type = str(media_type or "audio")
@@ -666,6 +681,7 @@ def playlist_probe_options(logger):
 
 
 def probe_playlist_items(url, logger, cancel_checker=None):
+    _ensure_yt_dlp()
     check_canceled(cancel_checker)
     try:
         with YoutubeDL(playlist_probe_options(logger)) as ydl:
@@ -719,6 +735,7 @@ def extract_video(
     android_sdk=DEFAULT_ANDROID_SDK,
     cancel_checker=None,
 ):
+    _ensure_yt_dlp()
     try:
         check_canceled(cancel_checker)
         notify(progress_listener, 8, "분석", "영상 형식 확인 중")
@@ -776,6 +793,7 @@ def base_options(logger, progress_listener, cancel_checker=None):
 
 
 def download_one(url, workspace, format_id, outtmpl, logger, progress_listener, cancel_checker=None):
+    _ensure_yt_dlp()
     options = {
         **base_options(logger, progress_listener, cancel_checker),
         "format": format_id,
@@ -786,6 +804,7 @@ def download_one(url, workspace, format_id, outtmpl, logger, progress_listener, 
 
 
 def download_subtitles(url, workspace, info, logger, progress_listener, cancel_checker=None):
+    _ensure_yt_dlp()
     options = {
         **base_options(logger, progress_listener, cancel_checker),
         "skip_download": True,

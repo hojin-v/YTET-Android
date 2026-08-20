@@ -5,6 +5,7 @@ import android.content.Context;
 import com.chaquo.python.PyObject;
 import com.chaquo.python.Python;
 import com.chaquo.python.android.AndroidPlatform;
+import com.ytet.android.extract.YtDlpUpdater;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -149,5 +150,7 @@ public final class OnlineStreamClient {
         if (!Python.isStarted()) {
             Python.start(new AndroidPlatform(context));
         }
+        YtDlpUpdater.applyRuntimeOverride(context);
+        YtDlpUpdater.scheduleBackgroundUpdate(context);
     }
 }

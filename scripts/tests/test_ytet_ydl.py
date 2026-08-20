@@ -32,16 +32,22 @@ class FakeYoutubeDL:
 
 def install_yt_dlp_stub():
     yt_dlp = types.ModuleType("yt_dlp")
+    yt_dlp.__path__ = []
     yt_dlp.YoutubeDL = FakeYoutubeDL
+    yt_dlp_version = types.ModuleType("yt_dlp.version")
+    yt_dlp_version.__version__ = "2026.08.19"
+    yt_dlp.version = yt_dlp_version
     utils = types.ModuleType("yt_dlp.utils")
     utils.DownloadError = DownloadError
     sys.modules["yt_dlp"] = yt_dlp
+    sys.modules["yt_dlp.version"] = yt_dlp_version
     sys.modules["yt_dlp.utils"] = utils
 
 
 install_yt_dlp_stub()
 sys.path.insert(0, str(ROOT / "app" / "src" / "main" / "python"))
 ytet_ydl = importlib.import_module("ytet_ydl")
+ytet_ydl_updater = importlib.import_module("ytet_ydl_updater")
 
 
 class FakeProgressListener:
@@ -473,6 +479,93 @@ def fake_webm_only_info():
             {"format_id": "251", "ext": "webm", "vcodec": "none", "acodec": "opus", "abr": 160, "tbr": 160},
         ]
     }
+
+
+class YtetYdlUpdaterTest(unittest.TestCase):
+    def setUp(self):
+        install_yt_dlp_stub()
+
+    def tearDown(self):
+        install_yt_dlp_stub()
+
+    def test_apply_runtime_override_absent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertFalse(ytet_ydl_updater.apply_runtime_override(tmp))
+
+    def test_apply_runtime_override_older(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime_dir = Path(tmp) / ytet_ydl_updater.RUNTIME_DIR_NAME
+            runtime_dir.mkdir()
+            (runtime_dir / ytet_ydl_updater.VERSION_FILE).write_text(
+                json.dumps({"runtime_version": "2026.01.01"}), encoding="utf-8"
+            )
+            self.assertFalse(ytet_ydl_updater.apply_runtime_override(tmp))
+
+    def test_apply_runtime_override_newer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime_dir = Path(tmp) / ytet_ydl_updater.RUNTIME_DIR_NAME
+            runtime_dir.mkdir()
+            (runtime_dir / ytet_ydl_updater.VERSION_FILE).write_text(
+                json.dumps({"runtime_version": "2026.09.01"}), encoding="utf-8"
+            )
+            self.assertTrue(ytet_ydl_updater.apply_runtime_override(tmp))
+            self.assertEqual(str(runtime_dir), sys.path[0])
+            if str(runtime_dir) in sys.path:
+                sys.path.remove(str(runtime_dir))
+
+    def test_installed_versions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime_dir = Path(tmp) / ytet_ydl_updater.RUNTIME_DIR_NAME
+            runtime_dir.mkdir()
+            (runtime_dir / ytet_ydl_updater.VERSION_FILE).write_text(
+                json.dumps({"runtime_version": "2026.09.01"}), encoding="utf-8"
+            )
+            data = json.loads(ytet_ydl_updater.installed_versions(tmp))
+            self.assertEqual("2026.08.19", data["bundled"])
+            self.assertEqual("2026.09.01", data["runtime"])
+            self.assertEqual("2026.09.01", data["active"])
+
+    def test_check_and_apply_update(self):
+        import io
+        import zipfile
+        from unittest.mock import patch, MagicMock
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("yt_dlp/__init__.py", "# mock")
+            zf.writestr("yt_dlp/version.py", "__version__ = '2026.09.01'")
+        wheel_bytes = buf.getvalue()
+
+        pypi_json = json.dumps({
+            "info": {"version": "2026.09.01"},
+            "urls": [
+                {"filename": "yt_dlp-2026.09.01-py3-none-any.whl", "url": "https://example.com/yt_dlp.whl"}
+            ]
+        }).encode("utf-8")
+
+        def fake_urlopen(req, timeout=None):
+            url = req.full_url if hasattr(req, "full_url") else str(req)
+            mock = MagicMock()
+            if "pypi.org" in url:
+                mock.read.return_value = pypi_json
+                mock.__enter__.return_value = mock
+                return mock
+            else:
+                mock.read.side_effect = [wheel_bytes, b""]
+                mock.__enter__.return_value = mock
+                return mock
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch("ytet_ydl_updater.urlopen", side_effect=fake_urlopen):
+                result_str = ytet_ydl_updater.check_and_apply_update(tmp)
+                result = json.loads(result_str)
+                self.assertEqual("updated", result["status"])
+                self.assertEqual("2026.09.01", result["runtime_version"])
+
+                # Second call should recognize current version
+                result_str2 = ytet_ydl_updater.check_and_apply_update(tmp)
+                result2 = json.loads(result_str2)
+                self.assertEqual("current", result2["status"])
 
 
 if __name__ == "__main__":

@@ -107,6 +107,8 @@ public final class YtDlpPythonEngine implements ExtractorEngine {
         if (!Python.isStarted()) {
             Python.start(new AndroidPlatform(context));
         }
+        YtDlpUpdater.applyRuntimeOverride(context);
+        YtDlpUpdater.scheduleBackgroundUpdate(context);
     }
 
     private String cleanPythonError(PyException exception) {

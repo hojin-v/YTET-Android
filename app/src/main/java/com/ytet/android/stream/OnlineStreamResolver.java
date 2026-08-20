@@ -5,6 +5,7 @@ import android.content.Context;
 import com.chaquo.python.PyObject;
 import com.chaquo.python.Python;
 import com.chaquo.python.android.AndroidPlatform;
+import com.ytet.android.extract.YtDlpUpdater;
 
 import org.json.JSONObject;
 
@@ -84,6 +85,8 @@ public final class OnlineStreamResolver {
         if (!Python.isStarted()) {
             Python.start(new AndroidPlatform(context));
         }
+        YtDlpUpdater.applyRuntimeOverride(context);
+        YtDlpUpdater.scheduleBackgroundUpdate(context);
     }
 
     private static String cleanUrl(String value) {
