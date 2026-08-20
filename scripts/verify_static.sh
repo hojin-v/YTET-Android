@@ -185,7 +185,7 @@ grep -q 'MUSIC_FOLDER = "Music"' "$root/app/src/main/java/com/ytet/android/core/
 grep -q 'doesNotFallbackToArbitraryFiles' "$root/app/src/test/java/com/ytet/android/extract/ExtractionOutputsTest.java"
 grep -q 'embedsSubtitlesIntoMp4AsMovText' "$root/app/src/test/java/com/ytet/android/extract/MediaTrackMuxerTest.java"
 grep -q 'guessesAndroidFriendlyMimeTypesForKnownOutputs' "$root/app/src/test/java/com/ytet/android/extract/StorageWriterTest.java"
-grep -q 'yt_dlp-2026\\.08\\.19\\.dist-info' "$root/scripts/verify_apk_runtime.sh"
+grep -q 'yt_dlp-2026\\.8\\.19\\.dist-info' "$root/scripts/verify_apk_runtime.sh"
 grep -q 'assembleStableRelease' "$root/.github/workflows/release.yml"
 grep -q 'assembleNightlyRelease' "$root/.github/workflows/release.yml"
 grep -q 'RabbYT-Beta.apk' "$root/.github/workflows/release.yml"
