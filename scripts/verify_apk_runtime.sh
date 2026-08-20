@@ -67,8 +67,8 @@ require_archive_string() {
 
 require_archive_string 'assets/chaquopy/app.imy' 'ytet_ydl\.pyc' \
   "missing compiled ytet_ydl Python module in APK"
-require_archive_string 'assets/chaquopy/requirements-common.imy' 'yt_dlp-2026\.3\.17\.dist-info' \
-  "missing packaged yt-dlp 2026.3.17 runtime in APK"
+require_archive_string 'assets/chaquopy/requirements-common.imy' 'yt_dlp-2026\.08\.19\.dist-info' \
+  "missing packaged yt-dlp 2026.08.19 runtime in APK"
 require_archive_string 'assets/chaquopy/requirements-common.imy' 'yt_dlp_ejs-0\.8\.0\.dist-info' \
   "missing packaged yt-dlp-ejs 0.8.0 scripts in APK"
 require_archive_string 'assets/chaquopy/requirements-common.imy' 'mutagen-1\.47\.0\.dist-info' \

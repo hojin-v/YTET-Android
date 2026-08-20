@@ -95,7 +95,7 @@ chaquopy {
         version = "3.12"
         buildPython "python3.12"
         pip {
-            install("yt-dlp==2026.3.17")
+            install("yt-dlp==2026.08.19")
             install("yt-dlp-ejs==0.8.0")
             install("mutagen==1.47.0")
         }
